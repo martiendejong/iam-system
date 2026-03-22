@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace IAM.API.Tests.Infrastructure;
@@ -18,6 +19,17 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Configure test settings (JWT, etc.)
+        builder.ConfigureAppConfiguration((context, config) =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Jwt:SecretKey"] = "DEVELOPMENT_SECRET_KEY_CHANGE_IN_PRODUCTION_32_CHARS_MIN",
+                ["Jwt:Issuer"] = "https://localhost:5001",
+                ["Jwt:Audience"] = "iam-api"
+            });
+        });
+
         builder.ConfigureTestServices(services =>
         {
             // Remove PostgreSQL DbContext
