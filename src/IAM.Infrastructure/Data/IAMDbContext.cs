@@ -23,6 +23,8 @@ public class IAMDbContext : DbContext
     public DbSet<TemporaryAccessGrant> TemporaryAccessGrants => Set<TemporaryAccessGrant>();
     public DbSet<PolicyAuditEvent> PolicyAuditEvents => Set<PolicyAuditEvent>();
     public DbSet<ComplianceReport> ComplianceReports => Set<ComplianceReport>();
+    public DbSet<PolicyTest> PolicyTests => Set<PolicyTest>();
+    public DbSet<PolicyTestResult> PolicyTestResults => Set<PolicyTestResult>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -325,6 +327,48 @@ public class IAMDbContext : DbContext
             entity.HasOne(e => e.Tenant)
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // PolicyTest configuration
+        modelBuilder.Entity<PolicyTest>(entity =>
+        {
+            entity.ToTable("PolicyTests");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.DraftPolicyJson).HasColumnType("jsonb");
+            entity.Property(e => e.TestScenarios).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.ExpectedResults).IsRequired().HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.PolicyId);
+            entity.HasIndex(e => e.IsActive);
+
+            entity.HasOne(e => e.Policy)
+                .WithMany()
+                .HasForeignKey(e => e.PolicyId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // PolicyTestResult configuration
+        modelBuilder.Entity<PolicyTestResult>(entity =>
+        {
+            entity.ToTable("PolicyTestResults");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.DetailedResults).IsRequired().HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.PolicyTestId);
+            entity.HasIndex(e => e.ExecutedAt);
+            entity.HasIndex(e => new { e.Status, e.ExecutedAt });
+
+            entity.HasOne(e => e.PolicyTest)
+                .WithMany(e => e.TestResults)
+                .HasForeignKey(e => e.PolicyTestId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
