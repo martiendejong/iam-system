@@ -1,10 +1,13 @@
 using System.Text;
+using IAM.API.Workers;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using OpenIddict.Abstractions;
+using OpenIddict.Validation.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +22,62 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
+
+// Hosted services (database seeders)
+builder.Services.AddHostedService<DatabaseSeeder>();
+
+// OpenIddict (OAuth2/OIDC Server)
+builder.Services.AddOpenIddict()
+    .AddCore(options =>
+    {
+        options.UseEntityFrameworkCore()
+            .UseDbContext<IAMDbContext>();
+    })
+    .AddServer(options =>
+    {
+        // Enable the authorization, token and logout endpoints
+        options.SetAuthorizationEndpointUris("/connect/authorize")
+               .SetTokenEndpointUris("/connect/token")
+               .SetIntrospectionEndpointUris("/connect/introspect")
+               .SetRevocationEndpointUris("/connect/revoke");
+
+        // Enable authorization code flow with PKCE and refresh token flow
+        options.AllowAuthorizationCodeFlow()
+               .AllowRefreshTokenFlow()
+               .AllowClientCredentialsFlow()
+               .RequireProofKeyForCodeExchange();
+
+        // Register scopes (permissions that clients can request)
+        options.RegisterScopes(
+            OpenIddictConstants.Scopes.OpenId,
+            OpenIddictConstants.Scopes.Profile,
+            OpenIddictConstants.Scopes.Email,
+            OpenIddictConstants.Scopes.Roles,
+            "tenants"
+        );
+
+        // Register signing and encryption credentials (development only)
+        options.AddDevelopmentEncryptionCertificate()
+               .AddDevelopmentSigningCertificate();
+
+        // Register ASP.NET Core host and enable endpoint passthrough
+        options.UseAspNetCore()
+               .EnableAuthorizationEndpointPassthrough()
+               .EnableTokenEndpointPassthrough()
+               .EnableStatusCodePagesIntegration();
+
+        // Configure token lifetimes
+        options.SetAccessTokenLifetime(TimeSpan.FromMinutes(15))
+               .SetRefreshTokenLifetime(TimeSpan.FromDays(7));
+    })
+    .AddValidation(options =>
+    {
+        // Use local server for token validation
+        options.UseLocalServer();
+
+        // Enable ASP.NET Core integration
+        options.UseAspNetCore();
+    });
 
 // JWT Authentication
 var jwtSecretKey = builder.Configuration["Jwt:SecretKey"] ?? throw new InvalidOperationException("JWT secret key not configured");
