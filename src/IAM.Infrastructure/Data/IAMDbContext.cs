@@ -1,5 +1,6 @@
 using IAM.Core.Entities;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.EntityFrameworkCore.Models;
 
 namespace IAM.Infrastructure.Data;
 
@@ -19,6 +20,9 @@ public class IAMDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // Configure OpenIddict to use PostgreSQL (stores: applications, authorizations, scopes, tokens)
+        modelBuilder.UseOpenIddict();
 
         // User configuration
         modelBuilder.Entity<User>(entity =>
