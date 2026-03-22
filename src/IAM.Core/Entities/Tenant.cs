@@ -22,7 +22,12 @@ public class Tenant
     public Tenant? ParentTenant { get; set; }
 
     /// <summary>
-    /// JSON settings for tenant-specific configuration
+    /// JSON metadata for descriptive data (address, floor number, room capacity, device model, etc.)
+    /// </summary>
+    public string? Metadata { get; set; }
+
+    /// <summary>
+    /// JSON settings for tenant-specific configuration (temperature thresholds, access hours, etc.)
     /// </summary>
     public string? Settings { get; set; }
 

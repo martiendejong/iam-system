@@ -57,6 +57,8 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Slug).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Type).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Metadata).HasColumnType("jsonb");
+            entity.Property(e => e.Settings).HasColumnType("jsonb");
 
             entity.HasOne(e => e.ParentTenant)
                 .WithMany(e => e.ChildTenants)
