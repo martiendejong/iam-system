@@ -87,6 +87,24 @@ class ApiService {
     const response = await this.client.get<User>(`/users/${id}`);
     return response.data;
   }
+
+  async updateUser(id: string, data: Partial<User>): Promise<User> {
+    const response = await this.client.put<User>(`/users/${id}`, data);
+    return response.data;
+  }
+
+  async activateUser(id: string): Promise<void> {
+    await this.client.put(`/users/${id}/activate`);
+  }
+
+  async deactivateUser(id: string): Promise<void> {
+    await this.client.put(`/users/${id}/deactivate`);
+  }
+
+  async getUserRoles(id: string): Promise<any[]> {
+    const response = await this.client.get(`/users/${id}/roles`);
+    return response.data;
+  }
 }
 
 export const api = new ApiService();
