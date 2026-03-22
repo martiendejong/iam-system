@@ -81,6 +81,13 @@ public class Policy
     public string? TimeConstraints { get; set; }
 
     /// <summary>
+    /// Optional schedule template for recurring time patterns.
+    /// If specified, overrides simple TimeConstraints with advanced scheduling.
+    /// </summary>
+    public Guid? ScheduleTemplateId { get; set; }
+    public ScheduleTemplate? ScheduleTemplate { get; set; }
+
+    /// <summary>
     /// Conditional constraints (optional).
     /// JSON: { "ip_whitelist": ["10.0.0.0/8"], "device_health": "trusted", "location": "geofence:headquarters" }
     /// </summary>
