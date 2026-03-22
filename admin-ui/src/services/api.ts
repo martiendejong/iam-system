@@ -105,6 +105,39 @@ class ApiService {
     const response = await this.client.get(`/users/${id}/roles`);
     return response.data;
   }
+
+  // Role endpoints
+  async getRoles(): Promise<any[]> {
+    const response = await this.client.get('/roles');
+    return response.data;
+  }
+
+  async getRole(id: string): Promise<any> {
+    const response = await this.client.get(`/roles/${id}`);
+    return response.data;
+  }
+
+  async createRole(data: { name: string; description?: string }): Promise<any> {
+    const response = await this.client.post('/roles', data);
+    return response.data;
+  }
+
+  async updateRole(id: string, data: { name: string; description?: string }): Promise<any> {
+    const response = await this.client.put(`/roles/${id}`, data);
+    return response.data;
+  }
+
+  async deleteRole(id: string): Promise<void> {
+    await this.client.delete(`/roles/${id}`);
+  }
+
+  async assignRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
+    await this.client.post(`/roles/${roleId}/assign`, { userId, tenantId });
+  }
+
+  async revokeRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
+    await this.client.post(`/roles/${roleId}/revoke`, { userId, tenantId });
+  }
 }
 
 export const api = new ApiService();

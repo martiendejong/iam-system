@@ -5,6 +5,8 @@ import DashboardPage from './pages/DashboardPage';
 import UsersPage from './pages/users/UsersPage';
 import UserEditPage from './pages/users/UserEditPage';
 import UserCreatePage from './pages/users/UserCreatePage';
+import RolesPage from './pages/roles/RolesPage';
+import RoleFormPage from './pages/roles/RoleFormPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -47,6 +49,32 @@ function App() {
             element={
               <ProtectedRoute>
                 <UserEditPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Role Management */}
+          <Route
+            path="/roles"
+            element={
+              <ProtectedRoute>
+                <RolesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/roles/new"
+            element={
+              <ProtectedRoute>
+                <RoleFormPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/roles/:id"
+            element={
+              <ProtectedRoute>
+                <RoleFormPage />
               </ProtectedRoute>
             }
           />
