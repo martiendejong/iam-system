@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using IAM.API.Workers;
 using IAM.Core.Services;
@@ -8,6 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
+
+[assembly: InternalsVisibleTo("IAM.API.Tests")]
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -145,3 +148,6 @@ app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 app.Run();
+
+// Make Program class accessible to test projects
+public partial class Program { }
