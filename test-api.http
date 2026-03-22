@@ -1,0 +1,234 @@
+### IAM System API Tests
+### Base URL
+@baseUrl = https://localhost:5001
+@email = admin@test.com
+@password = Admin123!
+@accessToken = {{login.response.body.accessToken}}
+@userId = {{register.response.body.user.id}}
+
+###############################################
+### PHASE 1: AUTHENTICATION (7 endpoints)
+###############################################
+
+### 1. Register - POST /api/auth/register
+# @name register
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "firstName": "Admin",
+  "lastName": "User"
+}
+
+### 2. Login - POST /api/auth/login
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+### 3. Verify Email - GET /api/auth/verify-email/{token}
+# Note: Requires valid verification token from database
+GET {{baseUrl}}/api/auth/verify-email/test-token-12345
+
+### 4. Forgot Password - POST /api/auth/forgot-password
+POST {{baseUrl}}/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "{{email}}"
+}
+
+### 5. Reset Password - POST /api/auth/reset-password
+POST {{baseUrl}}/api/auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "test-reset-token",
+  "newPassword": "NewPassword123!"
+}
+
+### 6. Refresh Token - POST /api/auth/refresh
+# Note: Requires valid refresh token cookie
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+### 7. Logout - POST /api/auth/logout
+POST {{baseUrl}}/api/auth/logout
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+###############################################
+### PHASE 2: USER MANAGEMENT (7 endpoints)
+###############################################
+
+### 8. Get All Users - GET /api/users
+GET {{baseUrl}}/api/users
+Authorization: Bearer {{accessToken}}
+
+### 9. Get User by ID - GET /api/users/{id}
+GET {{baseUrl}}/api/users/{{userId}}
+Authorization: Bearer {{accessToken}}
+
+### 10. Update User - PUT /api/users/{id}
+PUT {{baseUrl}}/api/users/{{userId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "firstName": "Updated",
+  "lastName": "Name",
+  "phoneNumber": "+1234567890"
+}
+
+### 11. Activate User - PUT /api/users/{id}/activate
+PUT {{baseUrl}}/api/users/{{userId}}/activate
+Authorization: Bearer {{accessToken}}
+
+### 12. Deactivate User - PUT /api/users/{id}/deactivate
+PUT {{baseUrl}}/api/users/{{userId}}/deactivate
+Authorization: Bearer {{accessToken}}
+
+### 13. Get User Roles - GET /api/users/{id}/roles
+GET {{baseUrl}}/api/users/{{userId}}/roles
+Authorization: Bearer {{accessToken}}
+
+### 14. Get Current User - GET /api/users/me
+GET {{baseUrl}}/api/users/me
+Authorization: Bearer {{accessToken}}
+
+###############################################
+### PHASE 3: ROLE MANAGEMENT (7 endpoints)
+###############################################
+
+### 15. Get All Roles - GET /api/roles
+GET {{baseUrl}}/api/roles
+Authorization: Bearer {{accessToken}}
+
+### 16. Get Role by ID - GET /api/roles/{id}
+@roleId = 00000000-0000-0000-0000-000000000001
+GET {{baseUrl}}/api/roles/{{roleId}}
+Authorization: Bearer {{accessToken}}
+
+### 17. Create Role - POST /api/roles
+# @name createRole
+POST {{baseUrl}}/api/roles
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "name": "TestRole",
+  "description": "Test role for API testing",
+  "permissions": ["User.View", "User.Create"]
+}
+
+### 18. Update Role - PUT /api/roles/{id}
+PUT {{baseUrl}}/api/roles/{{roleId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "name": "UpdatedRole",
+  "description": "Updated description",
+  "permissions": ["User.View", "User.Create", "User.Update"]
+}
+
+### 19. Delete Role - DELETE /api/roles/{id}
+DELETE {{baseUrl}}/api/roles/{{roleId}}
+Authorization: Bearer {{accessToken}}
+
+### 20. Assign Role to User - POST /api/roles/{roleId}/assign
+POST {{baseUrl}}/api/roles/{{roleId}}/assign
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}",
+  "expiresAt": "2027-12-31T23:59:59Z"
+}
+
+### 21. Revoke Role from User - POST /api/roles/{roleId}/revoke
+POST {{baseUrl}}/api/roles/{{roleId}}/revoke
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "userId": "{{userId}}"
+}
+
+###############################################
+### PHASE 4: TENANT MANAGEMENT (8 endpoints)
+###############################################
+
+### 22. Get All Tenants - GET /api/tenants
+GET {{baseUrl}}/api/tenants
+Authorization: Bearer {{accessToken}}
+
+### 23. Get Tenant by ID - GET /api/tenants/{id}
+@tenantId = test-tenant-id
+GET {{baseUrl}}/api/tenants/{{tenantId}}
+Authorization: Bearer {{accessToken}}
+
+### 24. Create Tenant - POST /api/tenants
+# @name createTenant
+POST {{baseUrl}}/api/tenants
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "name": "Test Building",
+  "slug": "test-building",
+  "type": "Building",
+  "metadata": {
+    "address": "123 Test Street",
+    "floors": 10
+  },
+  "settings": {
+    "timezone": "UTC"
+  }
+}
+
+### 25. Update Tenant - PUT /api/tenants/{id}
+PUT {{baseUrl}}/api/tenants/{{tenantId}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "name": "Updated Building",
+  "metadata": {
+    "address": "456 Updated Street",
+    "floors": 12
+  }
+}
+
+### 26. Delete Tenant - DELETE /api/tenants/{id}
+DELETE {{baseUrl}}/api/tenants/{{tenantId}}
+Authorization: Bearer {{accessToken}}
+
+### 27. Get Tenant Hierarchy - GET /api/tenants/{id}/hierarchy
+GET {{baseUrl}}/api/tenants/{{tenantId}}/hierarchy
+Authorization: Bearer {{accessToken}}
+
+### 28. Get Building Structure - GET /api/tenants/buildings/{buildingId}/structure
+@buildingId = test-building-id
+GET {{baseUrl}}/api/tenants/buildings/{{buildingId}}/structure
+Authorization: Bearer {{accessToken}}
+
+### 29. Get My Tenants - GET /api/tenants/my-tenants
+GET {{baseUrl}}/api/tenants/my-tenants
+Authorization: Bearer {{accessToken}}
+
+###############################################
+### UTILITY TESTS
+###############################################
+
+### Health Check (if available)
+GET {{baseUrl}}/health
+
+### Get Swagger/OpenAPI
+GET {{baseUrl}}/swagger/v1/swagger.json
