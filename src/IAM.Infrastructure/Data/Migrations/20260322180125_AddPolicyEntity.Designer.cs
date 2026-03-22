@@ -3,6 +3,7 @@ using System;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace IAM.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(IAMDbContext))]
-    partial class IAMDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260322180125_AddPolicyEntity")]
+    partial class AddPolicyEntity
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -67,149 +70,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.HasIndex("Action", "Resource");
 
                     b.ToTable("AuditLogs", (string)null);
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.HolidayCalendar", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("CountryCode")
-                        .HasMaxLength(2)
-                        .HasColumnType("character varying(2)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ExternalSourceUrl")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Holidays")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsAutoUpdated")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime?>("LastSyncedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<Guid?>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Timezone")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("UpdatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CountryCode");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("IsActive", "IsAutoUpdated");
-
-                    b.ToTable("HolidayCalendars", (string)null);
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.MaintenanceWindow", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("ActualEndTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("ActualStartTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("EndTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsRecurring")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<int>("NotificationLeadTimeMinutes")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PolicyBehavior")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("RecurrencePattern")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<bool>("SendNotifications")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("StartTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid?>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Timezone")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("UpdatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StartTime");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("Status", "StartTime", "EndTime");
-
-                    b.ToTable("MaintenanceWindows", (string)null);
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Policy", b =>
@@ -268,9 +128,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<Guid?>("RoleId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("ScheduleTemplateId")
-                        .HasColumnType("uuid");
-
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
@@ -291,8 +148,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.HasIndex("InheritedFromPolicyId");
 
                     b.HasIndex("RoleId");
-
-                    b.HasIndex("ScheduleTemplateId");
 
                     b.HasIndex("TenantId");
 
@@ -442,182 +297,6 @@ namespace IAM.Infrastructure.Data.Migrations
                             Permissions = "[\"Room.View\",\"Device.ViewOwn\",\"Amenity.Book\",\"Maintenance.Request\"]",
                             UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.ScheduleTemplate", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("EffectiveFrom")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("EffectiveTo")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ExceptionDates")
-                        .HasColumnType("jsonb");
-
-                    b.Property<Guid?>("HolidayCalendarId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("InclusionDates")
-                        .HasColumnType("jsonb");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("RecurrencePattern")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("ScheduleType")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
-                    b.Property<Guid?>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Timezone")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("UpdatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("HolidayCalendarId");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("ScheduleType", "IsActive");
-
-                    b.ToTable("ScheduleTemplates", (string)null);
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.TemporaryAccessGrant", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("ApprovedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("ApprovedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("AutoExtendIfActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("CurrentExtensions")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("CurrentUseCount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("EndTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("ExtensionDurationMinutes")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("FirstUsedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Justification")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<DateTime?>("LastUsedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("MaxExtensions")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("MaxUseCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<bool>("NotifyOnExpiration")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("RevocationReason")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("RevokedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("RevokedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("RoleId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("StartTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("UpdatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("RoleId");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("Status", "StartTime", "EndTime");
-
-                    b.HasIndex("UserId", "Status", "EndTime");
-
-                    b.ToTable("TemporaryAccessGrants", (string)null);
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Tenant", b =>
@@ -1003,26 +682,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("IAM.Core.Entities.HolidayCalendar", b =>
-                {
-                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.MaintenanceWindow", b =>
-                {
-                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.Navigation("Tenant");
-                });
-
             modelBuilder.Entity("IAM.Core.Entities.Policy", b =>
                 {
                     b.HasOne("IAM.Core.Entities.Policy", "InheritedFromPolicy")
@@ -1034,11 +693,6 @@ namespace IAM.Infrastructure.Data.Migrations
                         .WithMany()
                         .HasForeignKey("RoleId")
                         .OnDelete(DeleteBehavior.Cascade);
-
-                    b.HasOne("IAM.Core.Entities.ScheduleTemplate", "ScheduleTemplate")
-                        .WithMany("Policies")
-                        .HasForeignKey("ScheduleTemplateId")
-                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
                         .WithMany()
@@ -1054,8 +708,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("InheritedFromPolicy");
 
                     b.Navigation("Role");
-
-                    b.Navigation("ScheduleTemplate");
 
                     b.Navigation("Tenant");
 
@@ -1081,47 +733,6 @@ namespace IAM.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.ScheduleTemplate", b =>
-                {
-                    b.HasOne("IAM.Core.Entities.HolidayCalendar", null)
-                        .WithMany("ScheduleTemplates")
-                        .HasForeignKey("HolidayCalendarId");
-
-                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.TemporaryAccessGrant", b =>
-                {
-                    b.HasOne("IAM.Core.Entities.Role", "Role")
-                        .WithMany()
-                        .HasForeignKey("RoleId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("IAM.Core.Entities.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Role");
-
-                    b.Navigation("Tenant");
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Tenant", b =>
@@ -1184,11 +795,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("Authorization");
                 });
 
-            modelBuilder.Entity("IAM.Core.Entities.HolidayCalendar", b =>
-                {
-                    b.Navigation("ScheduleTemplates");
-                });
-
             modelBuilder.Entity("IAM.Core.Entities.Policy", b =>
                 {
                     b.Navigation("InheritedPolicies");
@@ -1197,11 +803,6 @@ namespace IAM.Infrastructure.Data.Migrations
             modelBuilder.Entity("IAM.Core.Entities.Role", b =>
                 {
                     b.Navigation("UserRoles");
-                });
-
-            modelBuilder.Entity("IAM.Core.Entities.ScheduleTemplate", b =>
-                {
-                    b.Navigation("Policies");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Tenant", b =>

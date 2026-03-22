@@ -16,6 +16,11 @@ public class IAMDbContext : DbContext
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Policy> Policies => Set<Policy>();
+    public DbSet<ScheduleTemplate> ScheduleTemplates => Set<ScheduleTemplate>();
+    public DbSet<HolidayCalendar> HolidayCalendars => Set<HolidayCalendar>();
+    public DbSet<MaintenanceWindow> MaintenanceWindows => Set<MaintenanceWindow>();
+    public DbSet<TemporaryAccessGrant> TemporaryAccessGrants => Set<TemporaryAccessGrant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -126,6 +131,143 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Action).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Resource).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Details).HasColumnType("jsonb");
+        });
+
+        // Policy configuration
+        modelBuilder.Entity<Policy>(entity =>
+        {
+            entity.ToTable("Policies");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(1000);
+            entity.Property(e => e.Resource).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.TimeConstraints).HasColumnType("jsonb");
+            entity.Property(e => e.Conditions).HasColumnType("jsonb");
+
+            // Indexes for performance
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.Resource, e.Action });
+            entity.HasIndex(e => e.InheritedFromPolicyId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive, e.ExpiresAt });
+
+            // Relationships
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.InheritedFromPolicy)
+                .WithMany(e => e.InheritedPolicies)
+                .HasForeignKey(e => e.InheritedFromPolicyId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.ScheduleTemplate)
+                .WithMany(e => e.Policies)
+                .HasForeignKey(e => e.ScheduleTemplateId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // ScheduleTemplate configuration
+        modelBuilder.Entity<ScheduleTemplate>(entity =>
+        {
+            entity.ToTable("ScheduleTemplates");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ScheduleType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Timezone).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.RecurrencePattern).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.ExceptionDates).HasColumnType("jsonb");
+            entity.Property(e => e.InclusionDates).HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.ScheduleType, e.IsActive });
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // HolidayCalendar configuration
+        modelBuilder.Entity<HolidayCalendar>(entity =>
+        {
+            entity.ToTable("HolidayCalendars");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Timezone).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.CountryCode).HasMaxLength(2);
+            entity.Property(e => e.Holidays).IsRequired().HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.CountryCode);
+            entity.HasIndex(e => new { e.IsActive, e.IsAutoUpdated });
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // MaintenanceWindow configuration
+        modelBuilder.Entity<MaintenanceWindow>(entity =>
+        {
+            entity.ToTable("MaintenanceWindows");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Timezone).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.RecurrencePattern).HasMaxLength(500);
+
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Status, e.StartTime, e.EndTime });
+            entity.HasIndex(e => e.StartTime);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TemporaryAccessGrant configuration
+        modelBuilder.Entity<TemporaryAccessGrant>(entity =>
+        {
+            entity.ToTable("TemporaryAccessGrants");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Justification).IsRequired().HasMaxLength(1000);
+
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Status, e.StartTime, e.EndTime });
+            entity.HasIndex(e => new { e.UserId, e.Status, e.EndTime });
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Seed system roles
