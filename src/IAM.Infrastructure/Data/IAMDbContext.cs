@@ -16,6 +16,7 @@ public class IAMDbContext : DbContext
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Policy> Policies => Set<Policy>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -126,6 +127,48 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Action).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Resource).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Details).HasColumnType("jsonb");
+        });
+
+        // Policy configuration
+        modelBuilder.Entity<Policy>(entity =>
+        {
+            entity.ToTable("Policies");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(1000);
+            entity.Property(e => e.Resource).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.TimeConstraints).HasColumnType("jsonb");
+            entity.Property(e => e.Conditions).HasColumnType("jsonb");
+
+            // Indexes for performance
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.Resource, e.Action });
+            entity.HasIndex(e => e.InheritedFromPolicyId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive, e.ExpiresAt });
+
+            // Relationships
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.InheritedFromPolicy)
+                .WithMany(e => e.InheritedPolicies)
+                .HasForeignKey(e => e.InheritedFromPolicyId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // Seed system roles

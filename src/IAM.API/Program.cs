@@ -22,6 +22,10 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
+
+// Memory cache for policy evaluation
+builder.Services.AddMemoryCache();
 
 // Hosted services (database seeders)
 builder.Services.AddHostedService<DatabaseSeeder>();
