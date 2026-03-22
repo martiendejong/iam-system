@@ -25,6 +25,7 @@ public class IAMDbContext : DbContext
     public DbSet<ComplianceReport> ComplianceReports => Set<ComplianceReport>();
     public DbSet<PolicyTest> PolicyTests => Set<PolicyTest>();
     public DbSet<PolicyTestResult> PolicyTestResults => Set<PolicyTestResult>();
+    public DbSet<EmergencyOverride> EmergencyOverrides => Set<EmergencyOverride>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -369,6 +370,39 @@ public class IAMDbContext : DbContext
             entity.HasOne(e => e.PolicyTest)
                 .WithMany(e => e.TestResults)
                 .HasForeignKey(e => e.PolicyTestId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // EmergencyOverride configuration
+        modelBuilder.Entity<EmergencyOverride>(entity =>
+        {
+            entity.ToTable("EmergencyOverrides");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Justification).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.AccessedResources).HasMaxLength(2000);
+            entity.Property(e => e.ActionsPerformed).HasMaxLength(2000);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.DeviceId).HasMaxLength(200);
+            entity.Property(e => e.IncidentTicketId).HasMaxLength(100);
+            entity.Property(e => e.ReviewComments).HasMaxLength(2000);
+
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Status, e.ActivatedAt });
+            entity.HasIndex(e => new { e.Status, e.ExpiresAt });
+            entity.HasIndex(e => new { e.UserId, e.Status, e.ActivatedAt });
+            entity.HasIndex(e => e.ApprovalStatus);
+            entity.HasIndex(e => e.Severity);
+            entity.HasIndex(e => e.SecurityNotified);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
