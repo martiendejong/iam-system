@@ -24,6 +24,9 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
+builder.Services.AddScoped<IAuditService, AuditService>();
+builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
+builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();

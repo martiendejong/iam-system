@@ -70,6 +70,16 @@ public class PolicyEvaluationResult
     public Policy? MatchedPolicy { get; set; }
 
     /// <summary>
+    /// Policy ID that made the decision
+    /// </summary>
+    public Guid? PolicyId { get; set; }
+
+    /// <summary>
+    /// Number of policies that were evaluated
+    /// </summary>
+    public int EvaluatedPoliciesCount { get; set; }
+
+    /// <summary>
     /// Reason for the decision (for audit logs and debugging)
     /// </summary>
     public string Reason { get; set; } = string.Empty;

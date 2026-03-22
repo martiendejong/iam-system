@@ -171,8 +171,10 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
             {
                 IsAllowed = false,
                 MatchedPolicy = denyPolicy,
+                PolicyId = denyPolicy.Id,
                 Reason = $"Explicitly denied by policy '{denyPolicy.Name}' (Priority: {denyPolicy.Priority})",
                 EvaluatedPolicies = matchingPolicies,
+                EvaluatedPoliciesCount = matchingPolicies.Count,
                 EvaluationTimeMs = stopwatch.ElapsedMilliseconds
             };
         }
@@ -184,8 +186,10 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
             {
                 IsAllowed = true,
                 MatchedPolicy = allowPolicy,
+                PolicyId = allowPolicy.Id,
                 Reason = $"Allowed by policy '{allowPolicy.Name}' (Priority: {allowPolicy.Priority})",
                 EvaluatedPolicies = matchingPolicies,
+                EvaluatedPoliciesCount = matchingPolicies.Count,
                 EvaluationTimeMs = stopwatch.ElapsedMilliseconds
             };
         }
@@ -195,8 +199,10 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
         {
             IsAllowed = false,
             MatchedPolicy = null,
+            PolicyId = null,
             Reason = "No matching policy found (default deny)",
             EvaluatedPolicies = matchingPolicies,
+            EvaluatedPoliciesCount = matchingPolicies.Count,
             EvaluationTimeMs = stopwatch.ElapsedMilliseconds
         };
     }
