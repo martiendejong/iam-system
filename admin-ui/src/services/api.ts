@@ -168,6 +168,31 @@ class ApiService {
     const response = await this.client.get(`/tenants/${id}/hierarchy`);
     return response.data;
   }
+
+  // OAuth2 Client endpoints
+  async getOAuth2Clients(): Promise<any[]> {
+    const response = await this.client.get('/oauth/clients');
+    return response.data;
+  }
+
+  async getOAuth2Client(id: string): Promise<any> {
+    const response = await this.client.get(`/oauth/clients/${id}`);
+    return response.data;
+  }
+
+  async createOAuth2Client(data: any): Promise<any> {
+    const response = await this.client.post('/oauth/clients', data);
+    return response.data;
+  }
+
+  async updateOAuth2Client(id: string, data: any): Promise<any> {
+    const response = await this.client.put(`/oauth/clients/${id}`, data);
+    return response.data;
+  }
+
+  async deleteOAuth2Client(id: string): Promise<void> {
+    await this.client.delete(`/oauth/clients/${id}`);
+  }
 }
 
 export const api = new ApiService();

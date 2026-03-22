@@ -9,6 +9,8 @@ import RolesPage from './pages/roles/RolesPage';
 import RoleFormPage from './pages/roles/RoleFormPage';
 import TenantsPage from './pages/tenants/TenantsPage';
 import TenantFormPage from './pages/tenants/TenantFormPage';
+import ClientsPage from './pages/oauth/ClientsPage';
+import ClientFormPage from './pages/oauth/ClientFormPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -103,6 +105,32 @@ function App() {
             element={
               <ProtectedRoute>
                 <TenantFormPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* OAuth2 Client Management */}
+          <Route
+            path="/oauth/clients"
+            element={
+              <ProtectedRoute>
+                <ClientsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/oauth/clients/new"
+            element={
+              <ProtectedRoute>
+                <ClientFormPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/oauth/clients/:id"
+            element={
+              <ProtectedRoute>
+                <ClientFormPage />
               </ProtectedRoute>
             }
           />
