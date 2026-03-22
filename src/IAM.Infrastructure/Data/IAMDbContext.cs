@@ -1,0 +1,201 @@
+using IAM.Core.Entities;
+using Microsoft.EntityFrameworkCore;
+
+namespace IAM.Infrastructure.Data;
+
+public class IAMDbContext : DbContext
+{
+    public IAMDbContext(DbContextOptions<IAMDbContext> options) : base(options)
+    {
+    }
+
+    public DbSet<User> Users => Set<User>();
+    public DbSet<Tenant> Tenants => Set<Tenant>();
+    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<UserRole> UserRoles => Set<UserRole>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        // User configuration
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.ToTable("Users");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Email).IsUnique();
+            entity.Property(e => e.Email).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.PasswordHash).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.PhoneNumber).HasMaxLength(50);
+
+            entity.HasMany(e => e.UserRoles)
+                .WithOne(e => e.User)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.RefreshTokens)
+                .WithOne(e => e.User)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.AuditLogs)
+                .WithOne(e => e.User)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // Tenant configuration
+        modelBuilder.Entity<Tenant>(entity =>
+        {
+            entity.ToTable("Tenants");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Slug).IsUnique();
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Slug).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Type).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.ParentTenant)
+                .WithMany(e => e.ChildTenants)
+                .HasForeignKey(e => e.ParentTenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasMany(e => e.Roles)
+                .WithOne(e => e.Tenant)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Role configuration
+        modelBuilder.Entity<Role>(entity =>
+        {
+            entity.ToTable("Roles");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.Name });
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.Permissions).HasColumnType("jsonb");
+
+            entity.HasMany(e => e.UserRoles)
+                .WithOne(e => e.Role)
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // UserRole configuration
+        modelBuilder.Entity<UserRole>(entity =>
+        {
+            entity.ToTable("UserRoles");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.UserId, e.RoleId, e.TenantId }).IsUnique();
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany(e => e.UserRoles)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // RefreshToken configuration
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.ToTable("RefreshTokens");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TokenHash);
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt });
+            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(255);
+        });
+
+        // AuditLog configuration
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.ToTable("AuditLogs");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.Action, e.Resource });
+            entity.Property(e => e.Action).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Resource).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Details).HasColumnType("jsonb");
+        });
+
+        // Seed system roles
+        SeedSystemRoles(modelBuilder);
+    }
+
+    private void SeedSystemRoles(ModelBuilder modelBuilder)
+    {
+        var superAdminId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var buildingOwnerId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        var buildingManagerId = Guid.Parse("00000000-0000-0000-0000-000000000003");
+        var realEstateAgentId = Guid.Parse("00000000-0000-0000-0000-000000000004");
+        var contractorId = Guid.Parse("00000000-0000-0000-0000-000000000005");
+        var residentId = Guid.Parse("00000000-0000-0000-0000-000000000006");
+
+        modelBuilder.Entity<Role>().HasData(
+            new Role
+            {
+                Id = superAdminId,
+                Name = "SuperAdmin",
+                Description = "Full system access",
+                IsSystemRole = true,
+                Permissions = @"[""*""]",
+                CreatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new Role
+            {
+                Id = buildingOwnerId,
+                Name = "BuildingOwner",
+                Description = "Building owner with full building access",
+                IsSystemRole = true,
+                Permissions = @"[""Building.View"",""Building.Manage"",""Floor.View"",""Floor.Manage"",""Room.View"",""Room.Manage"",""Device.View"",""Device.Control"",""User.Invite"",""User.ViewBuilding""]",
+                CreatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new Role
+            {
+                Id = buildingManagerId,
+                Name = "BuildingManager",
+                Description = "Building manager with operational access",
+                IsSystemRole = true,
+                Permissions = @"[""Building.View"",""Floor.View"",""Floor.Manage"",""Room.View"",""Room.Manage"",""Device.View"",""Device.Control"",""Maintenance.Schedule""]",
+                CreatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new Role
+            {
+                Id = realEstateAgentId,
+                Name = "RealEstateAgent",
+                Description = "Real estate agent for property listings and showings",
+                IsSystemRole = true,
+                Permissions = @"[""Property.List"",""Property.View"",""Property.Manage"",""Showing.Schedule"",""Client.Manage""]",
+                CreatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new Role
+            {
+                Id = contractorId,
+                Name = "Contractor",
+                Description = "Contractor with time-limited maintenance access",
+                IsSystemRole = true,
+                Permissions = @"[""Building.View"",""Room.View"",""Device.View"",""Maintenance.Perform"",""WorkOrder.View""]",
+                CreatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new Role
+            {
+                Id = residentId,
+                Name = "Resident",
+                Description = "Building resident/tenant",
+                IsSystemRole = true,
+                Permissions = @"[""Room.View"",""Device.ViewOwn"",""Amenity.Book"",""Maintenance.Request""]",
+                CreatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, DateTimeKind.Utc)
+            }
+        );
+    }
+}
