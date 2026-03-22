@@ -7,6 +7,8 @@ import UserEditPage from './pages/users/UserEditPage';
 import UserCreatePage from './pages/users/UserCreatePage';
 import RolesPage from './pages/roles/RolesPage';
 import RoleFormPage from './pages/roles/RoleFormPage';
+import TenantsPage from './pages/tenants/TenantsPage';
+import TenantFormPage from './pages/tenants/TenantFormPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -75,6 +77,32 @@ function App() {
             element={
               <ProtectedRoute>
                 <RoleFormPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Tenant Management */}
+          <Route
+            path="/tenants"
+            element={
+              <ProtectedRoute>
+                <TenantsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tenants/new"
+            element={
+              <ProtectedRoute>
+                <TenantFormPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tenants/:id"
+            element={
+              <ProtectedRoute>
+                <TenantFormPage />
               </ProtectedRoute>
             }
           />
