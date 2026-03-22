@@ -21,6 +21,8 @@ public class IAMDbContext : DbContext
     public DbSet<HolidayCalendar> HolidayCalendars => Set<HolidayCalendar>();
     public DbSet<MaintenanceWindow> MaintenanceWindows => Set<MaintenanceWindow>();
     public DbSet<TemporaryAccessGrant> TemporaryAccessGrants => Set<TemporaryAccessGrant>();
+    public DbSet<PolicyAuditEvent> PolicyAuditEvents => Set<PolicyAuditEvent>();
+    public DbSet<ComplianceReport> ComplianceReports => Set<ComplianceReport>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -263,6 +265,62 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.RoleId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // PolicyAuditEvent configuration
+        modelBuilder.Entity<PolicyAuditEvent>(entity =>
+        {
+            entity.ToTable("PolicyAuditEvents");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Resource).HasMaxLength(200);
+            entity.Property(e => e.Action).HasMaxLength(100);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.Changes).HasColumnType("jsonb");
+            entity.Property(e => e.Metadata).HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt });
+            entity.HasIndex(e => new { e.PolicyId, e.CreatedAt });
+            entity.HasIndex(e => new { e.TenantId, e.CreatedAt });
+            entity.HasIndex(e => new { e.EventType, e.CreatedAt });
+            entity.HasIndex(e => e.TriggeredAlert);
+
+            entity.HasOne(e => e.Policy)
+                .WithMany()
+                .HasForeignKey(e => e.PolicyId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // ComplianceReport configuration
+        modelBuilder.Entity<ComplianceReport>(entity =>
+        {
+            entity.ToTable("ComplianceReports");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Framework).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Findings).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.Recommendations).HasColumnType("jsonb");
+            entity.Property(e => e.Statistics).IsRequired().HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Framework, e.Status });
+            entity.HasIndex(e => new { e.PeriodStart, e.PeriodEnd });
+            entity.HasIndex(e => e.GeneratedAt);
 
             entity.HasOne(e => e.Tenant)
                 .WithMany()
