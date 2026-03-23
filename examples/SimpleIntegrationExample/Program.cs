@@ -3,7 +3,7 @@ using IAM.SDK.DotNet;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add IAM SDK
-builder.Services.AddIamClient("https://localhost:5001");
+builder.Services.AddIamClient("http://localhost:5161");
 
 var app = builder.Build();
 

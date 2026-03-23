@@ -144,4 +144,13 @@ app.MapControllers();
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
+// Seed development data (only in Development environment)
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    var context = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+    var seeder = new DevelopmentDataSeeder(context);
+    await seeder.SeedAsync();
+}
+
 app.Run();
