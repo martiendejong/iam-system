@@ -27,6 +27,17 @@ public class IAMDbContext : DbContext
     public DbSet<PolicyTestResult> PolicyTestResults => Set<PolicyTestResult>();
     public DbSet<EmergencyOverride> EmergencyOverrides => Set<EmergencyOverride>();
 
+    // Building Management System entities
+    public DbSet<Location> Locations => Set<Location>();
+    public DbSet<Building> Buildings => Set<Building>();
+    public DbSet<Floor> Floors => Set<Floor>();
+    public DbSet<Room> Rooms => Set<Room>();
+    public DbSet<RoomGroup> RoomGroups => Set<RoomGroup>();
+    public DbSet<RoomGroupMembership> RoomGroupMemberships => Set<RoomGroupMembership>();
+    public DbSet<IoTDevice> IoTDevices => Set<IoTDevice>();
+    public DbSet<DeviceAccessLog> DeviceAccessLogs => Set<DeviceAccessLog>();
+    public DbSet<ResourcePermission> ResourcePermissions => Set<ResourcePermission>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -404,6 +415,277 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Location configuration
+        modelBuilder.Entity<Location>(entity =>
+        {
+            entity.ToTable("Locations");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Address).HasMaxLength(500);
+            entity.Property(e => e.City).HasMaxLength(100);
+            entity.Property(e => e.Country).HasMaxLength(100);
+
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Building configuration
+        modelBuilder.Entity<Building>(entity =>
+        {
+            entity.ToTable("Buildings");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Code).HasMaxLength(50);
+
+            entity.HasIndex(e => e.LocationId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+
+            entity.HasOne(e => e.Location)
+                .WithMany(e => e.Buildings)
+                .HasForeignKey(e => e.LocationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Floor configuration
+        modelBuilder.Entity<Floor>(entity =>
+        {
+            entity.ToTable("Floors");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+
+            entity.HasIndex(e => e.BuildingId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.BuildingId, e.FloorNumber });
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+
+            entity.HasOne(e => e.Building)
+                .WithMany(e => e.Floors)
+                .HasForeignKey(e => e.BuildingId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Room configuration
+        modelBuilder.Entity<Room>(entity =>
+        {
+            entity.ToTable("Rooms");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.RoomNumber).HasMaxLength(50);
+
+            entity.HasIndex(e => e.FloorId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.FloorId, e.RoomNumber });
+            entity.HasIndex(e => new { e.Type, e.IsActive });
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+
+            entity.HasOne(e => e.Floor)
+                .WithMany(e => e.Rooms)
+                .HasForeignKey(e => e.FloorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // RoomGroup configuration
+        modelBuilder.Entity<RoomGroup>(entity =>
+        {
+            entity.ToTable("RoomGroups");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(1000);
+
+            entity.HasIndex(e => e.FloorId);
+            entity.HasIndex(e => e.BuildingId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+
+            entity.HasOne(e => e.Floor)
+                .WithMany()
+                .HasForeignKey(e => e.FloorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Building)
+                .WithMany()
+                .HasForeignKey(e => e.BuildingId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // RoomGroupMembership configuration
+        modelBuilder.Entity<RoomGroupMembership>(entity =>
+        {
+            entity.ToTable("RoomGroupMemberships");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Notes).HasMaxLength(500);
+
+            entity.HasIndex(e => new { e.RoomId, e.RoomGroupId }).IsUnique();
+            entity.HasIndex(e => e.RoomGroupId);
+
+            entity.HasOne(e => e.Room)
+                .WithMany(e => e.GroupMemberships)
+                .HasForeignKey(e => e.RoomId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.RoomGroup)
+                .WithMany(e => e.RoomMemberships)
+                .HasForeignKey(e => e.RoomGroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // IoTDevice configuration
+        modelBuilder.Entity<IoTDevice>(entity =>
+        {
+            entity.ToTable("IoTDevices");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.DeviceId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Manufacturer).HasMaxLength(100);
+            entity.Property(e => e.Model).HasMaxLength(100);
+            entity.Property(e => e.StreamUrl).HasMaxLength(500);
+            entity.Property(e => e.StreamProtocol).HasMaxLength(50);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.Capabilities).HasColumnType("jsonb");
+            entity.Property(e => e.Metadata).HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.DeviceId).IsUnique();
+            entity.HasIndex(e => e.RoomId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Type, e.Status });
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+            entity.HasIndex(e => e.SupportsStreaming);
+
+            entity.HasOne(e => e.Room)
+                .WithMany(e => e.Devices)
+                .HasForeignKey(e => e.RoomId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DeviceAccessLog configuration
+        modelBuilder.Entity<DeviceAccessLog>(entity =>
+        {
+            entity.ToTable("DeviceAccessLogs");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ErrorMessage).HasMaxLength(1000);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.UserAgent).HasMaxLength(500);
+            entity.Property(e => e.Context).HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.DeviceId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.AccessedAt);
+            entity.HasIndex(e => new { e.DeviceId, e.AccessedAt });
+            entity.HasIndex(e => new { e.UserId, e.AccessedAt });
+            entity.HasIndex(e => new { e.Action, e.Success });
+
+            entity.HasOne(e => e.Device)
+                .WithMany(e => e.AccessLogs)
+                .HasForeignKey(e => e.DeviceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ResourcePermission configuration
+        modelBuilder.Entity<ResourcePermission>(entity =>
+        {
+            entity.ToTable("ResourcePermissions");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Reason).HasMaxLength(1000);
+
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.ResourceType, e.ResourceId });
+            entity.HasIndex(e => e.LocationId);
+            entity.HasIndex(e => e.BuildingId);
+            entity.HasIndex(e => e.FloorId);
+            entity.HasIndex(e => e.RoomId);
+            entity.HasIndex(e => e.RoomGroupId);
+            entity.HasIndex(e => e.IoTDeviceId);
+            entity.HasIndex(e => new { e.IsActive, e.ValidUntil });
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Location)
+                .WithMany(e => e.Permissions)
+                .HasForeignKey(e => e.LocationId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Building)
+                .WithMany(e => e.Permissions)
+                .HasForeignKey(e => e.BuildingId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Floor)
+                .WithMany(e => e.Permissions)
+                .HasForeignKey(e => e.FloorId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Room)
+                .WithMany(e => e.Permissions)
+                .HasForeignKey(e => e.RoomId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.RoomGroup)
+                .WithMany(e => e.Permissions)
+                .HasForeignKey(e => e.RoomGroupId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.IoTDevice)
+                .WithMany(e => e.Permissions)
+                .HasForeignKey(e => e.IoTDeviceId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.GrantedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.GrantedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // Seed system roles
