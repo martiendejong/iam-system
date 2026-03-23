@@ -65,7 +65,51 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
                     // Map role claims correctly
                     options.TokenValidationParameters.RoleClaimType = System.Security.Claims.ClaimTypes.Role;
                     options.TokenValidationParameters.NameClaimType = System.Security.Claims.ClaimTypes.Name;
+
+                    // Explicitly set validation parameters to ensure they match test tokens
+                    options.TokenValidationParameters.ValidateIssuerSigningKey = true;
+                    options.TokenValidationParameters.ValidateIssuer = true;
+                    options.TokenValidationParameters.ValidateAudience = true;
+                    options.TokenValidationParameters.ValidateLifetime = true;
+                    options.TokenValidationParameters.ClockSkew = TimeSpan.Zero;
+
+                    // Add event handlers for debugging
+                    options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+                    {
+                        OnAuthenticationFailed = context =>
+                        {
+                            System.Console.WriteLine($"JWT Auth Failed: {context.Exception.Message}");
+                            return Task.CompletedTask;
+                        },
+                        OnTokenValidated = context =>
+                        {
+                            System.Console.WriteLine($"JWT Token Validated: {context.Principal?.Identity?.Name}");
+                            return Task.CompletedTask;
+                        },
+                        OnChallenge = context =>
+                        {
+                            System.Console.WriteLine($"JWT Challenge: {context.Error}, {context.ErrorDescription}");
+                            return Task.CompletedTask;
+                        }
+                    };
                 });
+
+            // Configure authentication to use JWT Bearer as default for tests
+            services.Configure<Microsoft.AspNetCore.Authentication.AuthenticationOptions>(options =>
+            {
+                options.DefaultScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultAuthenticateScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme;
+            });
+
+            // Configure authorization to use JWT Bearer scheme
+            services.Configure<Microsoft.AspNetCore.Authorization.AuthorizationOptions>(options =>
+            {
+                options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+                    .AddAuthenticationSchemes(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
+                    .RequireAuthenticatedUser()
+                    .Build();
+            });
 
             // Add InMemory DbContext
             services.AddDbContext<IAMDbContext>(options =>
