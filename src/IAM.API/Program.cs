@@ -27,9 +27,20 @@ builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
+builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
+
+// Fido2 (WebAuthn) configuration
+builder.Services.AddFido2(options =>
+{
+    options.ServerDomain = builder.Configuration["Fido2:ServerDomain"] ?? "localhost";
+    options.ServerName = "IAM System";
+    options.Origins = builder.Configuration.GetSection("Fido2:Origins").Get<HashSet<string>>()
+        ?? new HashSet<string> { "https://localhost:5161" };
+    options.TimestampDriftTolerance = builder.Configuration.GetValue<int>("Fido2:TimestampDriftTolerance", 300000);
+});
 
 // Hosted services (database seeders)
 builder.Services.AddHostedService<DatabaseSeeder>();
