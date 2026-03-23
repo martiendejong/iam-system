@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
@@ -17,9 +18,19 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
 {
     private bool _seeded = false;
 
+    public IAMTestWebApplicationFactory()
+    {
+        // Clear default JWT claim type mappings that ASP.NET Core applies
+        JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+        JwtSecurityTokenHandler.DefaultOutboundClaimTypeMap.Clear();
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        // Configure test settings (JWT, etc.)
+        // Set environment to Development to load appsettings.Development.json
+        builder.UseEnvironment("Development");
+
+        // Configure test settings (JWT, etc.) - this overrides any existing config
         builder.ConfigureAppConfiguration((context, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
@@ -46,11 +57,29 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
                 services.Remove(service);
             }
 
+            // Configure JWT Bearer options for testing
+            services.Configure<Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerOptions>(
+                Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme,
+                options =>
+                {
+                    // Map role claims correctly
+                    options.TokenValidationParameters.RoleClaimType = System.Security.Claims.ClaimTypes.Role;
+                    options.TokenValidationParameters.NameClaimType = System.Security.Claims.ClaimTypes.Name;
+                });
+
             // Add InMemory DbContext
             services.AddDbContext<IAMDbContext>(options =>
             {
                 options.UseInMemoryDatabase("IAMTestDb");
             });
+        });
+    }
+
+    public new HttpClient CreateClient()
+    {
+        return CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
         });
     }
 
