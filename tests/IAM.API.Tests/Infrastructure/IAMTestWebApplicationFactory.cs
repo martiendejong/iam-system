@@ -43,9 +43,14 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureTestServices(services =>
         {
-            // Remove PostgreSQL DbContext
-            var descriptor = services.SingleOrDefault(d => d.ServiceType == typeof(DbContextOptions<IAMDbContext>));
-            if (descriptor != null)
+            // Remove PostgreSQL DbContext and all related registrations
+            var descriptorsToRemove = services
+                .Where(d => d.ServiceType == typeof(DbContextOptions<IAMDbContext>) ||
+                           d.ServiceType == typeof(IAMDbContext) ||
+                           d.ServiceType.Name.Contains("DbContext"))
+                .ToList();
+
+            foreach (var descriptor in descriptorsToRemove)
             {
                 services.Remove(descriptor);
             }
@@ -116,6 +121,22 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
             {
                 options.UseInMemoryDatabase("IAMTestDb");
             });
+
+            // Seed database immediately after services are built
+            var sp = services.BuildServiceProvider();
+            using (var scope = sp.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+                db.Database.EnsureCreated();
+
+                if (!db.Tenants.Any())
+                {
+                    SeedTestData(db);
+                    db.SaveChanges();
+                }
+            }
+
+            _seeded = true;
         });
     }
 
@@ -158,12 +179,48 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
 
         context.Tenants.Add(rootTenant);
 
-        // Create test roles
-        var adminRole = new Role
+        // Create test roles (all roles needed by tests)
+        var systemAdminRole = new Role
         {
             Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
             Name = "SystemAdmin",
             Description = "System Administrator",
+            TenantId = rootTenant.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var tenantAdminRole = new Role
+        {
+            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01"),
+            Name = "TenantAdmin",
+            Description = "Tenant Administrator",
+            TenantId = rootTenant.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var securityAdminRole = new Role
+        {
+            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02"),
+            Name = "SecurityAdmin",
+            Description = "Security Administrator",
+            TenantId = rootTenant.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var emergencyAccessRole = new Role
+        {
+            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa03"),
+            Name = "EmergencyAccess",
+            Description = "Emergency Access",
+            TenantId = rootTenant.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var complianceOfficerRole = new Role
+        {
+            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa04"),
+            Name = "ComplianceOfficer",
+            Description = "Compliance Officer",
             TenantId = rootTenant.Id,
             CreatedAt = DateTime.UtcNow
         };
@@ -177,7 +234,8 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
             CreatedAt = DateTime.UtcNow
         };
 
-        context.Roles.AddRange(adminRole, userRole);
+        context.Roles.AddRange(systemAdminRole, tenantAdminRole, securityAdminRole,
+            emergencyAccessRole, complianceOfficerRole, userRole);
 
         // Create test users
         var adminUser = new User
@@ -195,6 +253,63 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
         };
 
         context.Users.AddRange(adminUser, testUser);
+
+        // Assign roles to users
+        var adminUserRoles = new[]
+        {
+            new UserRole
+            {
+                Id = Guid.NewGuid(),
+                UserId = adminUser.Id,
+                RoleId = systemAdminRole.Id,
+                TenantId = rootTenant.Id,
+                GrantedAt = DateTime.UtcNow
+            },
+            new UserRole
+            {
+                Id = Guid.NewGuid(),
+                UserId = adminUser.Id,
+                RoleId = tenantAdminRole.Id,
+                TenantId = rootTenant.Id,
+                GrantedAt = DateTime.UtcNow
+            },
+            new UserRole
+            {
+                Id = Guid.NewGuid(),
+                UserId = adminUser.Id,
+                RoleId = securityAdminRole.Id,
+                TenantId = rootTenant.Id,
+                GrantedAt = DateTime.UtcNow
+            },
+            new UserRole
+            {
+                Id = Guid.NewGuid(),
+                UserId = adminUser.Id,
+                RoleId = emergencyAccessRole.Id,
+                TenantId = rootTenant.Id,
+                GrantedAt = DateTime.UtcNow
+            },
+            new UserRole
+            {
+                Id = Guid.NewGuid(),
+                UserId = adminUser.Id,
+                RoleId = complianceOfficerRole.Id,
+                TenantId = rootTenant.Id,
+                GrantedAt = DateTime.UtcNow
+            }
+        };
+
+        var testUserRole = new UserRole
+        {
+            Id = Guid.NewGuid(),
+            UserId = testUser.Id,
+            RoleId = userRole.Id,
+            TenantId = rootTenant.Id,
+            GrantedAt = DateTime.UtcNow
+        };
+
+        context.UserRoles.AddRange(adminUserRoles);
+        context.UserRoles.Add(testUserRole);
 
         // Create test policy
         var testPolicy = new Policy
