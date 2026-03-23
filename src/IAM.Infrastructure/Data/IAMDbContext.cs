@@ -26,6 +26,7 @@ public class IAMDbContext : DbContext
     public DbSet<PolicyTest> PolicyTests => Set<PolicyTest>();
     public DbSet<PolicyTestResult> PolicyTestResults => Set<PolicyTestResult>();
     public DbSet<EmergencyOverride> EmergencyOverrides => Set<EmergencyOverride>();
+    public DbSet<Credential> Credentials => Set<Credential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -403,6 +404,29 @@ public class IAMDbContext : DbContext
             entity.HasOne(e => e.Tenant)
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Credential configuration (WebAuthn/Passkeys)
+        modelBuilder.Entity<Credential>(entity =>
+        {
+            entity.ToTable("Credentials");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.CredentialId).IsRequired();
+            entity.Property(e => e.PublicKey).IsRequired();
+            entity.Property(e => e.CredType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Name).HasMaxLength(200);
+            entity.Property(e => e.UserAgent).HasMaxLength(500);
+            entity.Property(e => e.DeviceType).HasMaxLength(50);
+            entity.Property(e => e.AttestationFormat).HasMaxLength(50);
+
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.CredentialId).IsUnique();
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt });
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
