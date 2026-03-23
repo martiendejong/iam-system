@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using IAM.API.Workers;
+using IAM.Core.Interfaces;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using IAM.Infrastructure.Services;
@@ -30,6 +31,15 @@ builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
+
+// Building Management System services
+builder.Services.AddScoped<ILocationService, LocationService>();
+builder.Services.AddScoped<IBuildingService, BuildingService>();
+builder.Services.AddScoped<IFloorService, FloorService>();
+builder.Services.AddScoped<IRoomService, RoomService>();
+builder.Services.AddScoped<IRoomGroupService, RoomGroupService>();
+builder.Services.AddScoped<IIoTDeviceService, IoTDeviceService>();
+builder.Services.AddScoped<IResourcePermissionService, ResourcePermissionService>();
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
