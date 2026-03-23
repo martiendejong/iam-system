@@ -23,7 +23,8 @@ public static class TestAuthenticationHelper
         {
             new Claim("sub", userId.ToString()),
             new Claim(ClaimTypes.Name, username),
-            new Claim(ClaimTypes.NameIdentifier, userId.ToString())
+            new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
+            new Claim("tenant_id", "11111111-1111-1111-1111-111111111111")  // Root tenant from test seed data
         };
 
         foreach (var role in roles)
