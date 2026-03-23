@@ -17,9 +17,13 @@ namespace IAM.API.Tests.Infrastructure;
 public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
 {
     private bool _seeded = false;
+    private readonly string _databaseName;
 
     public IAMTestWebApplicationFactory()
     {
+        // Use unique database name for each test class to ensure isolation
+        _databaseName = $"IAMTestDb_{Guid.NewGuid()}";
+
         // Clear default JWT claim type mappings that ASP.NET Core applies
         JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
         JwtSecurityTokenHandler.DefaultOutboundClaimTypeMap.Clear();
@@ -116,10 +120,10 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
                     .Build();
             });
 
-            // Add InMemory DbContext
+            // Add InMemory DbContext with unique database name for test isolation
             services.AddDbContext<IAMDbContext>(options =>
             {
-                options.UseInMemoryDatabase("IAMTestDb");
+                options.UseInMemoryDatabase(_databaseName);
             });
 
             // Seed database immediately after services are built
