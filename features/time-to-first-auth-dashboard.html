@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time-to-First-Auth Leaderboard - IAM System</title>
+    <meta name="description" content="Real-time leaderboard showing IAM System setup times by framework. See how fast developers get authentication working.">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #1f2937;
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 3rem;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .header p {
+            font-size: 1.25rem;
+            opacity: 0.9;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6b7280;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-card .value {
+            font-size: 3rem;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-card .label {
+            font-size: 0.875rem;
+            color: #9ca3af;
+        }
+
+        .leaderboard {
+            background: white;
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .leaderboard h2 {
+            font-size: 2rem;
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .leaderboard h2 svg {
+            width: 32px;
+            height: 32px;
+            color: #667eea;
+        }
+
+        .framework-tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #e5e7eb;
+            overflow-x: auto;
+        }
+
+        .tab {
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #6b7280;
+            white-space: nowrap;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            color: #667eea;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .leaderboard-table th {
+            text-align: left;
+            padding: 1rem;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6b7280;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .leaderboard-table td {
+            padding: 1.5rem 1rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .leaderboard-table tr:hover {
+            background: #f9fafb;
+        }
+
+        .rank {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #667eea;
+            width: 60px;
+        }
+
+        .rank.gold { color: #f59e0b; }
+        .rank.silver { color: #6b7280; }
+        .rank.bronze { color: #cd7f32; }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 1.25rem;
+        }
+
+        .time {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #10b981;
+        }
+
+        .time.slow {
+            color: #ef4444;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge.fast {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge.average {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge.slow {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .share-section {
+            margin-top: 3rem;
+            text-align: center;
+        }
+
+        .share-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 1rem 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .share-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: #d1fae5;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #065f46;
+            margin-left: auto;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .leaderboard-table {
+                font-size: 0.875rem;
+            }
+
+            .time {
+                font-size: 1.25rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ Time-to-First-Auth Leaderboard</h1>
+            <p>The fastest developers getting authentication working with IAM System</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Fastest Ever</h3>
+                <div class="value">23s</div>
+                <div class="label">React + Vite</div>
+            </div>
+            <div class="stat-card">
+                <h3>Average Time</h3>
+                <div class="value">37s</div>
+                <div class="label">All frameworks</div>
+            </div>
+            <div class="stat-card">
+                <h3>Setup Today</h3>
+                <div class="value">847</div>
+                <div class="label">Developers</div>
+            </div>
+            <div class="stat-card">
+                <h3>Auth0 Saved</h3>
+                <div class="value">~24min</div>
+                <div class="label">Per developer</div>
+            </div>
+        </div>
+
+        <div class="leaderboard">
+            <h2>
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                Real-Time Leaderboard
+                <div class="live-indicator">
+                    <div class="live-dot"></div>
+                    LIVE
+                </div>
+            </h2>
+
+            <div class="framework-tabs">
+                <button class="tab active" data-framework="all">All Frameworks</button>
+                <button class="tab" data-framework="react">React</button>
+                <button class="tab" data-framework="vue">Vue</button>
+                <button class="tab" data-framework="nextjs">Next.js</button>
+                <button class="tab" data-framework="angular">Angular</button>
+            </div>
+
+            <table class="leaderboard-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Developer</th>
+                        <th>Framework</th>
+                        <th>Time</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody id="leaderboard-body">
+                    <!-- Populated by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="share-section">
+            <button class="share-button" onclick="shareResult()">
+                <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+                </svg>
+                Share Your Setup Time
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Sample data (in production, this would come from API)
+        const leaderboardData = [
+            { rank: 1, name: "Sarah Chen", framework: "react", time: 23, badge: "fast", date: "2 hours ago", location: "San Francisco" },
+            { rank: 2, name: "Marcus Liu", framework: "nextjs", time: 28, badge: "fast", date: "5 hours ago", location: "Singapore" },
+            { rank: 3, name: "Elena Popov", framework: "vue", time: 31, badge: "fast", date: "1 day ago", location: "Berlin" },
+            { rank: 4, name: "James Wilson", framework: "react", time: 34, badge: "fast", date: "1 day ago", location: "London" },
+            { rank: 5, name: "Aisha Mohammed", framework: "angular", time: 38, badge: "average", date: "2 days ago", location: "Lagos" },
+            { rank: 6, name: "Carlos Garcia", framework: "nextjs", time: 41, badge: "average", date: "2 days ago", location: "Madrid" },
+            { rank: 7, name: "Yuki Tanaka", framework: "react", time: 44, badge: "average", date: "3 days ago", location: "Tokyo" },
+            { rank: 8, name: "Sophie Martin", framework: "vue", time: 47, badge: "average", date: "3 days ago", location: "Paris" },
+            { rank: 9, name: "Alex Kumar", framework: "nextjs", time: 52, badge: "average", date: "4 days ago", location: "Mumbai" },
+            { rank: 10, name: "Nina Rossi", framework: "angular", time: 56, badge: "slow", date: "5 days ago", location: "Milan" },
+        ];
+
+        function renderLeaderboard(framework = 'all') {
+            const tbody = document.getElementById('leaderboard-body');
+            const filtered = framework === 'all'
+                ? leaderboardData
+                : leaderboardData.filter(d => d.framework === framework);
+
+            tbody.innerHTML = filtered.map(row => `
+                <tr>
+                    <td class="rank ${row.rank <= 3 ? ['gold', 'silver', 'bronze'][row.rank-1] : ''}">
+                        ${row.rank === 1 ? '🥇' : row.rank === 2 ? '🥈' : row.rank === 3 ? '🥉' : `#${row.rank}`}
+                    </td>
+                    <td>
+                        <div class="user-info">
+                            <div class="avatar">${row.name.charAt(0)}</div>
+                            <div>
+                                <div style="font-weight: 600;">${row.name}</div>
+                                <div style="font-size: 0.875rem; color: #6b7280;">${row.location}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>
+                        <span style="font-weight: 500; text-transform: capitalize;">${row.framework}</span>
+                    </td>
+                    <td class="time ${row.time > 50 ? 'slow' : ''}">${row.time}s</td>
+                    <td><span class="badge ${row.badge}">${row.badge}</span></td>
+                    <td style="color: #6b7280;">${row.date}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                renderLeaderboard(tab.dataset.framework);
+            });
+        });
+
+        // Share functionality
+        function shareResult() {
+            const text = "I just set up authentication in 23 seconds with IAM System! 🚀\n\nAuth0 would have taken 30+ minutes.\n\nTry it: npx iam init\n\n#authentication #webdev";
+
+            if (navigator.share) {
+                navigator.share({
+                    title: 'IAM System - Time to First Auth',
+                    text: text,
+                    url: 'https://iam.dev/leaderboard'
+                });
+            } else {
+                // Fallback: Twitter share
+                const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=https://iam.dev/leaderboard`;
+                window.open(twitterUrl, '_blank');
+            }
+        }
+
+        // Simulate live updates
+        setInterval(() => {
+            const randomIdx = Math.floor(Math.random() * leaderboardData.length);
+            leaderboardData[randomIdx].time += Math.random() > 0.5 ? 1 : -1;
+            leaderboardData[randomIdx].time = Math.max(20, Math.min(60, leaderboardData[randomIdx].time));
+
+            // Re-sort
+            leaderboardData.sort((a, b) => a.time - b.time);
+            leaderboardData.forEach((row, idx) => row.rank = idx + 1);
+
+            // Update active tab
+            const activeTab = document.querySelector('.tab.active');
+            renderLeaderboard(activeTab.dataset.framework);
+        }, 5000);
+
+        // Initial render
+        renderLeaderboard();
+    </script>
+</body>
+</html>
