@@ -36,4 +36,54 @@ public interface IIamAuthClient
     /// Set the access token manually
     /// </summary>
     void SetAccessToken(string accessToken);
+
+    // ========== Passkey Methods ==========
+
+    /// <summary>
+    /// Begin passkey registration (requires authentication)
+    /// </summary>
+    Task<PasskeyRegistrationOptionsResponse> BeginPasskeyRegistrationAsync(
+        string username,
+        string displayName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Complete passkey registration (requires authentication)
+    /// </summary>
+    Task<SuccessResponse> CompletePasskeyRegistrationAsync(
+        string credentialName,
+        object attestationResponse,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Begin passkey authentication (no authentication required)
+    /// </summary>
+    Task<PasskeyAuthenticationOptionsResponse> BeginPasskeyAuthenticationAsync(
+        string username,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Complete passkey authentication and receive token (no authentication required)
+    /// </summary>
+    Task<PasskeyAuthenticationResponse> CompletePasskeyAuthenticationAsync(
+        object assertionResponse,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get all registered passkeys for the current user (requires authentication)
+    /// </summary>
+    Task<List<PasskeyCredentialDto>> GetPasskeyCredentialsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Delete a passkey (requires authentication)
+    /// </summary>
+    Task<SuccessResponse> DeletePasskeyCredentialAsync(Guid credentialId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Rename a passkey (requires authentication)
+    /// </summary>
+    Task<SuccessResponse> RenamePasskeyCredentialAsync(
+        Guid credentialId,
+        string newName,
+        CancellationToken cancellationToken = default);
 }

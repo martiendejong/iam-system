@@ -96,4 +96,134 @@ public class IamAuthClient : IIamAuthClient
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
         }
     }
+
+    // ========== Passkey Methods ==========
+
+    public async Task<PasskeyRegistrationOptionsResponse> BeginPasskeyRegistrationAsync(
+        string username,
+        string displayName,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new BeginPasskeyRegistrationRequest
+        {
+            Username = username,
+            DisplayName = displayName
+        };
+
+        var response = await _httpClient.PostAsJsonAsync("/api/passkey/register/begin", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var options = await response.Content.ReadFromJsonAsync<PasskeyRegistrationOptionsResponse>(cancellationToken);
+        if (options == null)
+            throw new InvalidOperationException("Failed to parse passkey registration options");
+
+        return options;
+    }
+
+    public async Task<SuccessResponse> CompletePasskeyRegistrationAsync(
+        string credentialName,
+        object attestationResponse,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new CompletePasskeyRegistrationRequest
+        {
+            CredentialName = credentialName,
+            AttestationResponse = attestationResponse
+        };
+
+        var response = await _httpClient.PostAsJsonAsync("/api/passkey/register/complete", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<SuccessResponse>(cancellationToken);
+        if (result == null)
+            throw new InvalidOperationException("Failed to parse passkey registration result");
+
+        return result;
+    }
+
+    public async Task<PasskeyAuthenticationOptionsResponse> BeginPasskeyAuthenticationAsync(
+        string username,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new BeginPasskeyAuthenticationRequest
+        {
+            Username = username
+        };
+
+        var response = await _httpClient.PostAsJsonAsync("/api/passkey/authenticate/begin", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var options = await response.Content.ReadFromJsonAsync<PasskeyAuthenticationOptionsResponse>(cancellationToken);
+        if (options == null)
+            throw new InvalidOperationException("Failed to parse passkey authentication options");
+
+        return options;
+    }
+
+    public async Task<PasskeyAuthenticationResponse> CompletePasskeyAuthenticationAsync(
+        object assertionResponse,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("/api/passkey/authenticate/complete", assertionResponse, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<PasskeyAuthenticationResponse>(cancellationToken);
+        if (result == null)
+            throw new InvalidOperationException("Failed to parse passkey authentication result");
+
+        // Store token if provided
+        if (!string.IsNullOrEmpty(result.Token))
+        {
+            _accessToken = result.Token;
+            UpdateAuthorizationHeader();
+        }
+
+        return result;
+    }
+
+    public async Task<List<PasskeyCredentialDto>> GetPasskeyCredentialsAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync("/api/passkey/credentials", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var credentials = await response.Content.ReadFromJsonAsync<List<PasskeyCredentialDto>>(cancellationToken);
+        if (credentials == null)
+            throw new InvalidOperationException("Failed to parse passkey credentials");
+
+        return credentials;
+    }
+
+    public async Task<SuccessResponse> DeletePasskeyCredentialAsync(
+        Guid credentialId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"/api/passkey/credentials/{credentialId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<SuccessResponse>(cancellationToken);
+        if (result == null)
+            throw new InvalidOperationException("Failed to parse delete result");
+
+        return result;
+    }
+
+    public async Task<SuccessResponse> RenamePasskeyCredentialAsync(
+        Guid credentialId,
+        string newName,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new RenamePasskeyRequest
+        {
+            NewName = newName
+        };
+
+        var response = await _httpClient.PatchAsJsonAsync($"/api/passkey/credentials/{credentialId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<SuccessResponse>(cancellationToken);
+        if (result == null)
+            throw new InvalidOperationException("Failed to parse rename result");
+
+        return result;
+    }
 }
