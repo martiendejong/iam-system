@@ -29,6 +29,15 @@ public class IAMDbContext : DbContext
     public DbSet<Credential> Credentials => Set<Credential>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<DeviceCertificate> DeviceCertificates => Set<DeviceCertificate>();
+    public DbSet<Group> Groups => Set<Group>();
+    public DbSet<GroupMembership> GroupMemberships => Set<GroupMembership>();
+    public DbSet<GroupRole> GroupRoles => Set<GroupRole>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<RecoveryCode> RecoveryCodes => Set<RecoveryCode>();
+    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
+    public DbSet<WebhookSubscription> WebhookSubscriptions => Set<WebhookSubscription>();
+    public DbSet<WebhookDelivery> WebhookDeliveries => Set<WebhookDelivery>();
+    public DbSet<TelemetryRecord> TelemetryRecords => Set<TelemetryRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -63,6 +72,21 @@ public class IAMDbContext : DbContext
                 .WithOne(e => e.User)
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(e => e.RecoveryCodes)
+                .WithOne(e => e.User)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // RecoveryCode configuration
+        modelBuilder.Entity<RecoveryCode>(entity =>
+        {
+            entity.ToTable("RecoveryCodes");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.IsUsed });
+            entity.Property(e => e.CodeHash).IsRequired().HasMaxLength(255);
         });
 
         // Tenant configuration
@@ -488,6 +512,207 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.CertificatePem).IsRequired();
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
             entity.Property(e => e.RevocationReason).HasMaxLength(500);
+        });
+
+        // Group configuration
+        modelBuilder.Entity<Group>(entity =>
+        {
+            entity.ToTable("Groups");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.Name });
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.ParentGroupId);
+            entity.HasIndex(e => new { e.TenantId, e.GroupType, e.IsActive });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Description).HasMaxLength(1000);
+            entity.Property(e => e.GroupType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Metadata).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ParentGroup)
+                .WithMany(e => e.ChildGroups)
+                .HasForeignKey(e => e.ParentGroupId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasMany(e => e.Members)
+                .WithOne(e => e.Group)
+                .HasForeignKey(e => e.GroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.GroupRoles)
+                .WithOne(e => e.Group)
+                .HasForeignKey(e => e.GroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // GroupMembership configuration
+        modelBuilder.Entity<GroupMembership>(entity =>
+        {
+            entity.ToTable("GroupMemberships");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.GroupId, e.UserId }).IsUnique();
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.IsActive });
+            entity.HasIndex(e => new { e.GroupId, e.IsActive });
+
+            entity.Property(e => e.Role).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // GroupRole configuration
+        modelBuilder.Entity<GroupRole>(entity =>
+        {
+            entity.ToTable("GroupRoles");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.GroupId, e.RoleId }).IsUnique();
+            entity.HasIndex(e => e.GroupId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.TenantId);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ApiKey configuration
+        modelBuilder.Entity<ApiKey>(entity =>
+        {
+            entity.ToTable("ApiKeys");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.KeyHash).IsUnique();
+            entity.HasIndex(e => e.KeyPrefix);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.ExpiresAt });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.KeyHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.KeyPrefix).HasMaxLength(16);
+            entity.Property(e => e.Permissions).HasColumnType("jsonb");
+            entity.Property(e => e.AllowedIps).HasColumnType("jsonb");
+            entity.Property(e => e.Description).HasMaxLength(500);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // UserSession configuration
+        modelBuilder.Entity<UserSession>(entity =>
+        {
+            entity.ToTable("UserSessions");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.SessionToken);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.IsRevoked, e.ExpiresAt });
+            entity.HasIndex(e => e.ExpiresAt);
+
+            entity.Property(e => e.SessionToken).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.UserAgent).HasMaxLength(500);
+            entity.Property(e => e.DeviceInfo).HasMaxLength(100);
+            entity.Property(e => e.Location).HasMaxLength(100);
+            entity.Property(e => e.RevokedReason).HasMaxLength(50);
+
+            // IsCurrent is not persisted - it is set at query time
+            entity.Ignore(e => e.IsCurrent);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // WebhookSubscription configuration
+        modelBuilder.Entity<WebhookSubscription>(entity =>
+        {
+            entity.ToTable("WebhookSubscriptions");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+            entity.HasIndex(e => e.CreatedByUserId);
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Url).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.Secret).HasMaxLength(255);
+            entity.Property(e => e.Events).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.Headers).HasColumnType("jsonb");
+            entity.Property(e => e.ContentType).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.CreatedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.CreatedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(e => e.Deliveries)
+                .WithOne(e => e.Subscription)
+                .HasForeignKey(e => e.SubscriptionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // WebhookDelivery configuration
+        modelBuilder.Entity<WebhookDelivery>(entity =>
+        {
+            entity.ToTable("WebhookDeliveries");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.SubscriptionId);
+            entity.HasIndex(e => new { e.SubscriptionId, e.CreatedAt });
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.EventType, e.CreatedAt });
+
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Payload).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.ResponseBody).HasMaxLength(2000);
+            entity.Property(e => e.Error).HasMaxLength(500);
+        });
+
+        // TelemetryRecord configuration (time-series device telemetry)
+        modelBuilder.Entity<TelemetryRecord>(entity =>
+        {
+            entity.ToTable("TelemetryRecords");
+            entity.HasKey(e => e.Id);
+
+            // Performance indexes for time-series queries
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasIndex(e => e.DeviceId);
+            entity.HasIndex(e => new { e.DeviceId, e.Timestamp });
+            entity.HasIndex(e => new { e.MetricName, e.Timestamp });
+            entity.HasIndex(e => new { e.TenantId, e.Timestamp });
+            entity.HasIndex(e => new { e.DeviceId, e.MetricName, e.Timestamp });
+
+            entity.Property(e => e.DeviceId).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.MetricName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.StringValue).HasMaxLength(1000);
+            entity.Property(e => e.JsonValue).HasColumnType("jsonb");
+            entity.Property(e => e.Unit).HasMaxLength(50);
+            entity.Property(e => e.DeviceType).HasMaxLength(100);
+            entity.Property(e => e.Tags).HasColumnType("jsonb");
         });
 
         // Seed system roles

@@ -1,4 +1,5 @@
 using System.Text;
+using IAM.API.Middleware;
 using IAM.API.Workers;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -8,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +32,27 @@ builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>(
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
+builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<ITotpService, TotpService>();
+builder.Services.AddScoped<IGroupService, GroupService>();
+builder.Services.AddScoped<ISessionService, SessionService>();
+builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
+builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
+builder.Services.AddScoped<ICertificateAuthorityService, CertificateAuthorityService>();
+builder.Services.AddScoped<IEventBus, EventBusService>();
+builder.Services.AddScoped<IWebhookService, WebhookService>();
+builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
+builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
+builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
+
+// HttpClient for webhook delivery
+builder.Services.AddHttpClient("WebhookDelivery")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        // Allow self-signed certificates in development for webhook endpoints
+        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+    });
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
@@ -46,6 +69,13 @@ builder.Services.AddFido2(options =>
 
 // Hosted services (database seeders)
 builder.Services.AddHostedService<DatabaseSeeder>();
+
+// Background job processors
+builder.Services.AddHostedService<ExpiredGrantCleanupWorker>();
+builder.Services.AddHostedService<CertificateExpiryMonitorWorker>();
+builder.Services.AddHostedService<DeviceHeartbeatMonitorWorker>();
+builder.Services.AddHostedService<AuditLogCleanupWorker>();
+builder.Services.AddHostedService<SessionCleanupWorker>();
 
 // OpenIddict (OAuth2/OIDC Server)
 builder.Services.AddOpenIddict()
@@ -124,8 +154,34 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// Redis (for caching)
-// TODO: Add Redis configuration
+// Redis (for caching) with in-memory fallback
+var redisConnectionString = builder.Configuration["Redis:ConnectionString"];
+if (!string.IsNullOrEmpty(redisConnectionString))
+{
+    try
+    {
+        var redisOptions = ConfigurationOptions.Parse(redisConnectionString);
+        redisOptions.AbortOnConnectFail = false; // Allow startup even if Redis is down
+        redisOptions.ConnectTimeout = 5000;
+        redisOptions.SyncTimeout = 3000;
+
+        var redis = ConnectionMultiplexer.Connect(redisOptions);
+        builder.Services.AddSingleton<IConnectionMultiplexer>(redis);
+        builder.Services.AddSingleton<ICacheService, RedisCacheService>();
+
+        Console.WriteLine("Redis cache service registered successfully");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Redis connection failed: {ex.Message}. Falling back to in-memory cache");
+        builder.Services.AddSingleton<ICacheService, MemoryCacheService>();
+    }
+}
+else
+{
+    Console.WriteLine("Redis not configured. Using in-memory cache");
+    builder.Services.AddSingleton<ICacheService, MemoryCacheService>();
+}
 
 // SignalR (for real-time telemetry streaming)
 builder.Services.AddSignalR();
@@ -152,7 +208,9 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors();
+app.UseApiKeyAuthentication(); // API key auth before JWT (sets HttpContext.User if X-API-Key header present)
 app.UseAuthentication();
+app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
 app.UseAuthorization();
 
 app.MapControllers();

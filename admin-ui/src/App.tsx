@@ -11,6 +11,15 @@ import TenantsPage from './pages/tenants/TenantsPage';
 import TenantFormPage from './pages/tenants/TenantFormPage';
 import ClientsPage from './pages/oauth/ClientsPage';
 import ClientFormPage from './pages/oauth/ClientFormPage';
+import DevicesPage from './pages/devices/DevicesPage';
+import DeviceDetailPage from './pages/devices/DeviceDetailPage';
+import DeviceRegisterPage from './pages/devices/DeviceRegisterPage';
+import PoliciesPage from './pages/policies/PoliciesPage';
+import PolicyFormPage from './pages/policies/PolicyFormPage';
+import PolicyTestPage from './pages/policies/PolicyTestPage';
+import PolicyInheritanceTree from './components/policies/PolicyInheritanceTree';
+import AuditLogPage from './pages/AuditLogPage';
+import ComplianceDashboardPage from './pages/ComplianceDashboardPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -131,6 +140,92 @@ function App() {
             element={
               <ProtectedRoute>
                 <ClientFormPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Device Management */}
+          <Route
+            path="/devices"
+            element={
+              <ProtectedRoute>
+                <DevicesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/devices/register"
+            element={
+              <ProtectedRoute>
+                <DeviceRegisterPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/devices/:id"
+            element={
+              <ProtectedRoute>
+                <DeviceDetailPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Policy Management */}
+          <Route
+            path="/policies"
+            element={
+              <ProtectedRoute>
+                <PoliciesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/policies/new"
+            element={
+              <ProtectedRoute>
+                <PolicyFormPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/policies/test"
+            element={
+              <ProtectedRoute>
+                <PolicyTestPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/policies/inheritance"
+            element={
+              <ProtectedRoute>
+                <PolicyInheritanceTree />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/policies/:id"
+            element={
+              <ProtectedRoute>
+                <PolicyFormPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Audit & Compliance */}
+          <Route
+            path="/audit"
+            element={
+              <ProtectedRoute>
+                <AuditLogPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/compliance"
+            element={
+              <ProtectedRoute>
+                <ComplianceDashboardPage />
               </ProtectedRoute>
             }
           />

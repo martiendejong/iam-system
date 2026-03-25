@@ -7,6 +7,11 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://localhost:5001';
 class ApiService {
   private client: AxiosInstance;
 
+  /** Expose the axios client for use by sub-API modules */
+  getClient(): AxiosInstance {
+    return this.client;
+  }
+
   constructor() {
     this.client = axios.create({
       baseURL: `${API_BASE_URL}/api`,

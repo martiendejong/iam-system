@@ -37,4 +37,5 @@ public class User
     public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
+    public ICollection<RecoveryCode> RecoveryCodes { get; set; } = new List<RecoveryCode>();
 }

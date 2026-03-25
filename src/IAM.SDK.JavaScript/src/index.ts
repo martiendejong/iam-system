@@ -7,6 +7,12 @@
  */
 
 export { IamAuthClient } from './IamAuthClient';
+export { IamDeviceClient } from './IamDeviceClient';
+export type {
+  IamDeviceClientOptions,
+  DeviceAuthResponse,
+  DeviceAuthorizeResponse,
+} from './IamDeviceClient';
 export type {
   IIamAuthClient,
   IamClientOptions,
