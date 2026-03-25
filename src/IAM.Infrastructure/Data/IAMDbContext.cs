@@ -27,6 +27,8 @@ public class IAMDbContext : DbContext
     public DbSet<PolicyTestResult> PolicyTestResults => Set<PolicyTestResult>();
     public DbSet<EmergencyOverride> EmergencyOverrides => Set<EmergencyOverride>();
     public DbSet<Credential> Credentials => Set<Credential>();
+    public DbSet<Device> Devices => Set<Device>();
+    public DbSet<DeviceCertificate> DeviceCertificates => Set<DeviceCertificate>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -428,6 +430,64 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Device configuration (IoT)
+        modelBuilder.Entity<Device>(entity =>
+        {
+            entity.ToTable("Devices");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.DeviceId).IsUnique();
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.DeviceType);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+            entity.HasIndex(e => new { e.DeviceType, e.IsActive });
+            entity.HasIndex(e => e.ResourcePath);
+
+            entity.Property(e => e.DeviceId).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.DeviceType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.AuthenticationMethod).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ResourcePath).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Permissions).HasColumnType("jsonb");
+            entity.Property(e => e.SharedSecretHash).HasMaxLength(255);
+            entity.Property(e => e.Metadata).HasColumnType("jsonb");
+            entity.Property(e => e.Tags).HasColumnType("jsonb");
+            entity.Property(e => e.LastIpAddress).HasMaxLength(50);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ProvisionedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.ProvisionedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(e => e.Certificates)
+                .WithOne(e => e.Device)
+                .HasForeignKey(e => e.DeviceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DeviceCertificate configuration (IoT)
+        modelBuilder.Entity<DeviceCertificate>(entity =>
+        {
+            entity.ToTable("DeviceCertificates");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Thumbprint).IsUnique();
+            entity.HasIndex(e => e.SerialNumber);
+            entity.HasIndex(e => new { e.DeviceId, e.Status });
+            entity.HasIndex(e => e.NotAfter);
+
+            entity.Property(e => e.SerialNumber).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Thumbprint).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.SubjectName).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.IssuerName).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.CertificatePem).IsRequired();
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.RevocationReason).HasMaxLength(500);
         });
 
         // Seed system roles

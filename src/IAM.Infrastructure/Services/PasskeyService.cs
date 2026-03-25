@@ -223,7 +223,7 @@ public class PasskeyService : IPasskeyService
                 .ToListAsync(cancellationToken);
 
             var credential = allCredentials
-                .FirstOrDefault(c => CompareByteArrays(c.CredentialId, assertionResponse.Id));
+                .FirstOrDefault(c => CompareByteArrays(c.CredentialId, Convert.FromBase64String(assertionResponse.Id)));
 
             if (credential == null)
                 return null;
@@ -266,7 +266,7 @@ public class PasskeyService : IPasskeyService
                 }
             }, cancellationToken);
 
-            if (success.Status != "ok")
+            if (success.SignCount < 0)
                 return null;
 
             // Update credential (sign counter, last used)

@@ -28,6 +28,8 @@ builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
+builder.Services.AddScoped<IDeviceService, DeviceService>();
+builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
@@ -125,6 +127,9 @@ builder.Services.AddAuthentication(options =>
 // Redis (for caching)
 // TODO: Add Redis configuration
 
+// SignalR (for real-time telemetry streaming)
+builder.Services.AddSignalR();
+
 // CORS (for React admin UI)
 builder.Services.AddCors(options =>
 {
@@ -151,6 +156,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// SignalR hubs
+app.MapHub<IAM.API.Hubs.TelemetryHub>("/hubs/telemetry");
 
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
