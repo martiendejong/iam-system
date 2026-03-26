@@ -68,6 +68,46 @@ export interface LoginResponse {
   user: User;
 }
 
+// Identity Provider types
+export const IdentityProviderType = {
+  Google: 'Google',
+  Microsoft: 'Microsoft',
+  GitHub: 'GitHub',
+  Apple: 'Apple',
+  SAML: 'SAML',
+  OIDC: 'OIDC',
+} as const;
+
+export type IdentityProviderTypeValue = typeof IdentityProviderType[keyof typeof IdentityProviderType];
+
+export interface IdentityProvider {
+  id: string;
+  name: string;
+  displayName: string;
+  type: IdentityProviderTypeValue;
+  tenantId?: string;
+  tenantName?: string;
+  clientId: string;
+  metadataUrl?: string;
+  attributeMapping?: string;
+  isActive: boolean;
+  autoCreateUsers: boolean;
+  defaultRoleId?: string;
+  defaultRoleName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExternalLoginAccount {
+  id: string;
+  provider: string;
+  providerUserId: string;
+  email?: string;
+  displayName?: string;
+  linkedAt: string;
+  lastUsedAt?: string;
+}
+
 // API response types
 export interface ApiError {
   message: string;

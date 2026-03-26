@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IAM Cost Calculator Widget - Embeddable</title>
+    <meta name="description" content="Embeddable cost calculator showing Auth0 vs IAM System pricing. Show your users how much they can save.">
+</head>
+<body>
+    <!--
+        EMBEDDABLE WIDGET
+
+        Usage: Add this to any webpage
+
+        <div id="iam-cost-calculator"></div>
+        <script src="https://iam.dev/widgets/cost-calculator.js"></script>
+
+        Options:
+        <script>
+            window.iamCalculatorConfig = {
+                theme: 'light' | 'dark',
+                defaultMAU: 100000,
+                showAuth0: true,
+                showAzure: true
+            };
+        </script>
+    -->
+
+    <style>
+        .iam-calculator-widget {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 1rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .iam-calculator-widget h3 {
+            margin: 0 0 1.5rem 0;
+            font-size: 1.5rem;
+            color: #1f2937;
+        }
+
+        .iam-slider-container {
+            margin-bottom: 2rem;
+        }
+
+        .iam-slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+            color: #6b7280;
+        }
+
+        .iam-slider-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .iam-slider {
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #e5e7eb;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .iam-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .iam-slider::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .iam-results {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .iam-result-card {
+            padding: 1.5rem;
+            border-radius: 0.5rem;
+            border: 2px solid #e5e7eb;
+            transition: all 0.3s;
+        }
+
+        .iam-result-card.highlight {
+            border-color: #667eea;
+            background: linear-gradient(135deg, #667eea10 0%, #764ba210 100%);
+        }
+
+        .iam-provider-name {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+
+        .iam-provider-name span {
+            font-weight: 600;
+            font-size: 1.125rem;
+            color: #1f2937;
+        }
+
+        .iam-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            background: #10b981;
+            color: white;
+        }
+
+        .iam-cost {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .iam-savings {
+            font-size: 0.875rem;
+            color: #10b981;
+            font-weight: 600;
+        }
+
+        .iam-description {
+            font-size: 0.875rem;
+            color: #6b7280;
+            margin-top: 0.5rem;
+        }
+
+        .iam-cta {
+            margin-top: 2rem;
+            text-align: center;
+        }
+
+        .iam-cta a {
+            display: inline-block;
+            padding: 1rem 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+
+        .iam-cta a:hover {
+            transform: translateY(-2px);
+        }
+
+        .iam-powered-by {
+            margin-top: 1rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: #9ca3af;
+        }
+
+        .iam-powered-by a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        /* Dark theme */
+        .iam-calculator-widget.dark {
+            background: #1f2937;
+            color: white;
+        }
+
+        .iam-calculator-widget.dark h3,
+        .iam-calculator-widget.dark .iam-provider-name span {
+            color: white;
+        }
+
+        .iam-calculator-widget.dark .iam-result-card {
+            border-color: #374151;
+        }
+
+        .iam-calculator-widget.dark .iam-result-card.highlight {
+            background: linear-gradient(135deg, #667eea20 0%, #764ba220 100%);
+        }
+    </style>
+
+    <div id="iam-calculator-demo" class="iam-calculator-widget">
+        <h3>💰 Authentication Cost Calculator</h3>
+
+        <div class="iam-slider-container">
+            <div class="iam-slider-label">
+                <span>Monthly Active Users</span>
+                <span class="iam-slider-value" id="iam-mau-display">100,000</span>
+            </div>
+            <input
+                type="range"
+                class="iam-slider"
+                id="iam-mau-slider"
+                min="1000"
+                max="1000000"
+                step="1000"
+                value="100000"
+            >
+        </div>
+
+        <div class="iam-results" id="iam-results">
+            <!-- Populated by JavaScript -->
+        </div>
+
+        <div class="iam-cta">
+            <a href="https://iam.dev?utm_source=calculator&utm_medium=widget" target="_blank">
+                Get Started Free →
+            </a>
+        </div>
+
+        <div class="iam-powered-by">
+            Powered by <a href="https://iam.dev" target="_blank">IAM System</a>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // Configuration
+            const config = window.iamCalculatorConfig || {
+                theme: 'light',
+                defaultMAU: 100000,
+                showAuth0: true,
+                showAzure: true
+            };
+
+            // Format currency
+            function formatCurrency(amount) {
+                return new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'USD',
+                    maximumFractionDigits: 0
+                }).format(amount);
+            }
+
+            // Format number
+            function formatNumber(num) {
+                if (num >= 1000000) {
+                    return (num / 1000000).toFixed(1) + 'M';
+                } else if (num >= 1000) {
+                    return (num / 1000).toFixed(0) + 'K';
+                }
+                return num.toString();
+            }
+
+            // Calculate Auth0 cost
+            function calculateAuth0(mau) {
+                if (mau <= 7500) return 0;
+                if (mau <= 10000) return 35 * 12;
+
+                if (mau <= 100000) {
+                    const baseCost = 240 * 12;
+                    const extraMAU = mau - 10000;
+                    const extraCost = (extraMAU / 100) * 2.40 * 12;
+                    return baseCost + extraCost;
+                }
+
+                // Enterprise (3x multiplier)
+                const baseCost = 240 * 12;
+                const extraMAU = mau - 10000;
+                const extraCost = (extraMAU / 100) * 2.40 * 12 * 3;
+                return baseCost + extraCost;
+            }
+
+            // Calculate Azure AD cost
+            function calculateAzure(mau) {
+                if (mau <= 50000) return 0;
+                if (mau <= 100000) {
+                    return (mau - 50000) * 0.00325 * 12;
+                }
+                return (50000 * 0.00325 * 12) + ((mau - 100000) * 0.0016 * 12);
+            }
+
+            // Calculate IAM System cost
+            function calculateIAM(mau) {
+                if (mau <= 10000) return 0;
+                const paidMAU = mau - 10000;
+                const logins = paidMAU * 5; // Assuming 5 logins/user/month
+                return logins * 0.01 * 12;
+            }
+
+            // Update calculator
+            function updateCalculator() {
+                const slider = document.getElementById('iam-mau-slider');
+                const display = document.getElementById('iam-mau-display');
+                const results = document.getElementById('iam-results');
+
+                const mau = parseInt(slider.value);
+                display.textContent = formatNumber(mau);
+
+                const auth0Cost = calculateAuth0(mau);
+                const azureCost = calculateAzure(mau);
+                const iamCost = calculateIAM(mau);
+                const savings = auth0Cost - iamCost;
+
+                let html = '';
+
+                if (config.showAuth0) {
+                    html += `
+                        <div class="iam-result-card">
+                            <div class="iam-provider-name">
+                                <span>Auth0</span>
+                            </div>
+                            <div class="iam-cost">${formatCurrency(auth0Cost)}/year</div>
+                            <div class="iam-description">
+                                Professional plan + per-MAU charges
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (config.showAzure) {
+                    html += `
+                        <div class="iam-result-card">
+                            <div class="iam-provider-name">
+                                <span>Azure AD B2C</span>
+                            </div>
+                            <div class="iam-cost">${formatCurrency(azureCost)}/year</div>
+                            <div class="iam-description">
+                                Pay-per-user pricing model
+                            </div>
+                        </div>
+                    `;
+                }
+
+                html += `
+                    <div class="iam-result-card highlight">
+                        <div class="iam-provider-name">
+                            <span>IAM System</span>
+                            <span class="iam-badge">Recommended</span>
+                        </div>
+                        <div class="iam-cost">${formatCurrency(iamCost)}/year</div>
+                        ${savings > 0 ? `<div class="iam-savings">💰 Save ${formatCurrency(savings)}/year vs Auth0</div>` : ''}
+                        <div class="iam-description">
+                            Free for first 10K MAU, then $0.01/login
+                        </div>
+                    </div>
+                `;
+
+                results.innerHTML = html;
+            }
+
+            // Initialize
+            function init() {
+                const container = document.getElementById('iam-calculator-demo');
+                if (config.theme === 'dark') {
+                    container.classList.add('dark');
+                }
+
+                const slider = document.getElementById('iam-mau-slider');
+                slider.value = config.defaultMAU;
+                slider.addEventListener('input', updateCalculator);
+
+                updateCalculator();
+            }
+
+            // Auto-init when DOM is ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', init);
+            } else {
+                init();
+            }
+
+            // Export for embedding
+            window.IamCostCalculator = {
+                init: init,
+                update: updateCalculator
+            };
+        })();
+    </script>
+</body>
+</html>

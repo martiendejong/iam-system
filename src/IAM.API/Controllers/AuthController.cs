@@ -52,7 +52,11 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        var result = await _authService.LoginAsync(request.Email, request.Password);
+        // Extract device fingerprinting information
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.LoginAsync(request.Email, request.Password, ipAddress, userAgent);
 
         if (!result.Success)
         {
@@ -89,12 +93,25 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "Refresh token not found" });
         }
 
-        var result = await _authService.RefreshTokenAsync(refreshToken);
+        // Extract device fingerprinting information
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.RefreshTokenAsync(refreshToken, ipAddress, userAgent);
 
         if (!result.Success)
         {
             return Unauthorized(new { error = result.Error });
         }
+
+        // SINGLE-USE TOKENS: Update cookie with NEW refresh token (token rotation)
+        Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Expires = DateTimeOffset.UtcNow.AddDays(7)
+        });
 
         return Ok(new
         {

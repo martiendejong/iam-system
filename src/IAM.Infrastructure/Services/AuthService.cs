@@ -78,7 +78,7 @@ public class AuthService : IAuthService
         };
     }
 
-    public async Task<AuthResult> LoginAsync(string email, string password)
+    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null)
     {
         var user = await _context.Users
             .Include(u => u.UserRoles)
@@ -145,20 +145,26 @@ public class AuthService : IAuthService
         user.LockoutEnd = null;
         user.LastLoginAt = DateTime.UtcNow;
 
-        // Generate tokens
-        var accessToken = GenerateAccessToken(user);
+        // Generate refresh token first (needed for token binding)
         var refreshToken = GenerateRefreshToken();
+        var refreshTokenId = Guid.NewGuid();
 
-        // Store refresh token
+        // Store refresh token with device fingerprinting
         var refreshTokenEntity = new RefreshToken
         {
+            Id = refreshTokenId,
             UserId = user.Id,
             TokenHash = HashToken(refreshToken),
-            ExpiresAt = DateTime.UtcNow.AddDays(7)
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            IpAddress = ipAddress,  // Device fingerprinting
+            UserAgent = userAgent   // Device fingerprinting
         };
 
         _context.RefreshTokens.Add(refreshTokenEntity);
         await _context.SaveChangesAsync();
+
+        // Generate access token with token binding (binds to refresh token ID)
+        var accessToken = GenerateAccessToken(user, refreshTokenId);
 
         return new AuthResult
         {
@@ -169,7 +175,7 @@ public class AuthService : IAuthService
         };
     }
 
-    public async Task<AuthResult> RefreshTokenAsync(string refreshToken)
+    public async Task<AuthResult> RefreshTokenAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)
     {
         var tokenHash = HashToken(refreshToken);
         var storedToken = await _context.RefreshTokens
@@ -187,14 +193,56 @@ public class AuthService : IAuthService
             };
         }
 
-        // Generate new access token
-        var accessToken = GenerateAccessToken(storedToken.User);
+        // ANOMALY DETECTION: Check if device fingerprint changed
+        if (!string.IsNullOrEmpty(storedToken.IpAddress) && !string.IsNullOrEmpty(ipAddress))
+        {
+            if (storedToken.IpAddress != ipAddress)
+            {
+                // IP address changed - potential token theft
+                // Log this as suspicious activity (TODO: Add logging)
+                // For now, we'll allow it but could add stricter policies
+            }
+        }
+
+        if (!string.IsNullOrEmpty(storedToken.UserAgent) && !string.IsNullOrEmpty(userAgent))
+        {
+            if (storedToken.UserAgent != userAgent)
+            {
+                // User agent changed - potential token theft
+                // This is more suspicious than IP change (VPN, mobile network switching)
+                // Log this as suspicious activity (TODO: Add logging)
+            }
+        }
+
+        // SINGLE-USE TOKENS: Revoke the old refresh token immediately
+        storedToken.RevokedAt = DateTime.UtcNow;
+
+        // Generate new refresh token (rotation)
+        var newRefreshToken = GenerateRefreshToken();
+        var newRefreshTokenId = Guid.NewGuid();
+
+        // Store new refresh token with updated device fingerprinting
+        var newRefreshTokenEntity = new RefreshToken
+        {
+            Id = newRefreshTokenId,
+            UserId = storedToken.UserId,
+            TokenHash = HashToken(newRefreshToken),
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            IpAddress = ipAddress ?? storedToken.IpAddress,    // Use new IP or fall back to original
+            UserAgent = userAgent ?? storedToken.UserAgent     // Use new UA or fall back to original
+        };
+
+        _context.RefreshTokens.Add(newRefreshTokenEntity);
+        await _context.SaveChangesAsync();
+
+        // Generate new access token with token binding (binds to NEW refresh token ID)
+        var accessToken = GenerateAccessToken(storedToken.User, newRefreshTokenId);
 
         return new AuthResult
         {
             Success = true,
             AccessToken = accessToken,
-            RefreshToken = refreshToken,
+            RefreshToken = newRefreshToken,  // Return NEW refresh token (single-use rotation)
             User = storedToken.User
         };
     }
@@ -255,6 +303,51 @@ public class AuthService : IAuthService
         return true;
     }
 
+    public async Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null)
+    {
+        if (!user.IsActive)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Account is inactive"
+            };
+        }
+
+        // Update last login
+        user.LastLoginAt = DateTime.UtcNow;
+        user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.LockoutEnd = null;
+
+        // Generate refresh token
+        var refreshToken = GenerateRefreshToken();
+        var refreshTokenId = Guid.NewGuid();
+
+        var refreshTokenEntity = new RefreshToken
+        {
+            Id = refreshTokenId,
+            UserId = user.Id,
+            TokenHash = HashToken(refreshToken),
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            IpAddress = ipAddress,
+            UserAgent = userAgent
+        };
+
+        _context.RefreshTokens.Add(refreshTokenEntity);
+        await _context.SaveChangesAsync();
+
+        var accessToken = GenerateAccessToken(user, refreshTokenId);
+
+        return new AuthResult
+        {
+            Success = true,
+            AccessToken = accessToken,
+            RefreshToken = refreshToken,
+            User = user
+        };
+    }
+
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)
     {
         var user = await _context.Users
@@ -284,7 +377,7 @@ public class AuthService : IAuthService
         return true;
     }
 
-    private string GenerateAccessToken(User user)
+    private string GenerateAccessToken(User user, Guid? refreshTokenId = null)
     {
         var claims = new List<Claim>
         {
@@ -292,6 +385,12 @@ public class AuthService : IAuthService
             new Claim(ClaimTypes.Email, user.Email),
             new Claim(ClaimTypes.Name, $"{user.FirstName} {user.LastName}")
         };
+
+        // TOKEN BINDING: Bind access token to refresh token ID
+        if (refreshTokenId.HasValue)
+        {
+            claims.Add(new Claim("refresh_token_id", refreshTokenId.Value.ToString()));
+        }
 
         // Add roles
         foreach (var userRole in user.UserRoles)
@@ -303,7 +402,8 @@ public class AuthService : IAuthService
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        var expirationMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "15");
+        // REDUCED TTL: Default 5 minutes (down from 15) for better security
+        var expirationMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "5");
 
         var token = new JwtSecurityToken(
             issuer: _configuration["Jwt:Issuer"],

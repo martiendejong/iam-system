@@ -1,0 +1,142 @@
+using IAM.Core.Entities;
+using Microsoft.EntityFrameworkCore;
+
+namespace IAM.Infrastructure.Data;
+
+/// <summary>
+/// Seeds development database with test users and roles.
+/// ONLY runs in Development environment - never in Production.
+/// </summary>
+public class DevelopmentDataSeeder
+{
+    private readonly IAMDbContext _context;
+
+    public DevelopmentDataSeeder(IAMDbContext context)
+    {
+        _context = context;
+    }
+
+    /// <summary>
+    /// Seeds the database with development test data.
+    /// Safe to call multiple times - checks for existing data.
+    /// </summary>
+    public async Task SeedAsync()
+    {
+        // Don't seed if we already have users
+        if (await _context.Users.AnyAsync())
+        {
+            return;
+        }
+
+        // Create Admin Role
+        var adminRole = new Role
+        {
+            Id = Guid.NewGuid(),
+            Name = "Admin",
+            Description = "Full system administrator access",
+            IsSystemRole = true,
+            Permissions = "[\"*\"]", // Wildcard = all permissions
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        // Create User Role
+        var userRole = new Role
+        {
+            Id = Guid.NewGuid(),
+            Name = "User",
+            Description = "Standard user access",
+            IsSystemRole = true,
+            Permissions = "[\"User.View\", \"User.Update\"]",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        _context.Roles.AddRange(adminRole, userRole);
+
+        // Create Admin User (already verified)
+        var adminUser = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = "admin@test.com",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123!"),
+            FirstName = "Admin",
+            LastName = "User",
+            EmailConfirmed = true, // ← Already verified for testing
+            EmailVerificationToken = null,
+            EmailVerificationTokenExpiry = null,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            LastLoginAt = null
+        };
+
+        // Create Regular User (already verified)
+        var regularUser = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = "user@test.com",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("User123!"),
+            FirstName = "Test",
+            LastName = "User",
+            EmailConfirmed = true, // ← Already verified for testing
+            EmailVerificationToken = null,
+            EmailVerificationTokenExpiry = null,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            LastLoginAt = null
+        };
+
+        // Create Developer User (already verified)
+        var devUser = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = "dev@test.com",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Dev123!"),
+            FirstName = "Developer",
+            LastName = "User",
+            EmailConfirmed = true, // ← Already verified for testing
+            EmailVerificationToken = null,
+            EmailVerificationTokenExpiry = null,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            LastLoginAt = null
+        };
+
+        _context.Users.AddRange(adminUser, regularUser, devUser);
+
+        // Assign Admin Role to Admin User
+        var adminUserRole = new UserRole
+        {
+            UserId = adminUser.Id,
+            RoleId = adminRole.Id,
+            GrantedAt = DateTime.UtcNow
+        };
+
+        // Assign User Role to Regular User
+        var regularUserRole = new UserRole
+        {
+            UserId = regularUser.Id,
+            RoleId = userRole.Id,
+            GrantedAt = DateTime.UtcNow
+        };
+
+        // Assign both roles to Dev User
+        var devUserAdminRole = new UserRole
+        {
+            UserId = devUser.Id,
+            RoleId = adminRole.Id,
+            GrantedAt = DateTime.UtcNow
+        };
+
+        var devUserUserRole = new UserRole
+        {
+            UserId = devUser.Id,
+            RoleId = userRole.Id,
+            GrantedAt = DateTime.UtcNow
+        };
+
+        _context.UserRoles.AddRange(adminUserRole, regularUserRole, devUserAdminRole, devUserUserRole);
+
+        await _context.SaveChangesAsync();
+    }
+}

@@ -7,6 +7,11 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://localhost:5001';
 class ApiService {
   private client: AxiosInstance;
 
+  /** Expose the axios client for use by sub-API modules */
+  getClient(): AxiosInstance {
+    return this.client;
+  }
+
   constructor() {
     this.client = axios.create({
       baseURL: `${API_BASE_URL}/api`,
@@ -192,6 +197,98 @@ class ApiService {
 
   async deleteOAuth2Client(id: string): Promise<void> {
     await this.client.delete(`/oauth/clients/${id}`);
+  }
+
+  // Identity Provider endpoints
+  async getIdentityProviders(tenantId?: string): Promise<any[]> {
+    const params = tenantId ? { tenantId } : {};
+    const response = await this.client.get('/identity-providers', { params });
+    return response.data;
+  }
+
+  async getIdentityProvider(id: string): Promise<any> {
+    const response = await this.client.get(`/identity-providers/${id}`);
+    return response.data;
+  }
+
+  async createIdentityProvider(data: any): Promise<any> {
+    const response = await this.client.post('/identity-providers', data);
+    return response.data;
+  }
+
+  async updateIdentityProvider(id: string, data: any): Promise<any> {
+    const response = await this.client.put(`/identity-providers/${id}`, data);
+    return response.data;
+  }
+
+  async deleteIdentityProvider(id: string): Promise<void> {
+    await this.client.delete(`/identity-providers/${id}`);
+  }
+
+  // Social Auth endpoints
+  async getSocialAuthUrl(providerId: string, redirectUri: string): Promise<{ authorizationUrl: string; state: string }> {
+    const response = await this.client.get(`/auth/social/${providerId}/authorize`, {
+      params: { redirectUri }
+    });
+    return response.data;
+  }
+
+  async socialAuthCallback(providerId: string, code: string, state: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>(`/auth/social/${providerId}/callback`, { code, state });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
+  // Invitation endpoints
+  async getInvitations(tenantId: string): Promise<any[]> {
+    const response = await this.client.get('/invitations', { params: { tenantId } });
+    return response.data;
+  }
+
+  async getPendingInvitations(tenantId: string): Promise<any[]> {
+    const response = await this.client.get('/invitations/pending', { params: { tenantId } });
+    return response.data;
+  }
+
+  async sendInvitation(data: { email: string; tenantId: string; roleId: string; expiryDays?: number }): Promise<any> {
+    const response = await this.client.post('/invitations', data);
+    return response.data;
+  }
+
+  async sendBulkInvitations(tenantId: string, file: File): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('tenantId', tenantId);
+    const response = await this.client.post('/invitations/bulk', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async revokeInvitation(id: string): Promise<void> {
+    await this.client.delete(`/invitations/${id}`);
+  }
+
+  async getInvitationByToken(token: string): Promise<any> {
+    const response = await this.client.get(`/invitations/by-token/${token}`);
+    return response.data;
+  }
+
+  async acceptInvitation(token: string, data: { password?: string; firstName?: string; lastName?: string }): Promise<any> {
+    const response = await this.client.post(`/invitations/${token}/accept`, data);
+    return response.data;
+  }
+
+  // Organization settings endpoints
+  async getOrganizationSettings(tenantId: string): Promise<any> {
+    const response = await this.client.get(`/organization-settings/${tenantId}`);
+    return response.data;
+  }
+
+  async updateOrganizationSettings(tenantId: string, data: any): Promise<any> {
+    const response = await this.client.put(`/organization-settings/${tenantId}`, data);
+    return response.data;
   }
 }
 
