@@ -54,6 +54,24 @@ public class IAMDbContext : DbContext
     public DbSet<WorkflowTemplate> WorkflowTemplates => Set<WorkflowTemplate>();
     public DbSet<ScimProvisioningLog> ScimProvisioningLogs => Set<ScimProvisioningLog>();
     public DbSet<ScimToken> ScimTokens => Set<ScimToken>();
+    public DbSet<TenantBranding> TenantBrandings => Set<TenantBranding>();
+    public DbSet<ClaimsMappingRule> ClaimsMappingRules => Set<ClaimsMappingRule>();
+    public DbSet<TokenConfiguration> TokenConfigurations => Set<TokenConfiguration>();
+    public DbSet<IpAllowlistEntry> IpAllowlistEntries => Set<IpAllowlistEntry>();
+    public DbSet<GeoRestriction> GeoRestrictions => Set<GeoRestriction>();
+    public DbSet<GeoFence> GeoFences => Set<GeoFence>();
+    public DbSet<BlockedIpLog> BlockedIpLogs => Set<BlockedIpLog>();
+    public DbSet<LoginRiskScore> LoginRiskScores => Set<LoginRiskScore>();
+    public DbSet<RiskThreshold> RiskThresholds => Set<RiskThreshold>();
+    public DbSet<TrustedDevice> TrustedDevices => Set<TrustedDevice>();
+    public DbSet<PrivilegedSession> PrivilegedSessions => Set<PrivilegedSession>();
+    public DbSet<PamPolicy> PamPolicies => Set<PamPolicy>();
+    public DbSet<AlertRule> AlertRules => Set<AlertRule>();
+    public DbSet<SecurityAlert> SecurityAlerts => Set<SecurityAlert>();
+    public DbSet<SiemIntegration> SiemIntegrations => Set<SiemIntegration>();
+    public DbSet<BulkOperation> BulkOperations => Set<BulkOperation>();
+    public DbSet<SecretEntry> SecretEntries => Set<SecretEntry>();
+    public DbSet<SecretVersion> SecretVersions => Set<SecretVersion>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -1113,6 +1131,410 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
             entity.Property(e => e.TokenPrefix).HasMaxLength(16);
             entity.Property(e => e.Description).HasMaxLength(500);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TenantBranding configuration (per-tenant login page customization)
+        modelBuilder.Entity<TenantBranding>(entity =>
+        {
+            entity.ToTable("TenantBrandings");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId).IsUnique();
+            entity.HasIndex(e => e.CustomDomain).IsUnique()
+                .HasFilter("\"CustomDomain\" IS NOT NULL");
+
+            entity.Property(e => e.LogoUrl).HasMaxLength(2000);
+            entity.Property(e => e.PrimaryColor).HasMaxLength(20);
+            entity.Property(e => e.SecondaryColor).HasMaxLength(20);
+            entity.Property(e => e.BackgroundUrl).HasMaxLength(2000);
+            entity.Property(e => e.CustomCss).HasColumnType("text");
+            entity.Property(e => e.EmailHeaderHtml).HasColumnType("text");
+            entity.Property(e => e.EmailFooterHtml).HasColumnType("text");
+            entity.Property(e => e.FaviconUrl).HasMaxLength(2000);
+            entity.Property(e => e.LoginTitle).HasMaxLength(200);
+            entity.Property(e => e.LoginSubtitle).HasMaxLength(500);
+            entity.Property(e => e.CustomDomain).HasMaxLength(255);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ClaimsMappingRule configuration
+        modelBuilder.Entity<ClaimsMappingRule>(entity =>
+        {
+            entity.ToTable("ClaimsMappingRules");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ClientId);
+            entity.HasIndex(e => new { e.ClientId, e.TenantId });
+            entity.HasIndex(e => new { e.ClientId, e.IsActive, e.Priority });
+
+            entity.Property(e => e.ClientId).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.SourceType).HasConversion<int>();
+            entity.Property(e => e.SourcePath).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.TargetClaim).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Transform).HasConversion<int>();
+            entity.Property(e => e.TransformPattern).HasMaxLength(500);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TokenConfiguration configuration
+        modelBuilder.Entity<TokenConfiguration>(entity =>
+        {
+            entity.ToTable("TokenConfigurations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ClientId);
+            entity.HasIndex(e => new { e.ClientId, e.TenantId }).IsUnique();
+
+            entity.Property(e => e.ClientId).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.CustomNamespace).HasMaxLength(500);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // IpAllowlistEntry configuration (network security)
+        modelBuilder.Entity<IpAllowlistEntry>(entity =>
+        {
+            entity.ToTable("IpAllowlistEntries");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+
+            entity.Property(e => e.Cidr).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Description).HasMaxLength(500);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // GeoRestriction configuration (country-level access control)
+        modelBuilder.Entity<GeoRestriction>(entity =>
+        {
+            entity.ToTable("GeoRestrictions");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+
+            entity.Property(e => e.AllowedCountries).HasColumnType("jsonb");
+            entity.Property(e => e.BlockedCountries).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // GeoFence configuration (radius-based location access control)
+        modelBuilder.Entity<GeoFence>(entity =>
+        {
+            entity.ToTable("GeoFences");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Description).HasMaxLength(1000);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // BlockedIpLog configuration (audit trail for blocked access attempts)
+        modelBuilder.Entity<BlockedIpLog>(entity =>
+        {
+            entity.ToTable("BlockedIpLogs");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.BlockedAt);
+            entity.HasIndex(e => new { e.TenantId, e.BlockedAt });
+            entity.HasIndex(e => e.IpAddress);
+
+            entity.Property(e => e.IpAddress).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.Country).HasMaxLength(10);
+            entity.Property(e => e.City).HasMaxLength(200);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // LoginRiskScore configuration (risk-based adaptive authentication)
+        modelBuilder.Entity<LoginRiskScore>(entity =>
+        {
+            entity.ToTable("LoginRiskScores");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt });
+            entity.HasIndex(e => e.IpAddress);
+            entity.HasIndex(e => new { e.Action, e.CreatedAt });
+
+            entity.Property(e => e.IpAddress).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.UserAgent).HasMaxLength(500);
+            entity.Property(e => e.GeoLocation).HasMaxLength(200);
+            entity.Property(e => e.RiskFactors).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.Action).HasConversion<int>();
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // RiskThreshold configuration (per-tenant risk policy)
+        modelBuilder.Entity<RiskThreshold>(entity =>
+        {
+            entity.ToTable("RiskThresholds");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TrustedDevice configuration (device trust for risk reduction)
+        modelBuilder.Entity<TrustedDevice>(entity =>
+        {
+            entity.ToTable("TrustedDevices");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.DeviceFingerprint });
+            entity.HasIndex(e => e.ExpiresAt);
+            entity.HasIndex(e => new { e.UserId, e.ExpiresAt });
+
+            entity.Property(e => e.DeviceFingerprint).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // PrivilegedSession configuration (PAM)
+        modelBuilder.Entity<PrivilegedSession>(entity =>
+        {
+            entity.ToTable("PrivilegedSessions");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Justification).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.AuditCorrelationId).HasMaxLength(100);
+            entity.Property(e => e.BreakGlassApprovers).HasColumnType("jsonb");
+
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Status, e.ExpiresAt });
+            entity.HasIndex(e => new { e.UserId, e.RoleId, e.TenantId, e.Status });
+            entity.HasIndex(e => e.AuditCorrelationId);
+            entity.HasIndex(e => new { e.IsBreakGlass, e.Status });
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.PamPolicy)
+                .WithMany()
+                .HasForeignKey(e => e.PamPolicyId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // PamPolicy configuration (PAM)
+        modelBuilder.Entity<PamPolicy>(entity =>
+        {
+            entity.ToTable("PamPolicies");
+            entity.HasKey(e => e.Id);
+
+            entity.HasIndex(e => new { e.RoleId, e.TenantId }).IsUnique();
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.TenantId });
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ApproverRole)
+                .WithMany()
+                .HasForeignKey(e => e.ApproverRoleId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // BulkOperation configuration
+        modelBuilder.Entity<BulkOperation>(entity =>
+        {
+            entity.ToTable("BulkOperations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.CreatedAt });
+            entity.HasIndex(e => new { e.Status, e.CreatedAt });
+            entity.HasIndex(e => e.CreatedByUserId);
+
+            entity.Property(e => e.Type).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.Format).HasConversion<int>();
+            entity.Property(e => e.FileName).HasMaxLength(500);
+            entity.Property(e => e.ErrorDetails).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.CreatedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // SecretEntry configuration (Secrets Vault)
+        modelBuilder.Entity<SecretEntry>(entity =>
+        {
+            entity.ToTable("SecretEntries");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.Name);
+            entity.HasIndex(e => new { e.TenantId, e.Name });
+            entity.HasIndex(e => new { e.IsActive, e.NextRotationAt });
+            entity.HasIndex(e => e.SecretType);
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.EncryptedValue).IsRequired();
+            entity.Property(e => e.IV).IsRequired().HasMaxLength(32);
+            entity.Property(e => e.RotationSchedule).HasColumnType("jsonb");
+            entity.Property(e => e.SecretType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.Tags).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // SecretVersion configuration (Secrets Vault version history)
+        modelBuilder.Entity<SecretVersion>(entity =>
+        {
+            entity.ToTable("SecretVersions");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.SecretEntryId);
+            entity.HasIndex(e => new { e.SecretEntryId, e.Version });
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.SecretEntryId, e.CreatedAt });
+
+            entity.Property(e => e.EncryptedValue).IsRequired();
+            entity.Property(e => e.IV).IsRequired().HasMaxLength(32);
+            entity.Property(e => e.RotationReason).IsRequired().HasMaxLength(50);
+
+            entity.HasOne(e => e.SecretEntry)
+                .WithMany()
+                .HasForeignKey(e => e.SecretEntryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // AlertRule configuration (security event alerting)
+        modelBuilder.Entity<AlertRule>(entity =>
+        {
+            entity.ToTable("AlertRules");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.Severity });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Condition).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.Severity).HasConversion<int>();
+            entity.Property(e => e.Channels).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.AutoResponseAction).HasMaxLength(50);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.Alerts)
+                .WithOne(e => e.Rule)
+                .HasForeignKey(e => e.RuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // SecurityAlert configuration (fired alert instances)
+        modelBuilder.Entity<SecurityAlert>(entity =>
+        {
+            entity.ToTable("SecurityAlerts");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.RuleId);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.Severity, e.AcknowledgedAt });
+            entity.HasIndex(e => new { e.TenantId, e.AcknowledgedAt });
+
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Severity).HasConversion<int>();
+            entity.Property(e => e.Details).HasColumnType("jsonb");
+            entity.Property(e => e.AutoResponseAction).HasMaxLength(50);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.AcknowledgedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.AcknowledgedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // SiemIntegration configuration (SIEM platform connections)
+        modelBuilder.Entity<SiemIntegration>(entity =>
+        {
+            entity.ToTable("SiemIntegrations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.Type });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Type).HasConversion<int>();
+            entity.Property(e => e.EndpointUrl).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.AuthConfig).HasColumnType("jsonb");
+            entity.Property(e => e.Format).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.EventFilter).HasColumnType("jsonb");
 
             entity.HasOne(e => e.Tenant)
                 .WithMany()

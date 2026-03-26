@@ -116,6 +116,54 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 >
                   SCIM
                 </Link>
+                <Link
+                  to="/bulk-operations"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Bulk Ops
+                </Link>
+                <Link
+                  to="/claims-mapping"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Claims
+                </Link>
+                <Link
+                  to="/branding"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Branding
+                </Link>
+                <Link
+                  to="/network-policy"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Network Policy
+                </Link>
+                <Link
+                  to="/pam"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  PAM
+                </Link>
+                <Link
+                  to="/secrets"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Secrets Vault
+                </Link>
+                <Link
+                  to="/risk"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Risk
+                </Link>
+                <Link
+                  to="/security-alerts"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Alerts
+                </Link>
               </div>
             </div>
             <div className="flex items-center">

@@ -57,6 +57,14 @@ builder.Services.AddScoped<IInvitationService, InvitationService>();
 builder.Services.AddScoped<IDirectorySyncService, DirectorySyncService>();
 builder.Services.AddScoped<IAccessRequestService, AccessRequestService>();
 builder.Services.AddScoped<IScimService, ScimService>();
+builder.Services.AddScoped<ITenantBrandingService, TenantBrandingService>();
+builder.Services.AddScoped<IClaimsMappingService, ClaimsMappingService>();
+builder.Services.AddScoped<INetworkPolicyService, NetworkPolicyService>();
+builder.Services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
+builder.Services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
+builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();
+builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
+builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
 
 // HttpClient for webhook delivery
 builder.Services.AddHttpClient("WebhookDelivery")
@@ -96,6 +104,9 @@ builder.Services.AddHostedService<AuditLogCleanupWorker>();
 builder.Services.AddHostedService<SessionCleanupWorker>();
 builder.Services.AddHostedService<DirectorySyncWorker>();
 builder.Services.AddHostedService<AccessRequestExpiryWorker>();
+builder.Services.AddHostedService<PamDeescalationWorker>();
+builder.Services.AddHostedService<SecretRotationWorker>();
+builder.Services.AddHostedService<SecurityAlertWorker>();
 
 // OpenIddict (OAuth2/OIDC Server)
 builder.Services.AddOpenIddict()

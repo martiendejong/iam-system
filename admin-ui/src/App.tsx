@@ -35,6 +35,14 @@ import DirectorySyncPage from './pages/directory-sync/DirectorySyncPage';
 import AccessRequestsPage from './pages/workflows/AccessRequestsPage';
 import WorkflowTemplatesPage from './pages/workflows/WorkflowTemplatesPage';
 import ScimConfigPage from './pages/scim/ScimConfigPage';
+import ClaimsMappingPage from './pages/claims/ClaimsMappingPage';
+import TenantBrandingPage from './pages/branding/TenantBrandingPage';
+import NetworkPolicyPage from './pages/network/NetworkPolicyPage';
+import PamDashboardPage from './pages/pam/PamDashboardPage';
+import BulkOperationsPage from './pages/bulk/BulkOperationsPage';
+import RiskDashboardPage from './pages/risk/RiskDashboardPage';
+import SecretsVaultPage from './pages/secrets/SecretsVaultPage';
+import SecurityAlertsPage from './pages/alerts/SecurityAlertsPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -319,6 +327,56 @@ function App() {
             }
           />
 
+          {/* Claims Mapping & Token Configuration */}
+          <Route
+            path="/claims-mapping"
+            element={
+              <ProtectedRoute>
+                <ClaimsMappingPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Tenant Branding */}
+          <Route
+            path="/branding"
+            element={
+              <ProtectedRoute>
+                <TenantBrandingPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Network Policy (IP Allowlist, Geo Restrictions, Geofencing) */}
+          <Route
+            path="/network-policy"
+            element={
+              <ProtectedRoute>
+                <NetworkPolicyPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Privileged Access Management (PAM) */}
+          <Route
+            path="/pam"
+            element={
+              <ProtectedRoute>
+                <PamDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Bulk Operations */}
+          <Route
+            path="/bulk-operations"
+            element={
+              <ProtectedRoute>
+                <BulkOperationsPage />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Consent & GDPR Management */}
           <Route
             path="/consent"
@@ -384,6 +442,36 @@ function App() {
             element={
               <ProtectedRoute>
                 <PortalLinkedAccountsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Secrets Vault */}
+          <Route
+            path="/secrets"
+            element={
+              <ProtectedRoute>
+                <SecretsVaultPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Risk Assessment */}
+          <Route
+            path="/risk"
+            element={
+              <ProtectedRoute>
+                <RiskDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Security Alerts & SIEM */}
+          <Route
+            path="/security-alerts"
+            element={
+              <ProtectedRoute>
+                <SecurityAlertsPage />
               </ProtectedRoute>
             }
           />
