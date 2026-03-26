@@ -43,6 +43,10 @@ import BulkOperationsPage from './pages/bulk/BulkOperationsPage';
 import RiskDashboardPage from './pages/risk/RiskDashboardPage';
 import SecretsVaultPage from './pages/secrets/SecretsVaultPage';
 import SecurityAlertsPage from './pages/alerts/SecurityAlertsPage';
+import VisitorManagementPage from './pages/visitors/VisitorManagementPage';
+import RegionDashboardPage from './pages/regions/RegionDashboardPage';
+import ServiceAccountsPage from './pages/service-accounts/ServiceAccountsPage';
+import DelegationPage from './pages/delegation/DelegationPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -472,6 +476,46 @@ function App() {
             element={
               <ProtectedRoute>
                 <SecurityAlertsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Visitor Management */}
+          <Route
+            path="/visitors"
+            element={
+              <ProtectedRoute>
+                <VisitorManagementPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Service Accounts (API Gateway / Service Mesh) */}
+          <Route
+            path="/service-accounts"
+            element={
+              <ProtectedRoute>
+                <ServiceAccountsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Multi-Region High Availability */}
+          <Route
+            path="/regions"
+            element={
+              <ProtectedRoute>
+                <RegionDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Delegation & Segregation of Duties */}
+          <Route
+            path="/delegation"
+            element={
+              <ProtectedRoute>
+                <DelegationPage />
               </ProtectedRoute>
             }
           />

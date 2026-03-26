@@ -164,6 +164,30 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 >
                   Alerts
                 </Link>
+                <Link
+                  to="/visitors"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Visitors
+                </Link>
+                <Link
+                  to="/service-accounts"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Service Accounts
+                </Link>
+                <Link
+                  to="/regions"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Regions
+                </Link>
+                <Link
+                  to="/delegation"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Delegation
+                </Link>
               </div>
             </div>
             <div className="flex items-center">

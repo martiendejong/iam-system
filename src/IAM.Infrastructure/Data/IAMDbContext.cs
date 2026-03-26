@@ -72,6 +72,15 @@ public class IAMDbContext : DbContext
     public DbSet<BulkOperation> BulkOperations => Set<BulkOperation>();
     public DbSet<SecretEntry> SecretEntries => Set<SecretEntry>();
     public DbSet<SecretVersion> SecretVersions => Set<SecretVersion>();
+    public DbSet<Visitor> Visitors => Set<Visitor>();
+    public DbSet<VisitorAccessGrant> VisitorAccessGrants => Set<VisitorAccessGrant>();
+    public DbSet<ServiceAccount> ServiceAccounts => Set<ServiceAccount>();
+    public DbSet<TokenExchange> TokenExchanges => Set<TokenExchange>();
+    public DbSet<RegionConfig> RegionConfigs => Set<RegionConfig>();
+    public DbSet<RegionSyncEvent> RegionSyncEvents => Set<RegionSyncEvent>();
+    public DbSet<Delegation> Delegations => Set<Delegation>();
+    public DbSet<SodConstraint> SodConstraints => Set<SodConstraint>();
+    public DbSet<SodViolation> SodViolations => Set<SodViolation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -1539,6 +1548,220 @@ public class IAMDbContext : DbContext
             entity.HasOne(e => e.Tenant)
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Visitor configuration (visitor pre-registration and management)
+        modelBuilder.Entity<Visitor>(entity =>
+        {
+            entity.ToTable("Visitors");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.HostUserId);
+            entity.HasIndex(e => new { e.TenantId, e.VisitDate });
+            entity.HasIndex(e => new { e.TenantId, e.Status });
+            entity.HasIndex(e => e.QrToken).IsUnique();
+            entity.HasIndex(e => e.Email);
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Email).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Company).HasMaxLength(255);
+            entity.Property(e => e.QrToken).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Purpose).HasMaxLength(1000);
+            entity.Property(e => e.Status).HasConversion<int>();
+
+            entity.HasOne(e => e.HostUser)
+                .WithMany()
+                .HasForeignKey(e => e.HostUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.AccessGrants)
+                .WithOne(e => e.Visitor)
+                .HasForeignKey(e => e.VisitorId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // VisitorAccessGrant configuration (temporary resource access for visitors)
+        modelBuilder.Entity<VisitorAccessGrant>(entity =>
+        {
+            entity.ToTable("VisitorAccessGrants");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.VisitorId);
+            entity.HasIndex(e => new { e.VisitorId, e.ValidFrom, e.ValidUntil });
+
+            entity.Property(e => e.Resources).IsRequired().HasColumnType("jsonb");
+        });
+
+        // ServiceAccount configuration (API gateway / service mesh authentication)
+        modelBuilder.Entity<ServiceAccount>(entity =>
+        {
+            entity.ToTable("ServiceAccounts");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ClientId).IsUnique();
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.IsActive, e.Type });
+            entity.HasIndex(e => e.CertificateThumbprint)
+                .HasFilter("\"CertificateThumbprint\" IS NOT NULL");
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.ClientId).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.ClientSecretHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.Permissions).HasColumnType("jsonb");
+            entity.Property(e => e.Type).HasConversion<int>();
+            entity.Property(e => e.CertificateThumbprint).HasMaxLength(128);
+            entity.Property(e => e.Description).HasMaxLength(500);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // TokenExchange configuration (RFC 8693 token exchange audit trail)
+        modelBuilder.Entity<TokenExchange>(entity =>
+        {
+            entity.ToTable("TokenExchanges");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.SubjectId);
+            entity.HasIndex(e => e.TargetService);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.SubjectId, e.TargetService, e.CreatedAt });
+            entity.HasIndex(e => e.ExpiresAt);
+
+            entity.Property(e => e.OriginalTokenHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.ExchangedTokenHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.TargetService).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Scopes).HasMaxLength(1000);
+
+            entity.HasOne(e => e.ServiceAccount)
+                .WithMany()
+                .HasForeignKey(e => e.ServiceAccountId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // RegionConfig configuration (multi-region HA)
+        modelBuilder.Entity<RegionConfig>(entity =>
+        {
+            entity.ToTable("RegionConfigs");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Name).IsUnique();
+            entity.HasIndex(e => e.IsPrimary);
+            entity.HasIndex(e => new { e.Status, e.Priority });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Endpoint).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.Status).HasConversion<int>();
+        });
+
+        // RegionSyncEvent configuration (cross-region sync tracking)
+        modelBuilder.Entity<RegionSyncEvent>(entity =>
+        {
+            entity.ToTable("RegionSyncEvents");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => e.SyncStatus);
+            entity.HasIndex(e => new { e.SourceRegion, e.TargetRegion });
+            entity.HasIndex(e => new { e.EntityType, e.EntityId });
+            entity.HasIndex(e => new { e.SyncStatus, e.CreatedAt });
+
+            entity.Property(e => e.SourceRegion).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.TargetRegion).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.EntityId).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.SyncStatus).HasConversion<int>();
+            entity.Property(e => e.ConflictResolution).HasConversion<int>();
+            entity.Property(e => e.Details).HasColumnType("jsonb");
+            entity.Property(e => e.ErrorMessage).HasMaxLength(2000);
+        });
+
+        // Delegation configuration (permission delegation between users)
+        modelBuilder.Entity<Delegation>(entity =>
+        {
+            entity.ToTable("Delegations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.DelegatorUserId);
+            entity.HasIndex(e => e.DelegateUserId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.DelegateUserId, e.IsActive, e.ValidFrom, e.ValidUntil });
+            entity.HasIndex(e => new { e.TenantId, e.Status });
+            entity.HasIndex(e => new { e.IsActive, e.ValidUntil });
+
+            entity.Property(e => e.Permissions).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
+
+            entity.HasOne(e => e.DelegatorUser)
+                .WithMany()
+                .HasForeignKey(e => e.DelegatorUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.DelegateUser)
+                .WithMany()
+                .HasForeignKey(e => e.DelegateUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // SodConstraint configuration (segregation of duties rules)
+        modelBuilder.Entity<SodConstraint>(entity =>
+        {
+            entity.ToTable("SodConstraints");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+            entity.HasIndex(e => new { e.ConflictingRoleA, e.ConflictingRoleB, e.TenantId });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Description).HasMaxLength(2000);
+            entity.Property(e => e.Severity).HasConversion<int>();
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.RoleA)
+                .WithMany()
+                .HasForeignKey(e => e.ConflictingRoleA)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.RoleB)
+                .WithMany()
+                .HasForeignKey(e => e.ConflictingRoleB)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // SodViolation configuration (detected SoD violations)
+        modelBuilder.Entity<SodViolation>(entity =>
+        {
+            entity.ToTable("SodViolations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ConstraintId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.ConstraintId, e.ResolvedAt });
+            entity.HasIndex(e => e.DetectedAt);
+            entity.HasIndex(e => new { e.ResolvedAt, e.DetectedAt });
+
+            entity.Property(e => e.Resolution).HasMaxLength(2000);
+
+            entity.HasOne(e => e.Constraint)
+                .WithMany()
+                .HasForeignKey(e => e.ConstraintId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
