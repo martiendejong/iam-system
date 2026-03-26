@@ -50,7 +50,7 @@ export default function InvitationsPage() {
   const [bulkResult, setBulkResult] = useState<any>(null);
 
   // Org settings
-  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+  const [, setOrgSettings] = useState<OrgSettings | null>(null);
   const [settingsForm, setSettingsForm] = useState({
     allowedEmailDomains: '',
     requireMfa: false,

@@ -346,10 +346,6 @@ export default function ClaimsMappingPage() {
     }
   };
 
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleString();
-  };
 
   const getSourceTypeBadgeColor = (sourceType: string) => {
     switch (sourceType) {

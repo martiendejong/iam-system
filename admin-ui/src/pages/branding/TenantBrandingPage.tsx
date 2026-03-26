@@ -10,7 +10,7 @@ export default function TenantBrandingPage() {
   const [activeTab, setActiveTab] = useState<TabType>('editor');
   const [tenants, setTenants] = useState<any[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState<string>('');
-  const [branding, setBranding] = useState<TenantBranding | null>(null);
+  const [, setBranding] = useState<TenantBranding | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');

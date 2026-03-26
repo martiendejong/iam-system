@@ -61,8 +61,6 @@ function buildTree(tenants: TenantRaw[], policies: Policy[]): TenantNode[] {
     );
 
     const childInherited = [...toPropagate, ...continuePropagating];
-    // For grandchildren, only Descendants-scoped policies continue
-    const descendantInherited = [...toPropagateDescendants, ...continuePropagating];
 
     node.children.forEach((child) => {
       propagateInheritance(child, childInherited);

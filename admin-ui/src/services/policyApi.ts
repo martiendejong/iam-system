@@ -6,23 +6,23 @@ import type { Policy, PolicyEvaluationRequest, PolicyEvaluationResult } from '..
 class PolicyApiService {
   async getPolicies(tenantId?: string): Promise<Policy[]> {
     const params = tenantId ? `?tenantId=${tenantId}` : '';
-    const response = await (api as any).client.get<Policy[]>(`/policies${params}`);
-    return response.data;
+    const response = await (api as any).client.get(`/policies${params}`);
+    return response.data as Policy[];
   }
 
   async getPolicy(id: string): Promise<Policy> {
-    const response = await (api as any).client.get<Policy>(`/policies/${id}`);
-    return response.data;
+    const response = await (api as any).client.get(`/policies/${id}`);
+    return response.data as Policy;
   }
 
   async createPolicy(data: Partial<Policy>): Promise<Policy> {
-    const response = await (api as any).client.post<Policy>('/policies', data);
-    return response.data;
+    const response = await (api as any).client.post('/policies', data);
+    return response.data as Policy;
   }
 
   async updatePolicy(id: string, data: Partial<Policy>): Promise<Policy> {
-    const response = await (api as any).client.put<Policy>(`/policies/${id}`, data);
-    return response.data;
+    const response = await (api as any).client.put(`/policies/${id}`, data);
+    return response.data as Policy;
   }
 
   async deletePolicy(id: string): Promise<void> {
@@ -30,13 +30,13 @@ class PolicyApiService {
   }
 
   async evaluatePolicy(data: PolicyEvaluationRequest): Promise<PolicyEvaluationResult> {
-    const response = await (api as any).client.post<PolicyEvaluationResult>('/policies/evaluate', data);
-    return response.data;
+    const response = await (api as any).client.post('/policies/evaluate', data);
+    return response.data as PolicyEvaluationResult;
   }
 
   async getEffectivePolicies(tenantId: string): Promise<Policy[]> {
-    const response = await (api as any).client.get<Policy[]>(`/policies/effective/${tenantId}`);
-    return response.data;
+    const response = await (api as any).client.get(`/policies/effective/${tenantId}`);
+    return response.data as Policy[];
   }
 
   async testPolicy(id: string): Promise<any> {
