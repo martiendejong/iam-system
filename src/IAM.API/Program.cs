@@ -65,6 +65,10 @@ builder.Services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
 builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();
 builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
 builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
+builder.Services.AddScoped<IVisitorService, VisitorService>();
+builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
+builder.Services.AddScoped<IRegionService, RegionService>();
+builder.Services.AddScoped<IDelegationService, DelegationService>();
 
 // HttpClient for webhook delivery
 builder.Services.AddHttpClient("WebhookDelivery")
@@ -79,6 +83,13 @@ builder.Services.AddHttpClient("SocialAuth");
 
 // HttpClient for Twilio SMS API
 builder.Services.AddHttpClient("TwilioSms");
+
+// HttpClient for region health checks
+builder.Services.AddHttpClient("RegionHealth")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+    });
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
@@ -107,6 +118,7 @@ builder.Services.AddHostedService<AccessRequestExpiryWorker>();
 builder.Services.AddHostedService<PamDeescalationWorker>();
 builder.Services.AddHostedService<SecretRotationWorker>();
 builder.Services.AddHostedService<SecurityAlertWorker>();
+builder.Services.AddHostedService<RegionHealthWorker>();
 
 // OpenIddict (OAuth2/OIDC Server)
 builder.Services.AddOpenIddict()
