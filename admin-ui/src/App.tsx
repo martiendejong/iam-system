@@ -29,6 +29,12 @@ import IdentityProvidersPage from './pages/identity-providers/IdentityProvidersP
 import IdentityProviderFormPage from './pages/identity-providers/IdentityProviderFormPage';
 import ConsentManagementPage from './pages/consent/ConsentManagementPage';
 import PortalPrivacyPage from './pages/portal/PortalPrivacyPage';
+import PortalLinkedAccountsPage from './pages/portal/PortalLinkedAccountsPage';
+import InvitationsPage from './pages/invitations/InvitationsPage';
+import DirectorySyncPage from './pages/directory-sync/DirectorySyncPage';
+import AccessRequestsPage from './pages/workflows/AccessRequestsPage';
+import WorkflowTemplatesPage from './pages/workflows/WorkflowTemplatesPage';
+import ScimConfigPage from './pages/scim/ScimConfigPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -265,6 +271,54 @@ function App() {
             }
           />
 
+          {/* Invitations & Organization */}
+          <Route
+            path="/invitations"
+            element={
+              <ProtectedRoute>
+                <InvitationsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Directory Sync (LDAP/AD) */}
+          <Route
+            path="/directory-sync"
+            element={
+              <ProtectedRoute>
+                <DirectorySyncPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Access Requests & Workflows */}
+          <Route
+            path="/access-requests"
+            element={
+              <ProtectedRoute>
+                <AccessRequestsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/workflow-templates"
+            element={
+              <ProtectedRoute>
+                <WorkflowTemplatesPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* SCIM Provisioning */}
+          <Route
+            path="/scim"
+            element={
+              <ProtectedRoute>
+                <ScimConfigPage />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Consent & GDPR Management */}
           <Route
             path="/consent"
@@ -322,6 +376,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <PortalPrivacyPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/portal/linked-accounts"
+            element={
+              <ProtectedRoute>
+                <PortalLinkedAccountsPage />
               </ProtectedRoute>
             }
           />

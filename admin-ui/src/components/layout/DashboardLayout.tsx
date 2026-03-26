@@ -69,6 +69,24 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   Identity Providers
                 </Link>
                 <Link
+                  to="/directory-sync"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Directory Sync
+                </Link>
+                <Link
+                  to="/access-requests"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Access Requests
+                </Link>
+                <Link
+                  to="/workflow-templates"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Workflows
+                </Link>
+                <Link
                   to="/audit"
                   className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
                 >
@@ -81,10 +99,22 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                   Compliance
                 </Link>
                 <Link
+                  to="/invitations"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  Invitations
+                </Link>
+                <Link
                   to="/consent"
                   className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
                 >
                   Consent
+                </Link>
+                <Link
+                  to="/scim"
+                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                >
+                  SCIM
                 </Link>
               </div>
             </div>

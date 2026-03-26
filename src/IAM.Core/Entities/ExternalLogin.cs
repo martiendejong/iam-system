@@ -42,4 +42,9 @@ public class ExternalLogin
     /// When the user last authenticated via this provider
     /// </summary>
     public DateTime? LastUsedAt { get; set; }
+
+    /// <summary>
+    /// Whether this is the user's primary external identity (used for display name/avatar)
+    /// </summary>
+    public bool IsPrimary { get; set; }
 }

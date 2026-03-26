@@ -52,6 +52,11 @@ builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
+builder.Services.AddScoped<IAccountLinkingService, AccountLinkingService>();
+builder.Services.AddScoped<IInvitationService, InvitationService>();
+builder.Services.AddScoped<IDirectorySyncService, DirectorySyncService>();
+builder.Services.AddScoped<IAccessRequestService, AccessRequestService>();
+builder.Services.AddScoped<IScimService, ScimService>();
 
 // HttpClient for webhook delivery
 builder.Services.AddHttpClient("WebhookDelivery")
@@ -89,6 +94,8 @@ builder.Services.AddHostedService<CertificateExpiryMonitorWorker>();
 builder.Services.AddHostedService<DeviceHeartbeatMonitorWorker>();
 builder.Services.AddHostedService<AuditLogCleanupWorker>();
 builder.Services.AddHostedService<SessionCleanupWorker>();
+builder.Services.AddHostedService<DirectorySyncWorker>();
+builder.Services.AddHostedService<AccessRequestExpiryWorker>();
 
 // OpenIddict (OAuth2/OIDC Server)
 builder.Services.AddOpenIddict()

@@ -38,6 +38,13 @@ public static class IamEventTypes
     public const string EmergencyOverrideActivated = "security.emergency_override.activated";
     public const string EmergencyOverrideDeactivated = "security.emergency_override.deactivated";
 
+    // Access request events
+    public const string AccessRequestCreated = "access_request.created";
+    public const string AccessRequestApproved = "access_request.approved";
+    public const string AccessRequestDenied = "access_request.denied";
+    public const string AccessRequestAutoApproved = "access_request.auto_approved";
+    public const string AccessRequestExpired = "access_request.expired";
+
     public static readonly string[] All = new[]
     {
         UserCreated, UserUpdated, UserDeleted, UserLoginSuccess, UserLoginFailed,
@@ -46,6 +53,8 @@ public static class IamEventTypes
         DeviceRegistered, DeviceAuthenticated, DeviceDeactivated, DeviceOffline,
         CertificateIssued, CertificateRevoked, CertificateExpiring,
         TenantCreated, TenantUpdated,
-        SecurityAlert, EmergencyOverrideActivated, EmergencyOverrideDeactivated
+        SecurityAlert, EmergencyOverrideActivated, EmergencyOverrideDeactivated,
+        AccessRequestCreated, AccessRequestApproved, AccessRequestDenied,
+        AccessRequestAutoApproved, AccessRequestExpired
     };
 }

@@ -45,6 +45,15 @@ public class IAMDbContext : DbContext
     public DbSet<ConsentRecord> ConsentRecords => Set<ConsentRecord>();
     public DbSet<DataRequest> DataRequests => Set<DataRequest>();
     public DbSet<DataProcessingAgreement> DataProcessingAgreements => Set<DataProcessingAgreement>();
+    public DbSet<Invitation> Invitations => Set<Invitation>();
+    public DbSet<OrganizationSettings> OrganizationSettings => Set<OrganizationSettings>();
+    public DbSet<DirectorySyncConfig> DirectorySyncConfigs => Set<DirectorySyncConfig>();
+    public DbSet<DirectorySyncLog> DirectorySyncLogs => Set<DirectorySyncLog>();
+    public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
+    public DbSet<ApprovalStep> ApprovalSteps => Set<ApprovalStep>();
+    public DbSet<WorkflowTemplate> WorkflowTemplates => Set<WorkflowTemplate>();
+    public DbSet<ScimProvisioningLog> ScimProvisioningLogs => Set<ScimProvisioningLog>();
+    public DbSet<ScimToken> ScimTokens => Set<ScimToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -770,6 +779,10 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasIndex(e => new { e.UserId, e.IsPrimary })
+                .HasFilter("\"IsPrimary\" = true")
+                .IsUnique();
         });
 
         // MagicLinkToken configuration
@@ -870,6 +883,241 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Version).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Content).IsRequired().HasColumnType("text");
+        });
+
+        // Invitation configuration
+        modelBuilder.Entity<Invitation>(entity =>
+        {
+            entity.ToTable("Invitations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Token).IsUnique();
+            entity.HasIndex(e => new { e.TenantId, e.Status });
+            entity.HasIndex(e => new { e.Email, e.TenantId });
+            entity.HasIndex(e => e.ExpiresAt);
+
+            entity.Property(e => e.Email).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Token).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.InvitedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.InvitedByUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // OrganizationSettings configuration
+        modelBuilder.Entity<OrganizationSettings>(entity =>
+        {
+            entity.ToTable("OrganizationSettings");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId).IsUnique();
+
+            entity.Property(e => e.AllowedEmailDomains).HasColumnType("jsonb");
+            entity.Property(e => e.WelcomeMessage).HasMaxLength(2000);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.DefaultRole)
+                .WithMany()
+                .HasForeignKey(e => e.DefaultRoleId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // DirectorySyncConfig configuration (LDAP/AD sync)
+        modelBuilder.Entity<DirectorySyncConfig>(entity =>
+        {
+            entity.ToTable("DirectorySyncConfigs");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+            entity.HasIndex(e => new { e.IsActive, e.LastSyncAt });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.LdapUrl).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.BindDn).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.BindPassword).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.SearchBase).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.SearchFilter).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.AttributeMapping).HasColumnType("jsonb");
+            entity.Property(e => e.GroupToRoleMapping).HasColumnType("jsonb");
+            entity.Property(e => e.LastSyncStatus).HasMaxLength(50);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(e => e.SyncLogs)
+                .WithOne(e => e.Config)
+                .HasForeignKey(e => e.ConfigId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DirectorySyncLog configuration (LDAP/AD sync logs)
+        modelBuilder.Entity<DirectorySyncLog>(entity =>
+        {
+            entity.ToTable("DirectorySyncLogs");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ConfigId);
+            entity.HasIndex(e => new { e.ConfigId, e.StartedAt });
+            entity.HasIndex(e => e.StartedAt);
+            entity.HasIndex(e => new { e.Status, e.StartedAt });
+
+            entity.Property(e => e.SyncType).IsRequired().HasMaxLength(20)
+                .HasConversion<string>();
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20)
+                .HasConversion<string>();
+            entity.Property(e => e.Errors).HasColumnType("jsonb");
+        });
+
+        // AccessRequest configuration (workflow-driven access requests)
+        modelBuilder.Entity<AccessRequest>(entity =>
+        {
+            entity.ToTable("AccessRequests");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.RequesterId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.Status, e.CreatedAt });
+            entity.HasIndex(e => new { e.RequesterId, e.Status });
+            entity.HasIndex(e => new { e.Status, e.ExpiresAt });
+            entity.HasIndex(e => e.WorkflowTemplateId);
+
+            entity.Property(e => e.ResourceType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Justification).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.Priority).HasConversion<int>();
+
+            entity.HasOne(e => e.Requester)
+                .WithMany()
+                .HasForeignKey(e => e.RequesterId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Role)
+                .WithMany()
+                .HasForeignKey(e => e.RoleId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.WorkflowTemplate)
+                .WithMany()
+                .HasForeignKey(e => e.WorkflowTemplateId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(e => e.ApprovalSteps)
+                .WithOne(e => e.AccessRequest)
+                .HasForeignKey(e => e.AccessRequestId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ApprovalStep configuration (multi-level approval chain steps)
+        modelBuilder.Entity<ApprovalStep>(entity =>
+        {
+            entity.ToTable("ApprovalSteps");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.AccessRequestId);
+            entity.HasIndex(e => new { e.AccessRequestId, e.StepOrder });
+            entity.HasIndex(e => new { e.ApproverId, e.Status });
+            entity.HasIndex(e => new { e.ApproverRoleId, e.Status });
+
+            entity.Property(e => e.Comment).HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
+
+            entity.HasOne(e => e.Approver)
+                .WithMany()
+                .HasForeignKey(e => e.ApproverId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.ApproverRole)
+                .WithMany()
+                .HasForeignKey(e => e.ApproverRoleId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.DecidedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.DecidedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // WorkflowTemplate configuration (approval workflow definitions)
+        modelBuilder.Entity<WorkflowTemplate>(entity =>
+        {
+            entity.ToTable("WorkflowTemplates");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.ResourceType, e.IsActive });
+            entity.HasIndex(e => new { e.TenantId, e.ResourceType, e.IsActive });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Description).HasMaxLength(1000);
+            entity.Property(e => e.ResourceType).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Steps).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.AutoApproveRules).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ScimProvisioningLog configuration
+        modelBuilder.Entity<ScimProvisioningLog>(entity =>
+        {
+            entity.ToTable("ScimProvisioningLogs");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.CreatedAt);
+            entity.HasIndex(e => new { e.TenantId, e.CreatedAt });
+            entity.HasIndex(e => new { e.TenantId, e.Operation, e.ResourceType });
+            entity.HasIndex(e => e.ExternalId);
+
+            entity.Property(e => e.Operation).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ResourceType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ExternalId).HasMaxLength(500);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Details).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ScimToken configuration
+        modelBuilder.Entity<ScimToken>(entity =>
+        {
+            entity.ToTable("ScimTokens");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TokenHash).IsUnique();
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+            entity.HasIndex(e => new { e.IsActive, e.ExpiresAt });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.TokenPrefix).HasMaxLength(16);
+            entity.Property(e => e.Description).HasMaxLength(500);
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Seed system roles

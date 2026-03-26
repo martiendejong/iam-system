@@ -240,6 +240,56 @@ class ApiService {
     }
     return response.data;
   }
+  // Invitation endpoints
+  async getInvitations(tenantId: string): Promise<any[]> {
+    const response = await this.client.get('/invitations', { params: { tenantId } });
+    return response.data;
+  }
+
+  async getPendingInvitations(tenantId: string): Promise<any[]> {
+    const response = await this.client.get('/invitations/pending', { params: { tenantId } });
+    return response.data;
+  }
+
+  async sendInvitation(data: { email: string; tenantId: string; roleId: string; expiryDays?: number }): Promise<any> {
+    const response = await this.client.post('/invitations', data);
+    return response.data;
+  }
+
+  async sendBulkInvitations(tenantId: string, file: File): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('tenantId', tenantId);
+    const response = await this.client.post('/invitations/bulk', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async revokeInvitation(id: string): Promise<void> {
+    await this.client.delete(`/invitations/${id}`);
+  }
+
+  async getInvitationByToken(token: string): Promise<any> {
+    const response = await this.client.get(`/invitations/by-token/${token}`);
+    return response.data;
+  }
+
+  async acceptInvitation(token: string, data: { password?: string; firstName?: string; lastName?: string }): Promise<any> {
+    const response = await this.client.post(`/invitations/${token}/accept`, data);
+    return response.data;
+  }
+
+  // Organization settings endpoints
+  async getOrganizationSettings(tenantId: string): Promise<any> {
+    const response = await this.client.get(`/organization-settings/${tenantId}`);
+    return response.data;
+  }
+
+  async updateOrganizationSettings(tenantId: string, data: any): Promise<any> {
+    const response = await this.client.put(`/organization-settings/${tenantId}`, data);
+    return response.data;
+  }
 }
 
 export const api = new ApiService();

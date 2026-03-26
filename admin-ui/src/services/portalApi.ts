@@ -92,6 +92,33 @@ export interface DataRequestEntry {
   hasDownload?: boolean;
 }
 
+export interface LinkedIdentity {
+  id: string;
+  provider: string;
+  providerUserId: string;
+  email?: string;
+  displayName?: string;
+  linkedAt: string;
+  lastUsedAt?: string;
+  isPrimary: boolean;
+}
+
+export interface DuplicateAccountInfo {
+  userId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  hasPassword: boolean;
+  linkedProviders: string[];
+  createdAt: string;
+  lastLoginAt?: string;
+}
+
+export interface DuplicateEmailGroup {
+  email: string;
+  accounts: DuplicateAccountInfo[];
+}
+
 // ─── API Functions ─────────────────────────────────────────
 
 export const portalApi = {
@@ -202,6 +229,37 @@ export const portalApi = {
     const response = await client().get(`/data-requests/${requestId}/download`, {
       responseType: 'blob',
     });
+    return response.data;
+  },
+
+  // Linked Accounts / Account Linking
+  getLinkedIdentities: async (): Promise<LinkedIdentity[]> => {
+    const response = await client().get('/portal/identities');
+    return response.data;
+  },
+
+  linkProvider: async (provider: string, data: { providerUserId: string; email?: string; displayName?: string }): Promise<LinkedIdentity> => {
+    const response = await client().post(`/portal/link/${provider}`, data);
+    return response.data;
+  },
+
+  unlinkProvider: async (provider: string): Promise<{ message: string }> => {
+    const response = await client().delete(`/portal/link/${provider}`);
+    return response.data;
+  },
+
+  setPrimaryIdentity: async (identityId: string): Promise<{ message: string }> => {
+    const response = await client().post(`/portal/identities/${identityId}/primary`);
+    return response.data;
+  },
+
+  getMergeSuggestions: async (): Promise<DuplicateEmailGroup[]> => {
+    const response = await client().get('/portal/merge/suggestions');
+    return response.data;
+  },
+
+  mergeAccounts: async (secondaryUserId: string): Promise<{ message: string }> => {
+    const response = await client().post('/portal/merge', { secondaryUserId });
     return response.data;
   },
 };
