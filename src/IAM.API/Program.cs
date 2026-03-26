@@ -45,6 +45,13 @@ builder.Services.AddScoped<IWebhookService, WebhookService>();
 builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
 builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
+builder.Services.AddScoped<ISocialAuthService, SocialAuthService>();
+builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"));
+builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
+builder.Services.AddScoped<ISmsService, SmsService>();
+builder.Services.AddScoped<IOtpService, OtpService>();
+builder.Services.AddScoped<IConsentService, ConsentService>();
+builder.Services.AddScoped<IDataRequestService, DataRequestService>();
 
 // HttpClient for webhook delivery
 builder.Services.AddHttpClient("WebhookDelivery")
@@ -53,6 +60,12 @@ builder.Services.AddHttpClient("WebhookDelivery")
         // Allow self-signed certificates in development for webhook endpoints
         ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
     });
+
+// HttpClient for social/enterprise SSO provider calls
+builder.Services.AddHttpClient("SocialAuth");
+
+// HttpClient for Twilio SMS API
+builder.Services.AddHttpClient("TwilioSms");
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();

@@ -11,6 +11,7 @@ public interface IAuthService
     Task<bool> VerifyEmailAsync(string token);
     Task<bool> SendPasswordResetAsync(string email);
     Task<bool> ResetPasswordAsync(string token, string newPassword);
+    Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null);
 }
 
 public class AuthResult

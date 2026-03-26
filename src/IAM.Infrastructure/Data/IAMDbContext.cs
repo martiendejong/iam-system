@@ -38,6 +38,13 @@ public class IAMDbContext : DbContext
     public DbSet<WebhookSubscription> WebhookSubscriptions => Set<WebhookSubscription>();
     public DbSet<WebhookDelivery> WebhookDeliveries => Set<WebhookDelivery>();
     public DbSet<TelemetryRecord> TelemetryRecords => Set<TelemetryRecord>();
+    public DbSet<IdentityProvider> IdentityProviders => Set<IdentityProvider>();
+    public DbSet<ExternalLogin> ExternalLogins => Set<ExternalLogin>();
+    public DbSet<MagicLinkToken> MagicLinkTokens => Set<MagicLinkToken>();
+    public DbSet<OtpCode> OtpCodes => Set<OtpCode>();
+    public DbSet<ConsentRecord> ConsentRecords => Set<ConsentRecord>();
+    public DbSet<DataRequest> DataRequests => Set<DataRequest>();
+    public DbSet<DataProcessingAgreement> DataProcessingAgreements => Set<DataProcessingAgreement>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -57,6 +64,7 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.PhoneNumber).HasMaxLength(50);
+            entity.Property(e => e.AvatarUrl).HasMaxLength(500);
 
             entity.HasMany(e => e.UserRoles)
                 .WithOne(e => e.User)
@@ -713,6 +721,155 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Unit).HasMaxLength(50);
             entity.Property(e => e.DeviceType).HasMaxLength(100);
             entity.Property(e => e.Tags).HasColumnType("jsonb");
+        });
+
+        // IdentityProvider configuration (Social/Enterprise SSO)
+        modelBuilder.Entity<IdentityProvider>(entity =>
+        {
+            entity.ToTable("IdentityProviders");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Name);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.IsActive });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.DisplayName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Type).IsRequired().HasMaxLength(50)
+                .HasConversion<string>();
+            entity.Property(e => e.ClientId).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.ClientSecret).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.MetadataUrl).HasMaxLength(2000);
+            entity.Property(e => e.AttributeMapping).HasColumnType("jsonb");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.DefaultRole)
+                .WithMany()
+                .HasForeignKey(e => e.DefaultRoleId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // ExternalLogin configuration (Social/Enterprise SSO)
+        modelBuilder.Entity<ExternalLogin>(entity =>
+        {
+            entity.ToTable("ExternalLogins");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.Provider, e.ProviderUserId }).IsUnique();
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.Provider });
+
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.ProviderUserId).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Email).HasMaxLength(255);
+            entity.Property(e => e.DisplayName).HasMaxLength(255);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // MagicLinkToken configuration
+        modelBuilder.Entity<MagicLinkToken>(entity =>
+        {
+            entity.ToTable("MagicLinkTokens");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Token).IsUnique();
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.CreatedAt });
+
+            entity.Property(e => e.Token).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Purpose).IsRequired().HasMaxLength(50)
+                .HasConversion<string>();
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // OtpCode configuration
+        modelBuilder.Entity<OtpCode>(entity =>
+        {
+            entity.ToTable("OtpCodes");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.Email, e.Purpose });
+            entity.HasIndex(e => new { e.PhoneNumber, e.Purpose });
+            entity.HasIndex(e => e.UserId);
+
+            entity.Property(e => e.Code).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Email).HasMaxLength(255);
+            entity.Property(e => e.PhoneNumber).HasMaxLength(50);
+            entity.Property(e => e.Purpose).IsRequired().HasMaxLength(50)
+                .HasConversion<string>();
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ConsentRecord configuration (GDPR consent tracking)
+        modelBuilder.Entity<ConsentRecord>(entity =>
+        {
+            entity.ToTable("ConsentRecords");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => new { e.UserId, e.ClientId })
+                .HasFilter("\"RevokedAt\" IS NULL")
+                .IsUnique();
+            entity.HasIndex(e => e.ClientId);
+            entity.HasIndex(e => e.GrantedAt);
+
+            entity.Property(e => e.ClientId).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Scopes).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.IpAddress).HasMaxLength(50);
+            entity.Property(e => e.UserAgent).HasMaxLength(500);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DataRequest configuration (GDPR data subject requests)
+        modelBuilder.Entity<DataRequest>(entity =>
+        {
+            entity.ToTable("DataRequests");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.Status, e.RequestedAt });
+            entity.HasIndex(e => new { e.UserId, e.Type, e.Status });
+
+            entity.Property(e => e.Type).IsRequired().HasMaxLength(50)
+                .HasConversion<string>();
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50)
+                .HasConversion<string>();
+            entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.DataUrl).HasColumnType("text");
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // DataProcessingAgreement configuration (GDPR DPA documents)
+        modelBuilder.Entity<DataProcessingAgreement>(entity =>
+        {
+            entity.ToTable("DataProcessingAgreements");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.TenantId, e.Version });
+
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Version).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Content).IsRequired().HasColumnType("text");
         });
 
         // Seed system roles

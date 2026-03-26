@@ -8,6 +8,7 @@ public class User
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? PhoneNumber { get; set; }
+    public string? AvatarUrl { get; set; }
 
     // Email verification
     public bool EmailConfirmed { get; set; }

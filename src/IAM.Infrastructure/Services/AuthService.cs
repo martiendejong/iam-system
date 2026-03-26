@@ -303,6 +303,51 @@ public class AuthService : IAuthService
         return true;
     }
 
+    public async Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null)
+    {
+        if (!user.IsActive)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Account is inactive"
+            };
+        }
+
+        // Update last login
+        user.LastLoginAt = DateTime.UtcNow;
+        user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.LockoutEnd = null;
+
+        // Generate refresh token
+        var refreshToken = GenerateRefreshToken();
+        var refreshTokenId = Guid.NewGuid();
+
+        var refreshTokenEntity = new RefreshToken
+        {
+            Id = refreshTokenId,
+            UserId = user.Id,
+            TokenHash = HashToken(refreshToken),
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            IpAddress = ipAddress,
+            UserAgent = userAgent
+        };
+
+        _context.RefreshTokens.Add(refreshTokenEntity);
+        await _context.SaveChangesAsync();
+
+        var accessToken = GenerateAccessToken(user, refreshTokenId);
+
+        return new AuthResult
+        {
+            Success = true,
+            AccessToken = accessToken,
+            RefreshToken = refreshToken,
+            User = user
+        };
+    }
+
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)
     {
         var user = await _context.Users

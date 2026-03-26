@@ -198,6 +198,48 @@ class ApiService {
   async deleteOAuth2Client(id: string): Promise<void> {
     await this.client.delete(`/oauth/clients/${id}`);
   }
+
+  // Identity Provider endpoints
+  async getIdentityProviders(tenantId?: string): Promise<any[]> {
+    const params = tenantId ? { tenantId } : {};
+    const response = await this.client.get('/identity-providers', { params });
+    return response.data;
+  }
+
+  async getIdentityProvider(id: string): Promise<any> {
+    const response = await this.client.get(`/identity-providers/${id}`);
+    return response.data;
+  }
+
+  async createIdentityProvider(data: any): Promise<any> {
+    const response = await this.client.post('/identity-providers', data);
+    return response.data;
+  }
+
+  async updateIdentityProvider(id: string, data: any): Promise<any> {
+    const response = await this.client.put(`/identity-providers/${id}`, data);
+    return response.data;
+  }
+
+  async deleteIdentityProvider(id: string): Promise<void> {
+    await this.client.delete(`/identity-providers/${id}`);
+  }
+
+  // Social Auth endpoints
+  async getSocialAuthUrl(providerId: string, redirectUri: string): Promise<{ authorizationUrl: string; state: string }> {
+    const response = await this.client.get(`/auth/social/${providerId}/authorize`, {
+      params: { redirectUri }
+    });
+    return response.data;
+  }
+
+  async socialAuthCallback(providerId: string, code: string, state: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>(`/auth/social/${providerId}/callback`, { code, state });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
 }
 
 export const api = new ApiService();

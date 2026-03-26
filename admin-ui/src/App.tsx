@@ -20,6 +20,15 @@ import PolicyTestPage from './pages/policies/PolicyTestPage';
 import PolicyInheritanceTree from './components/policies/PolicyInheritanceTree';
 import AuditLogPage from './pages/AuditLogPage';
 import ComplianceDashboardPage from './pages/ComplianceDashboardPage';
+import PortalProfilePage from './pages/portal/PortalProfilePage';
+import PortalSecurityPage from './pages/portal/PortalSecurityPage';
+import PortalSessionsPage from './pages/portal/PortalSessionsPage';
+import PortalPasskeysPage from './pages/portal/PortalPasskeysPage';
+import PortalActivityPage from './pages/portal/PortalActivityPage';
+import IdentityProvidersPage from './pages/identity-providers/IdentityProvidersPage';
+import IdentityProviderFormPage from './pages/identity-providers/IdentityProviderFormPage';
+import ConsentManagementPage from './pages/consent/ConsentManagementPage';
+import PortalPrivacyPage from './pages/portal/PortalPrivacyPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -212,6 +221,32 @@ function App() {
             }
           />
 
+          {/* Identity Providers */}
+          <Route
+            path="/identity-providers"
+            element={
+              <ProtectedRoute>
+                <IdentityProvidersPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/identity-providers/new"
+            element={
+              <ProtectedRoute>
+                <IdentityProviderFormPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/identity-providers/:id"
+            element={
+              <ProtectedRoute>
+                <IdentityProviderFormPage />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Audit & Compliance */}
           <Route
             path="/audit"
@@ -226,6 +261,67 @@ function App() {
             element={
               <ProtectedRoute>
                 <ComplianceDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Consent & GDPR Management */}
+          <Route
+            path="/consent"
+            element={
+              <ProtectedRoute>
+                <ConsentManagementPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* User Self-Service Portal */}
+          <Route path="/portal" element={<Navigate to="/portal/profile" replace />} />
+          <Route
+            path="/portal/profile"
+            element={
+              <ProtectedRoute>
+                <PortalProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/portal/security"
+            element={
+              <ProtectedRoute>
+                <PortalSecurityPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/portal/sessions"
+            element={
+              <ProtectedRoute>
+                <PortalSessionsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/portal/passkeys"
+            element={
+              <ProtectedRoute>
+                <PortalPasskeysPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/portal/activity"
+            element={
+              <ProtectedRoute>
+                <PortalActivityPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/portal/privacy"
+            element={
+              <ProtectedRoute>
+                <PortalPrivacyPage />
               </ProtectedRoute>
             }
           />
