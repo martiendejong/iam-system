@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using IAM.API.Middleware;
 using IAM.API.Workers;
@@ -10,6 +11,8 @@ using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 using StackExchange.Redis;
+
+[assembly: InternalsVisibleTo("IAM.API.Tests")]
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -193,7 +196,10 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(key),
-        ClockSkew = TimeSpan.Zero
+        ClockSkew = TimeSpan.Zero,
+        // Configure claim mappings for roles and names
+        RoleClaimType = System.Security.Claims.ClaimTypes.Role,
+        NameClaimType = System.Security.Claims.ClaimTypes.Name
     };
 });
 
@@ -274,3 +280,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.Run();
+
+// Make Program class accessible to test projects
+public partial class Program { }
