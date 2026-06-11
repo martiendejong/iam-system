@@ -195,6 +195,14 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(key),
         ClockSkew = TimeSpan.Zero
     };
+})
+.AddCookie("IAM.Session", options =>
+{
+    options.Cookie.Name = "IAM.Session";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.ExpireTimeSpan = TimeSpan.FromHours(8);
+    options.SlidingExpiration = true;
 });
 
 // Redis (for caching) with in-memory fallback
@@ -251,6 +259,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors();
+app.UseStaticFiles(); // serve admin-ui/dist from wwwroot
 app.UseApiKeyAuthentication(); // API key auth before JWT (sets HttpContext.User if X-API-Key header present)
 app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
@@ -263,6 +272,9 @@ app.MapHub<IAM.API.Hubs.TelemetryHub>("/hubs/telemetry");
 
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+
+// SPA fallback — serves index.html for any path not matched by API routes
+app.MapFallbackToFile("index.html");
 
 // Seed development data (only in Development environment)
 if (app.Environment.IsDevelopment())

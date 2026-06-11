@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import type { IdentityProvider } from '../../types';
@@ -20,6 +20,8 @@ export default function LoginPage() {
   const [socialProviders, setSocialProviders] = useState<IdentityProvider[]>([]);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnUrl = searchParams.get('returnUrl') || '/dashboard';
 
   useEffect(() => {
     loadSocialProviders();
@@ -80,7 +82,13 @@ export default function LoginPage() {
 
     try {
       await login({ email, password });
-      navigate('/dashboard');
+      // If returnUrl is an OIDC authorize request, use full page navigation
+      // so the browser sends the session cookie to the backend
+      if (returnUrl.startsWith('/connect/')) {
+        window.location.href = returnUrl;
+      } else {
+        navigate(returnUrl);
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Login failed. Please try again.');
     } finally {

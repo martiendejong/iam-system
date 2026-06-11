@@ -46,20 +46,15 @@ public class AuthorizationController : ControllerBase
         var request = HttpContext.GetOpenIddictServerRequest() ??
                       throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
-        // Try to retrieve the user principal stored in the authentication cookie
-        var result = await HttpContext.AuthenticateAsync();
+        // Try to retrieve the user principal stored in the IAM session cookie
+        var result = await HttpContext.AuthenticateAsync("IAM.Session");
 
-        // If the user is not authenticated, redirect to login page
+        // If the user is not authenticated, redirect to React login page with return URL
         if (!result.Succeeded || result.Principal == null)
         {
-            // TODO: Redirect to login page with return URL
-            return Challenge(
-                authenticationSchemes: "Identity.Application",
-                properties: new AuthenticationProperties
-                {
-                    RedirectUri = Request.PathBase + Request.Path + QueryString.Create(
-                        Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList())
-                });
+            var returnUrl = Request.PathBase + Request.Path + QueryString.Create(
+                Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
+            return Redirect($"/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
         }
 
         // Retrieve user from database

@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using IAM.Core.Services;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
@@ -72,6 +74,17 @@ public class AuthController : ControllerBase
             Expires = DateTimeOffset.UtcNow.AddDays(7)
         });
 
+        // Establish OIDC session cookie so the authorize endpoint can identify the user
+        // without requiring a Bearer token in the browser request
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
+            new(ClaimTypes.Email, result.User.Email),
+            new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
+        };
+        var identity = new ClaimsIdentity(claims, "IAM.Session");
+        await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity));
+
         return Ok(new
         {
             accessToken = result.AccessToken,
@@ -128,6 +141,7 @@ public class AuthController : ControllerBase
         }
 
         Response.Cookies.Delete("refreshToken");
+        await HttpContext.SignOutAsync("IAM.Session");
 
         return Ok(new { message = "Logged out successfully" });
     }
