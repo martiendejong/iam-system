@@ -13,6 +13,9 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Enable Windows service lifecycle (handles STOP signals from SCM properly and sets correct content root)
+builder.Host.UseWindowsService();
+
 // Add services to the container
 builder.Services.AddOpenApi();
 builder.Services.AddControllers();
@@ -129,7 +132,14 @@ builder.Services.AddOpenIddict()
     })
     .AddServer(options =>
     {
-        // Enable the authorization, token and logout endpoints
+        // Set issuer from config for discovery document.
+        // ARR strips the /auth/ prefix before forwarding to Kestrel, so endpoint URIs must be
+        // relative paths (what Kestrel sees) — OpenIddict matches against the stripped path.
+        var issuerUri = builder.Configuration["Jwt:Issuer"];
+        if (!string.IsNullOrEmpty(issuerUri))
+        {
+            options.SetIssuer(new Uri(issuerUri.TrimEnd('/') + "/"));
+        }
         options.SetAuthorizationEndpointUris("/connect/authorize")
                .SetTokenEndpointUris("/connect/token")
                .SetIntrospectionEndpointUris("/connect/introspect")
@@ -158,7 +168,9 @@ builder.Services.AddOpenIddict()
         options.UseAspNetCore()
                .EnableAuthorizationEndpointPassthrough()
                .EnableTokenEndpointPassthrough()
-               .EnableStatusCodePagesIntegration();
+               .EnableUserInfoEndpointPassthrough()
+               .EnableStatusCodePagesIntegration()
+               .DisableTransportSecurityRequirement(); // Allow HTTP when behind IIS/ARR reverse proxy
 
         // Configure token lifetimes
         options.SetAccessTokenLifetime(TimeSpan.FromMinutes(15))
@@ -242,7 +254,10 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "https://localhost:5173")
+        policy.WithOrigins(
+                  "http://localhost:5173",
+                  "https://localhost:5173",
+                  "https://maendeleo.martiendejong.nl")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -251,13 +266,19 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Trust forwarded headers from IIS/ARR reverse proxy (X-Forwarded-For, X-Forwarded-Proto)
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+});
+
+
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
 app.UseCors();
 app.UseStaticFiles(); // serve admin-ui/dist from wwwroot
 app.UseApiKeyAuthentication(); // API key auth before JWT (sets HttpContext.User if X-API-Key header present)
