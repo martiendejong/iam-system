@@ -1,5 +1,7 @@
+using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using OpenIddict.Abstractions;
 
 namespace IAM.API.Workers;
@@ -10,13 +12,22 @@ namespace IAM.API.Workers;
 public class DatabaseSeeder : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly IConfiguration _configuration;
 
-    public DatabaseSeeder(IServiceProvider serviceProvider)
+    public DatabaseSeeder(IServiceProvider serviceProvider, IConfiguration configuration)
     {
         _serviceProvider = serviceProvider;
+        _configuration = configuration;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        // Fire-and-forget so we don't block the Windows SCM startup timeout (30s)
+        _ = Task.Run(() => InitializeDatabaseAsync(cancellationToken), cancellationToken);
+        return Task.CompletedTask;
+    }
+
+    private async Task InitializeDatabaseAsync(CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
 
@@ -25,9 +36,72 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, cancellationToken);
+        await SeedAdminUserAsync(context, cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private async Task SeedAdminUserAsync(IAMDbContext context, CancellationToken cancellationToken)
+    {
+        var email = _configuration["AdminSeed:Email"];
+        var password = _configuration["AdminSeed:Password"];
+        var firstName = _configuration["AdminSeed:FirstName"] ?? "Admin";
+        var lastName = _configuration["AdminSeed:LastName"] ?? "User";
+
+        if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password)) return;
+
+        if (await context.Users.AnyAsync(u => u.Email == email, cancellationToken)) return;
+
+        var adminRole = await context.Roles.FirstOrDefaultAsync(r => r.Name == "Admin", cancellationToken);
+        if (adminRole == null)
+        {
+            adminRole = new Role
+            {
+                Id = Guid.NewGuid(),
+                Name = "Admin",
+                Description = "Full system administrator access",
+                IsSystemRole = true,
+                Permissions = "[\"*\"]",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            context.Roles.Add(adminRole);
+
+            var userRole = new Role
+            {
+                Id = Guid.NewGuid(),
+                Name = "User",
+                Description = "Standard user access",
+                IsSystemRole = true,
+                Permissions = "[\"User.View\", \"User.Update\"]",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            context.Roles.Add(userRole);
+        }
+
+        var admin = new User
+        {
+            Id = Guid.NewGuid(),
+            Email = email,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            FirstName = firstName,
+            LastName = lastName,
+            EmailConfirmed = true,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        context.Users.Add(admin);
+
+        context.UserRoles.Add(new UserRole
+        {
+            UserId = admin.Id,
+            RoleId = adminRole.Id,
+            GrantedAt = DateTime.UtcNow
+        });
+
+        await context.SaveChangesAsync(cancellationToken);
+    }
 
     private static async Task SeedScopesAsync(IServiceProvider provider, CancellationToken cancellationToken)
     {
@@ -209,6 +283,46 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Jengo Web (Authorization Code Flow with PKCE)
+        if (await manager.FindByClientIdAsync("jengo-web", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-web",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Web",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/jengo/api/auth/callback"),
+                    new Uri("http://localhost:3220/api/auth/callback"),
+                    new Uri("http://localhost:3001/api/auth/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/jengo/"),
+                    new Uri("http://localhost:3220/"),
+                    new Uri("http://localhost:3001/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         // Test Client #4: Backend Service (Client Credentials Flow)
         if (await manager.FindByClientIdAsync("backend_service", cancellationToken) == null)
         {
@@ -226,6 +340,39 @@ public class DatabaseSeeder : IHostedService
                     OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}tenants"
+                }
+            }, cancellationToken);
+        }
+
+        // Open WebUI (Authorization Code Flow with client secret)
+        if (await manager.FindByClientIdAsync("open-webui", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "open-webui",
+                ClientSecret = "Ow9kP2mXqR5vN8dL3jT7",
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Open WebUI",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/oauth/oidc/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
                 }
             }, cancellationToken);
         }

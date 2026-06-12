@@ -145,11 +145,12 @@ builder.Services.AddOpenIddict()
                .SetIntrospectionEndpointUris("/connect/introspect")
                .SetRevocationEndpointUris("/connect/revoke");
 
-        // Enable authorization code flow with PKCE and refresh token flow
+        // Enable authorization code flow, refresh token, and client credentials flows.
+        // PKCE is enforced per-client via Requirements.Features.ProofKeyForCodeExchange in the seeder —
+        // not globally, since confidential clients (e.g. open-webui) don't require it.
         options.AllowAuthorizationCodeFlow()
                .AllowRefreshTokenFlow()
-               .AllowClientCredentialsFlow()
-               .RequireProofKeyForCodeExchange();
+               .AllowClientCredentialsFlow();
 
         // Register scopes (permissions that clients can request)
         options.RegisterScopes(
