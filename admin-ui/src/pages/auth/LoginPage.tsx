@@ -39,7 +39,7 @@ export default function LoginPage() {
   const handleSocialLogin = async (provider: IdentityProvider) => {
     try {
       setError('');
-      const redirectUri = `${window.location.origin}/login`;
+      const redirectUri = `${window.location.origin}/auth/login`;
       const { authorizationUrl } = await api.getSocialAuthUrl(provider.id, redirectUri);
       window.location.href = authorizationUrl;
     } catch (err: any) {

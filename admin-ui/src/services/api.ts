@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
 import type { LoginRequest, LoginResponse, RegisterRequest, User } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://localhost:5001';
+const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
 
 class ApiService {
   private client: AxiosInstance;
@@ -46,7 +46,7 @@ class ApiService {
           } catch {
             // Refresh failed, clear auth and redirect to login
             localStorage.removeItem('accessToken');
-            window.location.href = '/login';
+            window.location.href = '/auth/login';
           }
         }
         return Promise.reject(error);
@@ -84,8 +84,8 @@ class ApiService {
 
   // User endpoints
   async getUsers(): Promise<User[]> {
-    const response = await this.client.get<User[]>('/users');
-    return response.data;
+    const response = await this.client.get<any>('/users');
+    return response.data?.items ?? response.data;
   }
 
   async getUser(id: string): Promise<User> {
@@ -94,21 +94,23 @@ class ApiService {
   }
 
   async updateUser(id: string, data: Partial<User>): Promise<User> {
+    // Backend supports PUT /users/{id} for SuperAdmin (added) and PUT /users/me for self
     const response = await this.client.put<User>(`/users/${id}`, data);
     return response.data;
   }
 
   async activateUser(id: string): Promise<void> {
-    await this.client.put(`/users/${id}/activate`);
+    await this.client.post(`/users/${id}/activate`, {});
   }
 
   async deactivateUser(id: string): Promise<void> {
-    await this.client.put(`/users/${id}/deactivate`);
+    await this.client.post(`/users/${id}/deactivate`, {});
   }
 
   async getUserRoles(id: string): Promise<any[]> {
-    const response = await this.client.get(`/users/${id}/roles`);
-    return response.data;
+    // Roles are embedded in the user object from GET /users/{id}
+    const response = await this.client.get<any>(`/users/${id}`);
+    return response.data?.roles ?? [];
   }
 
   // Role endpoints
@@ -137,11 +139,11 @@ class ApiService {
   }
 
   async assignRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
-    await this.client.post(`/roles/${roleId}/assign`, { userId, tenantId });
+    await this.client.post(`/users/${userId}/roles`, { roleId, tenantId });
   }
 
-  async revokeRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
-    await this.client.post(`/roles/${roleId}/revoke`, { userId, tenantId });
+  async revokeRole(roleId: string, userId: string, _tenantId?: string): Promise<void> {
+    await this.client.delete(`/users/${userId}/roles/${roleId}`);
   }
 
   // Tenant endpoints
