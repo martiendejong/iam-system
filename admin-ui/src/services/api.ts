@@ -38,6 +38,12 @@ class ApiService {
       (response) => response,
       async (error: AxiosError) => {
         if (error.response?.status === 401) {
+          const url = error.config?.url ?? '';
+          // Don't retry if this request IS the refresh or login endpoint
+          if (url.includes('/auth/refresh') || url.includes('/auth/login')) {
+            localStorage.removeItem('accessToken');
+            return Promise.reject(error);
+          }
           // Try to refresh token
           try {
             await this.refreshToken();
