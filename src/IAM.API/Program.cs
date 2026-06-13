@@ -12,6 +12,7 @@ using OpenIddict.Validation.AspNetCore;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService();
 
 // Add services to the container
 builder.Services.AddOpenApi();

@@ -39,7 +39,7 @@ public class RedisCacheService : ICacheService
             }
 
             await db.StringIncrementAsync(StatsHitsKey);
-            return JsonSerializer.Deserialize<T>(value!, _jsonOptions);
+            return JsonSerializer.Deserialize<T>((string)value!, _jsonOptions);
         }
         catch (RedisConnectionException ex)
         {
@@ -149,7 +149,7 @@ public class RedisCacheService : ICacheService
             if (!value.IsNullOrEmpty)
             {
                 await db.StringIncrementAsync(StatsHitsKey);
-                return JsonSerializer.Deserialize<T>(value!, _jsonOptions)!;
+                return JsonSerializer.Deserialize<T>((string)value!, _jsonOptions)!;
             }
 
             await db.StringIncrementAsync(StatsMissesKey);
