@@ -6,6 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/
 
 class ApiService {
   private client: AxiosInstance;
+  private refreshPromise: Promise<void> | null = null;
 
   /** Expose the axios client for use by sub-API modules */
   getClient(): AxiosInstance {
@@ -44,13 +45,21 @@ class ApiService {
             localStorage.removeItem('accessToken');
             return Promise.reject(error);
           }
-          // Try to refresh token
+          // Only attempt refresh if we have a stored token that may have expired.
+          // Without this guard, unauthenticated pages (e.g. login page calling
+          // identity-providers) would loop: 401 → refresh → 401 → redirect to
+          // login → reload → repeat, burning rate limit each cycle.
+          if (!localStorage.getItem('accessToken')) {
+            return Promise.reject(error);
+          }
+          // Deduplicate concurrent refresh attempts: if one is already in-flight,
+          // all concurrent 401s await the same promise instead of each making a
+          // separate refresh request (which would fail because the cookie is
+          // single-use).
           try {
             await this.refreshToken();
-            // Retry the failed request
             return this.client.request(error.config!);
           } catch {
-            // Refresh failed, clear auth and redirect to login
             localStorage.removeItem('accessToken');
             window.location.href = '/auth/login';
           }
@@ -79,8 +88,13 @@ class ApiService {
   }
 
   async refreshToken(): Promise<void> {
-    const response = await this.client.post<{ accessToken: string }>('/auth/refresh');
-    localStorage.setItem('accessToken', response.data.accessToken);
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.client
+        .post<{ accessToken: string }>('/auth/refresh')
+        .then(r => { localStorage.setItem('accessToken', r.data.accessToken); })
+        .finally(() => { this.refreshPromise = null; });
+    }
+    return this.refreshPromise;
   }
 
   async getCurrentUser(): Promise<User> {
