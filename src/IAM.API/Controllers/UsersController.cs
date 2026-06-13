@@ -296,9 +296,9 @@ public class UsersController : ControllerBase
             return NotFound(new { error = "Role not found" });
         }
 
-        // Check if role assignment already exists
+        // Check if role assignment already exists (scoped to tenant)
         var existingAssignment = await _context.UserRoles
-            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == request.RoleId);
+            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == request.RoleId && ur.TenantId == request.TenantId);
 
         if (existingAssignment != null)
         {
@@ -341,10 +341,10 @@ public class UsersController : ControllerBase
     /// </summary>
     [HttpDelete("{userId}/roles/{roleId}")]
     [Authorize(Roles = "SuperAdmin")]
-    public async Task<IActionResult> RemoveRole(Guid userId, Guid roleId)
+    public async Task<IActionResult> RemoveRole(Guid userId, Guid roleId, [FromQuery] Guid? tenantId)
     {
         var userRole = await _context.UserRoles
-            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == roleId);
+            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == roleId && ur.TenantId == tenantId);
 
         if (userRole == null)
         {
