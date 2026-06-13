@@ -98,7 +98,8 @@ export default function TenantFormPage() {
 
     // Define hierarchy rules
     const hierarchyRules: Record<TenantTypeValue, TenantTypeValue[]> = {
-      Organization: [], // Top level, no parent
+      Organization: [],
+      Server: [],
       Building: ['Organization'],
       Floor: ['Building'],
       Room: ['Floor'],

@@ -40,6 +40,7 @@ export interface Tenant {
 
 export const TenantType = {
   Organization: 'Organization',
+  Server: 'Server',
   Building: 'Building',
   Floor: 'Floor',
   Room: 'Room',

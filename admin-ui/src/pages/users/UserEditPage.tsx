@@ -12,7 +12,7 @@ interface UserFormData {
   phoneNumber?: string;
 }
 
-const JENGO_ENVIRONMENTS = [
+const JENGO_SERVERS = [
   { id: '10000000-0000-0000-0000-000000000001', label: 'Development' },
   { id: '10000000-0000-0000-0000-000000000002', label: 'Production' },
 ] as const;
@@ -145,7 +145,7 @@ export default function UserEditPage() {
   );
   const unassignedStandardRoles = standardRoles.filter(r => !assignedStandardRoleIds.has(r.id));
 
-  // Check if user has a specific Jengo role in a specific environment
+  // Check if user has a specific Jengo role on a specific server
   const hasJengoAccess = (roleId: string, tenantId: string) =>
     userRoles.some((ur: any) => (ur.roleId ?? ur.role?.id ?? ur.id) === roleId && ur.tenantId === tenantId);
 
@@ -246,14 +246,14 @@ export default function UserEditPage() {
               </svg>
               <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Jengo Access</h2>
             </div>
-            <p className="text-xs text-gray-400 mb-5">Per-environment access control for Jengo applications</p>
+            <p className="text-xs text-gray-400 mb-5">Per-server access control for Jengo applications</p>
 
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr>
                     <th className="text-left text-xs font-medium text-gray-500 pb-3 pr-4 w-48">Role</th>
-                    {JENGO_ENVIRONMENTS.map(env => (
+                    {JENGO_SERVERS.map(env => (
                       <th key={env.id} className="text-center text-xs font-semibold text-gray-700 pb-3 px-6">
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium ${
                           env.label === 'Production'
@@ -278,7 +278,7 @@ export default function UserEditPage() {
                           <div className="font-medium text-gray-800 text-sm">{meta?.label ?? roleName}</div>
                           <div className="text-xs text-gray-400 mt-0.5">{meta?.desc}</div>
                         </td>
-                        {JENGO_ENVIRONMENTS.map(env => {
+                        {JENGO_SERVERS.map(env => {
                           const on = hasJengoAccess(role.id, env.id);
                           const key = `${role.id}:${env.id}`;
                           const busy = togglingKey === key;
