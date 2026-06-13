@@ -5,6 +5,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
@@ -13,6 +14,14 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService();
+
+// Trust the IIS/ARR reverse proxy so X-Forwarded-For reaches the rate limiter
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
+});
 
 // Add services to the container
 builder.Services.AddOpenApi();
@@ -258,6 +267,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.UseForwardedHeaders(); // Must be first — rewrites RemoteIpAddress from X-Forwarded-For
 app.UseHttpsRedirection();
 app.UseCors();
 app.UseStaticFiles(); // serve admin-ui/dist from wwwroot
