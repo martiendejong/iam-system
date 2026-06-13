@@ -162,8 +162,10 @@ class ApiService {
     await this.client.post(`/users/${userId}/roles`, { roleId, tenantId });
   }
 
-  async revokeRole(roleId: string, userId: string, _tenantId?: string): Promise<void> {
-    await this.client.delete(`/users/${userId}/roles/${roleId}`);
+  async revokeRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
+    await this.client.delete(`/users/${userId}/roles/${roleId}`, {
+      params: tenantId ? { tenantId } : {},
+    });
   }
 
   // Tenant endpoints

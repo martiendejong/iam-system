@@ -4,7 +4,7 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import { api } from '../../services/api';
 import type { Role } from '../../types';
 
-const CATEGORY_ORDER = ['Real Estate', 'System'];
+const CATEGORY_ORDER = ['Jengo', 'Real Estate', 'System'];
 
 const CATEGORY_STYLE: Record<string, { header: string; badge: string; icon: string }> = {
   'Real Estate': {
@@ -16,6 +16,11 @@ const CATEGORY_STYLE: Record<string, { header: string; badge: string; icon: stri
     header: 'bg-slate-50 border-slate-200',
     badge: 'bg-slate-100 text-slate-600',
     icon: 'text-slate-500',
+  },
+  Jengo: {
+    header: 'bg-violet-50 border-violet-200',
+    badge: 'bg-violet-100 text-violet-700',
+    icon: 'text-violet-600',
   },
 };
 
