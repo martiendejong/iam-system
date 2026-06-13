@@ -261,26 +261,39 @@ export default function UserEditPage() {
             </div>
           )}
 
-          {unassignedRoles.length > 0 && (
-            <div>
-              <p className="text-xs text-gray-500 mb-2">Add a role:</p>
-              <div className="flex flex-wrap gap-2">
-                {unassignedRoles.map((role) => (
-                  <button
-                    key={role.id}
-                    onClick={() => handleAssignRole(role.id)}
-                    disabled={assigningRole === role.id}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-50 text-gray-600 text-xs font-medium rounded-full border border-gray-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-colors disabled:opacity-50"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                    {role.name}
-                  </button>
+          {unassignedRoles.length > 0 && (() => {
+            const grouped = new Map<string, typeof unassignedRoles>();
+            for (const r of unassignedRoles) {
+              const cat = r.category || 'Other';
+              if (!grouped.has(cat)) grouped.set(cat, []);
+              grouped.get(cat)!.push(r);
+            }
+            return (
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">Add a role:</p>
+                {[...grouped.entries()].map(([cat, catRoles]) => (
+                  <div key={cat}>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">{cat}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {catRoles.map((role) => (
+                        <button
+                          key={role.id}
+                          onClick={() => handleAssignRole(role.id)}
+                          disabled={assigningRole === role.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-50 text-gray-600 text-xs font-medium rounded-full border border-gray-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-colors disabled:opacity-50"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                          {role.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {/* Meta info */}
