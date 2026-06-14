@@ -217,6 +217,7 @@ export default function TenantFormPage() {
                 >
                   <option value="">Select a type</option>
                   <option value="Organization">Organization</option>
+                  <option value="Server">Server</option>
                   <option value="Building">Building</option>
                   <option value="Floor">Floor</option>
                   <option value="Room">Room</option>
@@ -231,7 +232,7 @@ export default function TenantFormPage() {
               </div>
 
               {/* Parent Tenant */}
-              {selectedType && selectedType !== 'Organization' && (
+              {selectedType && selectedType !== 'Organization' && selectedType !== 'Server' && (
                 <div>
                   <label htmlFor="parentId" className="block text-sm font-medium text-gray-700">
                     Parent Tenant *
@@ -276,6 +277,7 @@ export default function TenantFormPage() {
                 <h4 className="font-medium text-gray-900 mb-2">Tenant Type Descriptions:</h4>
                 <ul className="space-y-1 text-gray-600">
                   <li><strong>Organization:</strong> Top-level entity (e.g., company, institution)</li>
+                  <li><strong>Server:</strong> A server or deployment environment (e.g., Development, Production)</li>
                   <li><strong>Building:</strong> Physical buildings within an organization</li>
                   <li><strong>Floor:</strong> Individual floors within a building</li>
                   <li><strong>Room:</strong> Rooms or units within a floor</li>
@@ -294,7 +296,7 @@ export default function TenantFormPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || (selectedType !== 'Organization' && validParents.length === 0)}
+                  disabled={saving || (selectedType !== 'Organization' && selectedType !== 'Server' && validParents.length === 0)}
                   className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : isEditMode ? 'Update Tenant' : 'Create Tenant'}
