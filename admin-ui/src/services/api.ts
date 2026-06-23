@@ -37,17 +37,25 @@ class ApiService {
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
-        if (error.response?.status === 401) {
-          // Try to refresh token
-          try {
-            await this.refreshToken();
-            // Retry the failed request
-            return this.client.request(error.config!);
-          } catch {
-            // Refresh failed, clear auth and redirect to login
+        const originalRequest = error.config as any;
+        if (error.response?.status === 401 && !originalRequest?._retry) {
+          originalRequest._retry = true;
+          const hasToken = !!localStorage.getItem('accessToken');
+          // Only attempt refresh if we had a token and this isn't the refresh endpoint itself
+          if (hasToken && !originalRequest.url?.includes('/auth/refresh')) {
+            try {
+              await this.refreshToken();
+              return this.client.request(originalRequest);
+            } catch {
+              localStorage.removeItem('accessToken');
+              window.location.href = '/auth/login';
+            }
+          } else if (hasToken) {
+            // Refresh endpoint itself returned 401 — session is gone
             localStorage.removeItem('accessToken');
-            window.location.href = '/login';
+            window.location.href = '/auth/login';
           }
+          // No token: just reject — caller handles the error (e.g. login page ignores provider 401s)
         }
         return Promise.reject(error);
       }
@@ -84,8 +92,8 @@ class ApiService {
 
   // User endpoints
   async getUsers(): Promise<User[]> {
-    const response = await this.client.get<User[]>('/users');
-    return response.data;
+    const response = await this.client.get<{ items: User[]; totalCount: number }>('/users?pageSize=100');
+    return response.data.items ?? [];
   }
 
   async getUser(id: string): Promise<User> {
@@ -104,6 +112,10 @@ class ApiService {
 
   async deactivateUser(id: string): Promise<void> {
     await this.client.put(`/users/${id}/deactivate`);
+  }
+
+  async changeUserPassword(id: string, newPassword: string): Promise<void> {
+    await this.client.post(`/users/${id}/change-password`, { newPassword });
   }
 
   async getUserRoles(id: string): Promise<any[]> {

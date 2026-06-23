@@ -51,7 +51,7 @@ import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
   return (
-    <Router>
+    <Router basename="/auth">
       <AuthProvider>
         <Routes>
           {/* Public routes */}

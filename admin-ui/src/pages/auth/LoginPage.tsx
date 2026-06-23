@@ -39,7 +39,7 @@ export default function LoginPage() {
   const handleSocialLogin = async (provider: IdentityProvider) => {
     try {
       setError('');
-      const redirectUri = `${window.location.origin}/login`;
+      const redirectUri = `${window.location.origin}/auth/login`;
       const { authorizationUrl } = await api.getSocialAuthUrl(provider.id, redirectUri);
       window.location.href = authorizationUrl;
     } catch (err: any) {
@@ -84,8 +84,10 @@ export default function LoginPage() {
       await login({ email, password });
       // If returnUrl is an OIDC authorize request, use full page navigation
       // so the browser sends the session cookie to the backend
-      if (returnUrl.startsWith('/connect/')) {
-        window.location.href = returnUrl;
+      if (returnUrl.startsWith('/connect/') || returnUrl.startsWith('/auth/connect/')) {
+        // Full navigation so browser sends the IAM.Session cookie to the OIDC authorize endpoint
+        const fullUrl = returnUrl.startsWith('/auth/') ? returnUrl : '/auth' + returnUrl;
+        window.location.href = fullUrl;
       } else {
         navigate(returnUrl);
       }

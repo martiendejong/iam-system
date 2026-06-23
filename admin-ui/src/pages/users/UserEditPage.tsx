@@ -12,6 +12,11 @@ interface UserFormData {
   phoneNumber?: string;
 }
 
+interface PasswordFormData {
+  newPassword: string;
+  confirmPassword: string;
+}
+
 export default function UserEditPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -19,6 +24,9 @@ export default function UserEditPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [user, setUser] = useState<User | null>(null);
+  const [pwdSaving, setPwdSaving] = useState(false);
+  const [pwdError, setPwdError] = useState('');
+  const [pwdSuccess, setPwdSuccess] = useState('');
 
   const {
     register,
@@ -26,6 +34,14 @@ export default function UserEditPage() {
     reset,
     formState: { errors },
   } = useForm<UserFormData>();
+
+  const {
+    register: registerPwd,
+    handleSubmit: handleSubmitPwd,
+    reset: resetPwd,
+    watch: watchPwd,
+    formState: { errors: pwdErrors },
+  } = useForm<PasswordFormData>();
 
   useEffect(() => {
     if (id) {
@@ -61,6 +77,21 @@ export default function UserEditPage() {
       setError(err.response?.data?.message || 'Failed to update user');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const onPasswordSubmit = async (data: PasswordFormData) => {
+    try {
+      setPwdSaving(true);
+      setPwdError('');
+      setPwdSuccess('');
+      await api.changeUserPassword(id!, data.newPassword);
+      setPwdSuccess('Password changed successfully');
+      resetPwd();
+    } catch (err: any) {
+      setPwdError(err.response?.data?.error || 'Failed to change password');
+    } finally {
+      setPwdSaving(false);
     }
   };
 
@@ -273,6 +304,88 @@ export default function UserEditPage() {
                   className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* Change Password */}
+        <div className="mt-6 bg-white shadow sm:rounded-lg">
+          <div className="px-4 py-5 sm:p-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900 mb-1">
+              Change Password
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Set a new password for this user. They will be notified to use the new password on next login.
+            </p>
+
+            {pwdError && (
+              <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+                {pwdError}
+              </div>
+            )}
+            {pwdSuccess && (
+              <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
+                {pwdSuccess}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitPwd(onPasswordSubmit)} className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700">
+                    New Password *
+                  </label>
+                  <input
+                    type="password"
+                    id="newPassword"
+                    {...registerPwd('newPassword', {
+                      required: 'New password is required',
+                      minLength: { value: 8, message: 'Minimum 8 characters' },
+                    })}
+                    className={`mt-1 block w-full rounded-md shadow-sm sm:text-sm ${
+                      pwdErrors.newPassword
+                        ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
+                        : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'
+                    }`}
+                  />
+                  {pwdErrors.newPassword && (
+                    <p className="mt-1 text-sm text-red-600">{pwdErrors.newPassword.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
+                    Confirm Password *
+                  </label>
+                  <input
+                    type="password"
+                    id="confirmPassword"
+                    {...registerPwd('confirmPassword', {
+                      required: 'Please confirm the password',
+                      validate: (val) =>
+                        val === watchPwd('newPassword') || 'Passwords do not match',
+                    })}
+                    className={`mt-1 block w-full rounded-md shadow-sm sm:text-sm ${
+                      pwdErrors.confirmPassword
+                        ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
+                        : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'
+                    }`}
+                  />
+                  {pwdErrors.confirmPassword && (
+                    <p className="mt-1 text-sm text-red-600">{pwdErrors.confirmPassword.message}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={pwdSaving}
+                  className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                >
+                  {pwdSaving ? 'Changing...' : 'Change Password'}
                 </button>
               </div>
             </form>

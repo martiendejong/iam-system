@@ -322,7 +322,32 @@ public class UsersController : ControllerBase
 
         return Ok(new { message = "Role removed successfully" });
     }
+
+    /// <summary>
+    /// Change password for any user (SuperAdmin only)
+    /// </summary>
+    [HttpPost("{id}/change-password")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> ChangeUserPassword(Guid id, [FromBody] AdminChangePasswordRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
+            return BadRequest(new { error = "Password must be at least 8 characters" });
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Password changed successfully" });
+    }
 }
 
 public record UpdateProfileRequest(string? FirstName, string? LastName);
 public record AssignRoleRequest(Guid RoleId, Guid? TenantId, DateTime? ExpiresAt);
+public record AdminChangePasswordRequest(string NewPassword);
