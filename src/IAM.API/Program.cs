@@ -281,7 +281,30 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-app.UseStaticFiles(); // serve admin-ui/dist from wwwroot
+
+// HTML responses (including SPA fallback) must never be cached; hashed assets can be cached indefinitely
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.OnStarting(() =>
+    {
+        if (ctx.Response.ContentType?.StartsWith("text/html") == true)
+        {
+            ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+            ctx.Response.Headers["Pragma"] = "no-cache";
+        }
+        return Task.CompletedTask;
+    });
+    await next();
+});
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        if (ctx.File.Name != "index.html")
+            ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+    }
+});
 app.UseApiKeyAuthentication(); // API key auth before JWT (sets HttpContext.User if X-API-Key header present)
 app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
