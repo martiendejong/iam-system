@@ -453,7 +453,7 @@ export default function UserEditPage() {
                       required: 'New password is required',
                       minLength: { value: 8, message: 'Minimum 8 characters' },
                     })}
-                    className={`mt-1 block w-full rounded-md shadow-sm sm:text-sm ${
+                    className={`mt-1 block w-full rounded-md shadow-sm sm:text-sm px-3 py-2.5 border ${
                       pwdErrors.newPassword
                         ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                         : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'
@@ -476,7 +476,7 @@ export default function UserEditPage() {
                       validate: (val) =>
                         val === watchPwd('newPassword') || 'Passwords do not match',
                     })}
-                    className={`mt-1 block w-full rounded-md shadow-sm sm:text-sm ${
+                    className={`mt-1 block w-full rounded-md shadow-sm sm:text-sm px-3 py-2.5 border ${
                       pwdErrors.confirmPassword
                         ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                         : 'border-gray-300 focus:ring-indigo-500 focus:border-indigo-500'
