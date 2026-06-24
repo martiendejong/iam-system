@@ -1,8 +1,35 @@
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import DashboardLayout from '../components/layout/DashboardLayout';
+import { api } from '../services/api';
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+
+  const [userCount, setUserCount] = useState<number | null>(null);
+  const [roleCount, setRoleCount] = useState<number | null>(null);
+  const [tenantCount, setTenantCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const [users, roles, tenants] = await Promise.allSettled([
+        api.getUserCount(),
+        api.getRoles(),
+        api.getTenants(),
+      ]);
+      if (cancelled) return;
+      if (users.status === 'fulfilled') setUserCount(users.value);
+      if (roles.status === 'fulfilled') setRoleCount(Array.isArray(roles.value) ? roles.value.length : 0);
+      if (tenants.status === 'fulfilled') setTenantCount(Array.isArray(tenants.value) ? tenants.value.length : 0);
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const fmt = (n: number | null) => (n === null ? '—' : n.toLocaleString());
 
   return (
     <DashboardLayout>
@@ -26,7 +53,7 @@ export default function DashboardPage() {
                       Total Users
                     </dt>
                     <dd className="text-lg font-medium text-gray-900">
-                      Loading...
+                      {fmt(userCount)}
                     </dd>
                   </dl>
                 </div>
@@ -48,7 +75,7 @@ export default function DashboardPage() {
                       Total Roles
                     </dt>
                     <dd className="text-lg font-medium text-gray-900">
-                      Loading...
+                      {fmt(roleCount)}
                     </dd>
                   </dl>
                 </div>
@@ -70,7 +97,7 @@ export default function DashboardPage() {
                       Total Tenants
                     </dt>
                     <dd className="text-lg font-medium text-gray-900">
-                      Loading...
+                      {fmt(tenantCount)}
                     </dd>
                   </dl>
                 </div>
@@ -83,10 +110,16 @@ export default function DashboardPage() {
         <div className="mt-8">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Quick Actions</h3>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <button className="inline-flex items-center px-4 py-3 border border-transparent text-sm font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200">
+            <button
+              onClick={() => navigate('/users/new')}
+              className="inline-flex items-center px-4 py-3 border border-transparent text-sm font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200"
+            >
               Create New User
             </button>
-            <button className="inline-flex items-center px-4 py-3 border border-transparent text-sm font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200">
+            <button
+              onClick={() => navigate('/roles')}
+              className="inline-flex items-center px-4 py-3 border border-transparent text-sm font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200"
+            >
               Manage Roles
             </button>
           </div>

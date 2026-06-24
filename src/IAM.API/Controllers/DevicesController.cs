@@ -47,6 +47,28 @@ public class DevicesController : ControllerBase
     }
 
     /// <summary>
+    /// List all devices
+    /// </summary>
+    [HttpGet]
+    public async Task<IActionResult> GetDevices()
+    {
+        var devices = await _deviceService.GetAllDevicesAsync();
+
+        return Ok(devices.Select(d => new
+        {
+            id = d.Id,
+            deviceId = d.DeviceId,
+            name = d.Name,
+            deviceType = d.DeviceType,
+            authenticationMethod = d.AuthenticationMethod,
+            isActive = d.IsActive,
+            isOnline = d.IsOnline,
+            lastSeenAt = d.LastSeenAt,
+            resourcePath = d.ResourcePath
+        }));
+    }
+
+    /// <summary>
     /// Get device by internal ID
     /// </summary>
     [HttpGet("{id:guid}")]

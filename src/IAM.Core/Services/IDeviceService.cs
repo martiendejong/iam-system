@@ -7,6 +7,7 @@ public interface IDeviceService
     Task<DeviceResult> RegisterDeviceAsync(RegisterDeviceRequest request);
     Task<Device?> GetDeviceAsync(Guid id);
     Task<Device?> GetDeviceByDeviceIdAsync(string deviceId);
+    Task<IEnumerable<Device>> GetAllDevicesAsync();
     Task<IEnumerable<Device>> GetDevicesByTenantAsync(Guid tenantId);
     Task<IEnumerable<Device>> GetDevicesByTypeAsync(string deviceType, Guid? tenantId = null);
     Task<DeviceResult> UpdateDeviceAsync(Guid id, UpdateDeviceRequest request);

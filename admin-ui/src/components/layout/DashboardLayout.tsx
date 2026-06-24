@@ -1,10 +1,40 @@
 import type { ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
 interface DashboardLayoutProps {
   children: ReactNode;
 }
+
+const NAV_ITEMS: { to: string; label: string }[] = [
+  { to: '/dashboard', label: 'Dashboard' },
+  { to: '/users', label: 'Users' },
+  { to: '/roles', label: 'Roles' },
+  { to: '/tenants', label: 'Tenants' },
+  { to: '/devices', label: 'Devices' },
+  { to: '/policies', label: 'Policies' },
+  { to: '/identity-providers', label: 'Identity Providers' },
+  { to: '/directory-sync', label: 'Directory Sync' },
+  { to: '/access-requests', label: 'Access Requests' },
+  { to: '/workflow-templates', label: 'Workflows' },
+  { to: '/audit', label: 'Audit Log' },
+  { to: '/compliance', label: 'Compliance' },
+  { to: '/invitations', label: 'Invitations' },
+  { to: '/consent', label: 'Consent' },
+  { to: '/scim', label: 'SCIM' },
+  { to: '/bulk-operations', label: 'Bulk Ops' },
+  { to: '/claims-mapping', label: 'Claims' },
+  { to: '/branding', label: 'Branding' },
+  { to: '/network-policy', label: 'Network Policy' },
+  { to: '/pam', label: 'PAM' },
+  { to: '/secrets', label: 'Secrets Vault' },
+  { to: '/risk', label: 'Risk' },
+  { to: '/security-alerts', label: 'Alerts' },
+  { to: '/visitors', label: 'Visitors' },
+  { to: '/service-accounts', label: 'Service Accounts' },
+  { to: '/regions', label: 'Regions' },
+  { to: '/delegation', label: 'Delegation' },
+];
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const { user, logout } = useAuth();
@@ -16,198 +46,49 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Top Navigation */}
-      <nav className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <h1 className="text-xl font-bold text-gray-900">IAM System</h1>
-              </div>
-              <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
-                <Link
-                  to="/dashboard"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Dashboard
-                </Link>
-                <Link
-                  to="/users"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Users
-                </Link>
-                <Link
-                  to="/roles"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Roles
-                </Link>
-                <Link
-                  to="/tenants"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Tenants
-                </Link>
-                <Link
-                  to="/devices"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Devices
-                </Link>
-                <Link
-                  to="/policies"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Policies
-                </Link>
-                <Link
-                  to="/identity-providers"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Identity Providers
-                </Link>
-                <Link
-                  to="/directory-sync"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Directory Sync
-                </Link>
-                <Link
-                  to="/access-requests"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Access Requests
-                </Link>
-                <Link
-                  to="/workflow-templates"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Workflows
-                </Link>
-                <Link
-                  to="/audit"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Audit Log
-                </Link>
-                <Link
-                  to="/compliance"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Compliance
-                </Link>
-                <Link
-                  to="/invitations"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Invitations
-                </Link>
-                <Link
-                  to="/consent"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Consent
-                </Link>
-                <Link
-                  to="/scim"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  SCIM
-                </Link>
-                <Link
-                  to="/bulk-operations"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Bulk Ops
-                </Link>
-                <Link
-                  to="/claims-mapping"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Claims
-                </Link>
-                <Link
-                  to="/branding"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Branding
-                </Link>
-                <Link
-                  to="/network-policy"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Network Policy
-                </Link>
-                <Link
-                  to="/pam"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  PAM
-                </Link>
-                <Link
-                  to="/secrets"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Secrets Vault
-                </Link>
-                <Link
-                  to="/risk"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Risk
-                </Link>
-                <Link
-                  to="/security-alerts"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Alerts
-                </Link>
-                <Link
-                  to="/visitors"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Visitors
-                </Link>
-                <Link
-                  to="/service-accounts"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Service Accounts
-                </Link>
-                <Link
-                  to="/regions"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Regions
-                </Link>
-                <Link
-                  to="/delegation"
-                  className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
-                >
-                  Delegation
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center">
-              <span className="text-gray-700 text-sm mr-4">
-                {user?.firstName} {user?.lastName}
-              </span>
-              <button
-                onClick={handleLogout}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
+    <div className="flex h-screen bg-gray-100">
+      {/* Left Sidebar */}
+      <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col">
+        <div className="h-16 flex items-center px-6 border-b border-gray-200 flex-shrink-0">
+          <h1 className="text-xl font-bold text-gray-900">IAM System</h1>
         </div>
-      </nav>
+
+        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `block px-3 py-2 rounded-md text-sm font-medium ${
+                  isActive
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                }`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="border-t border-gray-200 p-4 flex-shrink-0">
+          <div className="text-sm text-gray-700 mb-2 truncate">
+            {user?.firstName} {user?.lastName}
+          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+          >
+            Logout
+          </button>
+        </div>
+      </aside>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        {children}
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+          {children}
+        </div>
       </main>
     </div>
   );

@@ -1,6 +1,8 @@
 using System.Text;
+using IAM.API.Auth;
 using IAM.API.Middleware;
 using IAM.API.Workers;
+using Microsoft.AspNetCore.Authentication;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using IAM.Infrastructure.Services;
@@ -218,6 +220,9 @@ builder.Services.AddAuthentication(options =>
     options.SlidingExpiration = true;
 });
 
+// SuperAdmin inherits all admin roles (so role-guarded endpoints accept SuperAdmin)
+builder.Services.AddScoped<IClaimsTransformation, SuperAdminClaimsTransformation>();
+
 // Redis (for caching) with in-memory fallback
 var redisConnectionString = builder.Configuration["Redis:ConnectionString"];
 if (!string.IsNullOrEmpty(redisConnectionString))
@@ -318,7 +323,11 @@ app.MapHub<IAM.API.Hubs.TelemetryHub>("/hubs/telemetry");
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
-// SPA fallback — serves index.html for any path not matched by API routes
+// Unmatched API routes must return JSON 404, never the SPA HTML — otherwise the
+// frontend tries to parse index.html as JSON and crashes (e.g. .map is not a function).
+app.MapFallback("/api/{**rest}", () => Results.NotFound(new { error = "API endpoint not found" }));
+
+// SPA fallback — serves index.html for any non-API path not matched by a route
 app.MapFallbackToFile("index.html");
 
 // Seed development data (only in Development environment)

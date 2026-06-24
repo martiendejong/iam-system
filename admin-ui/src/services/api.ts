@@ -96,6 +96,11 @@ class ApiService {
     return response.data.items ?? [];
   }
 
+  async getUserCount(): Promise<number> {
+    const response = await this.client.get<{ totalCount: number }>('/users?pageSize=1');
+    return response.data.totalCount ?? 0;
+  }
+
   async getUser(id: string): Promise<User> {
     const response = await this.client.get<User>(`/users/${id}`);
     return response.data;

@@ -12,15 +12,34 @@ export const auditApi = {
       });
     }
     const response = await client().get(`/audit/events?${query}`);
-    return response.data;
+    const d = response.data;
+    // Backend returns a plain array; normalize to the { items, total } shape the UI expects.
+    if (Array.isArray(d)) return { items: d, total: d.length };
+    return { items: d?.items ?? [], total: d?.total ?? 0 };
   },
 
   getStatistics: async (startDate?: string, endDate?: string): Promise<AuditStatistics> => {
+    // Backend requires both dates; default to the last 30 days when not supplied.
+    const end = endDate ?? new Date().toISOString();
+    const start = startDate ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const query = new URLSearchParams();
-    if (startDate) query.append('startDate', startDate);
-    if (endDate) query.append('endDate', endDate);
+    query.append('startDate', start);
+    query.append('endDate', end);
     const response = await client().get(`/audit/statistics?${query}`);
-    return response.data;
+    const d = response.data ?? {};
+    // Backend returns ComplianceStatistics (different field names + EventsByDay as a
+    // dictionary). Normalize to the AuditStatistics shape the dashboard renders.
+    const eventsByDayObj = d.eventsByDay ?? {};
+    const eventsByDay = Array.isArray(eventsByDayObj)
+      ? eventsByDayObj
+      : Object.entries(eventsByDayObj).map(([date, count]) => ({ date, count: Number(count) }));
+    return {
+      totalEvents: d.totalEvents ?? d.totalEvaluations ?? 0,
+      eventsByType: d.eventsByType ?? {},
+      eventsByDay,
+      failedEvents: d.failedEvents ?? d.failedAccessAttempts ?? 0,
+      highRiskEvents: d.highRiskEvents ?? d.complianceViolations ?? 0,
+    };
   },
 
   generateReport: async (framework: string): Promise<ComplianceReport> => {

@@ -96,6 +96,15 @@ public class DeviceService : IDeviceService
             .FirstOrDefaultAsync(d => d.DeviceId == deviceId);
     }
 
+    public async Task<IEnumerable<Device>> GetAllDevicesAsync()
+    {
+        return await _context.Devices
+            .Include(d => d.Tenant)
+            .OrderBy(d => d.DeviceType)
+            .ThenBy(d => d.Name)
+            .ToListAsync();
+    }
+
     public async Task<IEnumerable<Device>> GetDevicesByTenantAsync(Guid tenantId)
     {
         return await _context.Devices
