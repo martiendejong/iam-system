@@ -12,6 +12,7 @@ public class Role
 
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public string? Category { get; set; }
 
     /// <summary>
     /// System roles cannot be deleted

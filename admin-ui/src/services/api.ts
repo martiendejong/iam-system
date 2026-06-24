@@ -2,10 +2,11 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
 import type { LoginRequest, LoginResponse, RegisterRequest, User } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://localhost:5001';
+const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
 
 class ApiService {
   private client: AxiosInstance;
+  private refreshPromise: Promise<void> | null = null;
 
   /** Expose the axios client for use by sub-API modules */
   getClient(): AxiosInstance {
@@ -37,21 +38,28 @@ class ApiService {
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
-        const originalRequest = error.config as any;
-        if (error.response?.status === 401 && !originalRequest?._retry) {
-          originalRequest._retry = true;
-          const hasToken = !!localStorage.getItem('accessToken');
-          // Only attempt refresh if we had a token and this isn't the refresh endpoint itself
-          if (hasToken && !originalRequest.url?.includes('/auth/refresh')) {
-            try {
-              await this.refreshToken();
-              return this.client.request(originalRequest);
-            } catch {
-              localStorage.removeItem('accessToken');
-              window.location.href = '/auth/login';
-            }
-          } else if (hasToken) {
-            // Refresh endpoint itself returned 401 — session is gone
+        if (error.response?.status === 401) {
+          const url = error.config?.url ?? '';
+          // Don't retry if this request IS the refresh or login endpoint
+          if (url.includes('/auth/refresh') || url.includes('/auth/login')) {
+            localStorage.removeItem('accessToken');
+            return Promise.reject(error);
+          }
+          // Only attempt refresh if we have a stored token that may have expired.
+          // Without this guard, unauthenticated pages (e.g. login page calling
+          // identity-providers) would loop: 401 → refresh → 401 → redirect to
+          // login → reload → repeat, burning rate limit each cycle.
+          if (!localStorage.getItem('accessToken')) {
+            return Promise.reject(error);
+          }
+          // Deduplicate concurrent refresh attempts: if one is already in-flight,
+          // all concurrent 401s await the same promise instead of each making a
+          // separate refresh request (which would fail because the cookie is
+          // single-use).
+          try {
+            await this.refreshToken();
+            return this.client.request(error.config!);
+          } catch {
             localStorage.removeItem('accessToken');
             window.location.href = '/auth/login';
           }
@@ -81,8 +89,13 @@ class ApiService {
   }
 
   async refreshToken(): Promise<void> {
-    const response = await this.client.post<{ accessToken: string }>('/auth/refresh');
-    localStorage.setItem('accessToken', response.data.accessToken);
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.client
+        .post<{ accessToken: string }>('/auth/refresh')
+        .then(r => { localStorage.setItem('accessToken', r.data.accessToken); })
+        .finally(() => { this.refreshPromise = null; });
+    }
+    return this.refreshPromise;
   }
 
   async getCurrentUser(): Promise<User> {
@@ -92,8 +105,8 @@ class ApiService {
 
   // User endpoints
   async getUsers(): Promise<User[]> {
-    const response = await this.client.get<{ items: User[]; totalCount: number }>('/users?pageSize=100');
-    return response.data.items ?? [];
+    const response = await this.client.get<any>('/users');
+    return response.data?.items ?? response.data;
   }
 
   async getUserCount(): Promise<number> {
@@ -107,16 +120,17 @@ class ApiService {
   }
 
   async updateUser(id: string, data: Partial<User>): Promise<User> {
+    // Backend supports PUT /users/{id} for SuperAdmin (added) and PUT /users/me for self
     const response = await this.client.put<User>(`/users/${id}`, data);
     return response.data;
   }
 
   async activateUser(id: string): Promise<void> {
-    await this.client.put(`/users/${id}/activate`);
+    await this.client.post(`/users/${id}/activate`, {});
   }
 
   async deactivateUser(id: string): Promise<void> {
-    await this.client.put(`/users/${id}/deactivate`);
+    await this.client.post(`/users/${id}/deactivate`, {});
   }
 
   async changeUserPassword(id: string, newPassword: string): Promise<void> {
@@ -124,8 +138,9 @@ class ApiService {
   }
 
   async getUserRoles(id: string): Promise<any[]> {
-    const response = await this.client.get(`/users/${id}/roles`);
-    return response.data;
+    // Roles are embedded in the user object from GET /users/{id}
+    const response = await this.client.get<any>(`/users/${id}`);
+    return response.data?.roles ?? [];
   }
 
   // Role endpoints
@@ -154,11 +169,13 @@ class ApiService {
   }
 
   async assignRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
-    await this.client.post(`/roles/${roleId}/assign`, { userId, tenantId });
+    await this.client.post(`/users/${userId}/roles`, { roleId, tenantId });
   }
 
   async revokeRole(roleId: string, userId: string, tenantId?: string): Promise<void> {
-    await this.client.post(`/roles/${roleId}/revoke`, { userId, tenantId });
+    await this.client.delete(`/users/${userId}/roles/${roleId}`, {
+      params: tenantId ? { tenantId } : {},
+    });
   }
 
   // Tenant endpoints

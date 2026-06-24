@@ -68,7 +68,7 @@ public class AuthorizationController : ControllerBase
         {
             var returnUrl = Request.Path + QueryString.Create(
                 Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
-            return Redirect($"{_loginBasePath}/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
+            return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
         }
 
         // Retrieve user from database

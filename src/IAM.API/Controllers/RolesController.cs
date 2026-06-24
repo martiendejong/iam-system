@@ -35,6 +35,7 @@ public class RolesController : ControllerBase
             id = r.Id,
             name = r.Name,
             description = r.Description,
+            category = r.Category,
             isSystemRole = r.IsSystemRole,
             tenantId = r.TenantId,
             permissions = JsonSerializer.Deserialize<string[]>(r.Permissions ?? "[]"),
@@ -63,6 +64,7 @@ public class RolesController : ControllerBase
             id = role.Id,
             name = role.Name,
             description = role.Description,
+            category = role.Category,
             isSystemRole = role.IsSystemRole,
             tenantId = role.TenantId,
             permissions = JsonSerializer.Deserialize<string[]>(role.Permissions ?? "[]"),
@@ -107,6 +109,7 @@ public class RolesController : ControllerBase
         {
             Name = request.Name,
             Description = request.Description ?? string.Empty,
+            Category = request.Category,
             IsSystemRole = false, // Custom roles are never system roles
             TenantId = request.TenantId,
             Permissions = permissionsJson
@@ -123,6 +126,7 @@ public class RolesController : ControllerBase
                 id = role.Id,
                 name = role.Name,
                 description = role.Description,
+                category = role.Category,
                 isSystemRole = role.IsSystemRole,
                 tenantId = role.TenantId,
                 permissions = request.Permissions,
@@ -169,6 +173,11 @@ public class RolesController : ControllerBase
             role.Description = request.Description;
         }
 
+        if (request.Category != null)
+        {
+            role.Category = request.Category == "" ? null : request.Category;
+        }
+
         if (request.Permissions != null)
         {
             role.Permissions = JsonSerializer.Serialize(request.Permissions);
@@ -182,6 +191,7 @@ public class RolesController : ControllerBase
             id = role.Id,
             name = role.Name,
             description = role.Description,
+            category = role.Category,
             permissions = JsonSerializer.Deserialize<string[]>(role.Permissions ?? "[]"),
             updatedAt = role.UpdatedAt
         });
@@ -292,6 +302,7 @@ public class RolesController : ControllerBase
 public record CreateRoleRequest(
     string Name,
     string? Description,
+    string? Category,
     Guid? TenantId,
     string[]? Permissions
 );
@@ -299,5 +310,6 @@ public record CreateRoleRequest(
 public record UpdateRoleRequest(
     string? Name,
     string? Description,
+    string? Category,
     string[]? Permissions
 );

@@ -7,6 +7,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
@@ -17,6 +18,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Enable Windows service lifecycle (handles STOP signals from SCM properly and sets correct content root)
 builder.Host.UseWindowsService();
+
+// Trust the IIS/ARR reverse proxy so X-Forwarded-For reaches the rate limiter
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
+});
 
 // Add services to the container
 builder.Services.AddOpenApi();
@@ -272,19 +281,14 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Trust forwarded headers from IIS/ARR reverse proxy (X-Forwarded-For, X-Forwarded-Proto)
-app.UseForwardedHeaders(new ForwardedHeadersOptions
-{
-    ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
-});
-
-
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
+app.UseForwardedHeaders(); // Must be first — rewrites RemoteIpAddress from X-Forwarded-For
+app.UseHttpsRedirection();
 app.UseCors();
 
 // HTML responses (including SPA fallback) must never be cached; hashed assets can be cached indefinitely

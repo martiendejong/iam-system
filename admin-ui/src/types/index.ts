@@ -24,6 +24,7 @@ export interface Role {
   id: string;
   name: string;
   description?: string;
+  category?: string;
   isSystem: boolean;
 }
 
@@ -39,6 +40,7 @@ export interface Tenant {
 
 export const TenantType = {
   Organization: 'Organization',
+  Server: 'Server',
   Building: 'Building',
   Floor: 'Floor',
   Room: 'Room',

@@ -103,6 +103,40 @@ public class UsersController : ControllerBase
     }
 
     /// <summary>
+    /// Update any user's profile (SuperAdmin only)
+    /// </summary>
+    [HttpPut("{id}")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> UpdateUser(Guid id, [FromBody] AdminUpdateUserRequest request)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+        {
+            return NotFound();
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.FirstName))
+            user.FirstName = request.FirstName;
+        if (!string.IsNullOrWhiteSpace(request.LastName))
+            user.LastName = request.LastName;
+        if (!string.IsNullOrWhiteSpace(request.Email))
+            user.Email = request.Email;
+        if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
+            user.PhoneNumber = request.PhoneNumber;
+
+        user.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            id = user.Id,
+            email = user.Email,
+            firstName = user.FirstName,
+            lastName = user.LastName
+        });
+    }
+
+    /// <summary>
     /// List all users (SuperAdmin only)
     /// </summary>
     [HttpGet]
@@ -262,9 +296,9 @@ public class UsersController : ControllerBase
             return NotFound(new { error = "Role not found" });
         }
 
-        // Check if role assignment already exists
+        // Check if role assignment already exists (scoped to tenant)
         var existingAssignment = await _context.UserRoles
-            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == request.RoleId);
+            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == request.RoleId && ur.TenantId == request.TenantId);
 
         if (existingAssignment != null)
         {
@@ -307,10 +341,10 @@ public class UsersController : ControllerBase
     /// </summary>
     [HttpDelete("{userId}/roles/{roleId}")]
     [Authorize(Roles = "SuperAdmin")]
-    public async Task<IActionResult> RemoveRole(Guid userId, Guid roleId)
+    public async Task<IActionResult> RemoveRole(Guid userId, Guid roleId, [FromQuery] Guid? tenantId)
     {
         var userRole = await _context.UserRoles
-            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == roleId);
+            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == roleId && ur.TenantId == tenantId);
 
         if (userRole == null)
         {
@@ -351,3 +385,4 @@ public class UsersController : ControllerBase
 public record UpdateProfileRequest(string? FirstName, string? LastName);
 public record AssignRoleRequest(Guid RoleId, Guid? TenantId, DateTime? ExpiresAt);
 public record AdminChangePasswordRequest(string NewPassword);
+public record AdminUpdateUserRequest(string? FirstName, string? LastName, string? Email, string? PhoneNumber);
