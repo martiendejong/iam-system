@@ -1,4 +1,5 @@
 using IAM.Core.Entities;
+using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,10 +14,12 @@ namespace IAM.API.Controllers;
 public class UsersController : ControllerBase
 {
     private readonly IAMDbContext _context;
+    private readonly IAuthService _authService;
 
-    public UsersController(IAMDbContext context)
+    public UsersController(IAMDbContext context, IAuthService authService)
     {
         _context = context;
+        _authService = authService;
     }
 
     /// <summary>
@@ -334,6 +337,37 @@ public class UsersController : ControllerBase
                 expiresAt = userRole.ExpiresAt
             }
         });
+    }
+
+    /// <summary>
+    /// Resend email verification to an unverified user (SuperAdmin only)
+    /// </summary>
+    [HttpPost("{id}/resend-verification")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> ResendVerification(Guid id)
+    {
+        var sent = await _authService.ResendVerificationEmailAsync(id);
+
+        if (!sent)
+            return BadRequest(new { error = "User not found or email is already verified" });
+
+        return Ok(new { message = "Verification email sent" });
+    }
+
+    /// <summary>
+    /// Trigger a password reset email for a user (SuperAdmin only)
+    /// </summary>
+    [HttpPost("{id}/send-password-reset")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> SendPasswordReset(Guid id)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        await _authService.SendPasswordResetAsync(user.Email);
+
+        return Ok(new { message = "Password reset email sent" });
     }
 
     /// <summary>

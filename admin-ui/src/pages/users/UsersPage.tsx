@@ -11,6 +11,9 @@ export default function UsersPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterActive, setFilterActive] = useState<'all' | 'active' | 'inactive'>('all');
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [resetSendingId, setResetSendingId] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState('');
 
   useEffect(() => {
     loadUsers();
@@ -25,6 +28,32 @@ export default function UsersPage() {
       setError(err.response?.data?.message || 'Failed to load users');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async (userId: string) => {
+    try {
+      setResendingId(userId);
+      await api.resendVerification(userId);
+      setActionMessage('Verification email sent.');
+      setTimeout(() => setActionMessage(''), 4000);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to send verification email');
+    } finally {
+      setResendingId(null);
+    }
+  };
+
+  const handleSendPasswordReset = async (userId: string) => {
+    try {
+      setResetSendingId(userId);
+      await api.sendPasswordReset(userId);
+      setActionMessage('Password reset email sent.');
+      setTimeout(() => setActionMessage(''), 4000);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to send password reset email');
+    } finally {
+      setResetSendingId(null);
     }
   };
 
@@ -109,10 +138,15 @@ export default function UsersPage() {
           </div>
         </div>
 
-        {/* Error */}
+        {/* Notifications */}
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
             {error}
+          </div>
+        )}
+        {actionMessage && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
+            {actionMessage}
           </div>
         )}
 
@@ -188,7 +222,7 @@ export default function UsersPage() {
                         {new Date(user.createdAt).toLocaleDateString('nl-NL')}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-2 flex-wrap">
                           <Link
                             to={`/users/${user.id}`}
                             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -198,6 +232,24 @@ export default function UsersPage() {
                             </svg>
                             Edit
                           </Link>
+                          {!user.emailConfirmed && (
+                            <button
+                              onClick={() => handleResendVerification(user.id)}
+                              disabled={resendingId === user.id}
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-amber-700 bg-white border border-amber-300 rounded-lg hover:bg-amber-50 transition-colors disabled:opacity-50"
+                              title="Resend verification email"
+                            >
+                              {resendingId === user.id ? '...' : 'Resend Verification'}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleSendPasswordReset(user.id)}
+                            disabled={resetSendingId === user.id}
+                            className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-indigo-600 bg-white border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors disabled:opacity-50"
+                            title="Send password reset email"
+                          >
+                            {resetSendingId === user.id ? '...' : 'Send Reset'}
+                          </button>
                           <button
                             onClick={() => handleToggleActive(user.id, user.isActive)}
                             disabled={togglingId === user.id}

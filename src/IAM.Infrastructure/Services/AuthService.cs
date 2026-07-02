@@ -15,11 +15,13 @@ public class AuthService : IAuthService
 {
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
+    private readonly IEmailService _emailService;
 
-    public AuthService(IAMDbContext context, IConfiguration configuration)
+    public AuthService(IAMDbContext context, IConfiguration configuration, IEmailService emailService)
     {
         _context = context;
         _configuration = configuration;
+        _emailService = emailService;
     }
 
     public async Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName)
@@ -69,7 +71,11 @@ public class AuthService : IAuthService
         _context.Users.Add(user);
         await _context.SaveChangesAsync();
 
-        // TODO: Send verification email
+        await _emailService.SendEmailVerificationAsync(
+            user.Email,
+            $"{user.FirstName} {user.LastName}".Trim(),
+            user.EmailVerificationToken!
+        );
 
         return new AuthResult
         {
@@ -298,7 +304,32 @@ public class AuthService : IAuthService
 
         await _context.SaveChangesAsync();
 
-        // TODO: Send password reset email
+        await _emailService.SendPasswordResetAsync(
+            user.Email,
+            $"{user.FirstName} {user.LastName}".Trim(),
+            user.PasswordResetToken!
+        );
+
+        return true;
+    }
+
+    public async Task<bool> ResendVerificationEmailAsync(Guid userId)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null || user.EmailConfirmed)
+            return false;
+
+        user.EmailVerificationToken = GenerateToken();
+        user.EmailVerificationTokenExpiry = DateTime.UtcNow.AddHours(24);
+
+        await _context.SaveChangesAsync();
+
+        await _emailService.SendEmailVerificationAsync(
+            user.Email,
+            $"{user.FirstName} {user.LastName}".Trim(),
+            user.EmailVerificationToken!
+        );
 
         return true;
     }

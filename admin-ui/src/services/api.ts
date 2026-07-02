@@ -137,6 +137,26 @@ class ApiService {
     await this.client.post(`/users/${id}/change-password`, { newPassword });
   }
 
+  async resendVerification(id: string): Promise<void> {
+    await this.client.post(`/users/${id}/resend-verification`, {});
+  }
+
+  async sendPasswordReset(id: string): Promise<void> {
+    await this.client.post(`/users/${id}/send-password-reset`, {});
+  }
+
+  async forgotPassword(email: string): Promise<void> {
+    await this.client.post('/auth/forgot-password', { email });
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    await this.client.post('/auth/reset-password', { token, newPassword });
+  }
+
+  async verifyEmail(token: string): Promise<void> {
+    await this.client.post('/auth/verify-email', { token });
+  }
+
   async getUserRoles(id: string): Promise<any[]> {
     // Roles are embedded in the user object from GET /users/{id}
     const response = await this.client.get<any>(`/users/${id}`);
