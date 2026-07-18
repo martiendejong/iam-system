@@ -52,32 +52,25 @@ public class DatabaseSeeder : IHostedService
 
         if (await context.Users.AnyAsync(u => u.Email == email, cancellationToken)) return;
 
-        var adminRole = await context.Roles.FirstOrDefaultAsync(r => r.Name == "Admin", cancellationToken);
-        if (adminRole == null)
+        // "SuperAdmin" is the system's apex role (seeded via EF migration HasData with a
+        // well-known Id) and the only role every [Authorize(Roles=...)] admin endpoint
+        // ultimately accepts, directly or via SuperAdminClaimsTransformation. A bare "Admin"
+        // role - which this method used to create - isn't referenced by any authorization
+        // policy, so a user seeded with it gets 403s on Users/OAuth Clients/etc.
+        var superAdminRole = await context.Roles.FirstOrDefaultAsync(r => r.Name == "SuperAdmin", cancellationToken);
+        if (superAdminRole == null)
         {
-            adminRole = new Role
+            superAdminRole = new Role
             {
                 Id = Guid.NewGuid(),
-                Name = "Admin",
-                Description = "Full system administrator access",
+                Name = "SuperAdmin",
+                Description = "Full system access",
                 IsSystemRole = true,
                 Permissions = "[\"*\"]",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-            context.Roles.Add(adminRole);
-
-            var userRole = new Role
-            {
-                Id = Guid.NewGuid(),
-                Name = "User",
-                Description = "Standard user access",
-                IsSystemRole = true,
-                Permissions = "[\"User.View\", \"User.Update\"]",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-            context.Roles.Add(userRole);
+            context.Roles.Add(superAdminRole);
         }
 
         var admin = new User
@@ -96,7 +89,7 @@ public class DatabaseSeeder : IHostedService
         context.UserRoles.Add(new UserRole
         {
             UserId = admin.Id,
-            RoleId = adminRole.Id,
+            RoleId = superAdminRole.Id,
             GrantedAt = DateTime.UtcNow
         });
 
