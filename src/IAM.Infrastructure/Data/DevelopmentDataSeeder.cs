@@ -28,31 +28,41 @@ public class DevelopmentDataSeeder
             return;
         }
 
-        // Create Admin Role
-        var adminRole = new Role
+        // Reuse the migration-seeded "SuperAdmin" role rather than creating a bare "Admin"
+        // role - no [Authorize(Roles=...)] policy in the API recognizes "Admin", so a user
+        // seeded with it gets 403s on every admin-only endpoint (Users list, OAuth Clients, ...).
+        var adminRole = await _context.Roles.FirstOrDefaultAsync(r => r.Name == "SuperAdmin");
+        if (adminRole == null)
         {
-            Id = Guid.NewGuid(),
-            Name = "Admin",
-            Description = "Full system administrator access",
-            IsSystemRole = true,
-            Permissions = "[\"*\"]", // Wildcard = all permissions
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
+            adminRole = new Role
+            {
+                Id = Guid.NewGuid(),
+                Name = "SuperAdmin",
+                Description = "Full system access",
+                IsSystemRole = true,
+                Permissions = "[\"*\"]", // Wildcard = all permissions
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            _context.Roles.Add(adminRole);
+        }
 
         // Create User Role
-        var userRole = new Role
+        var userRole = await _context.Roles.FirstOrDefaultAsync(r => r.Name == "User");
+        if (userRole == null)
         {
-            Id = Guid.NewGuid(),
-            Name = "User",
-            Description = "Standard user access",
-            IsSystemRole = true,
-            Permissions = "[\"User.View\", \"User.Update\"]",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        _context.Roles.AddRange(adminRole, userRole);
+            userRole = new Role
+            {
+                Id = Guid.NewGuid(),
+                Name = "User",
+                Description = "Standard user access",
+                IsSystemRole = true,
+                Permissions = "[\"User.View\", \"User.Update\"]",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            _context.Roles.Add(userRole);
+        }
 
         // Create Admin User (already verified)
         var adminUser = new User
