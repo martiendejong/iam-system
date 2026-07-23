@@ -111,7 +111,7 @@ public class InvitationService : IInvitationService
         var inviter = await _context.Users.FirstOrDefaultAsync(u => u.Id == invitedByUserId, ct);
         var inviterName = inviter != null ? $"{inviter.FirstName} {inviter.LastName}".Trim() : "A team member";
 
-        await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct);
+        await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
 
         _logger.LogInformation(
             "Invitation sent to {Email} for tenant {TenantName} ({TenantId}) by user {InviterId}",
@@ -295,7 +295,7 @@ public class InvitationService : IInvitationService
         // Send welcome email
         var username = $"{user.FirstName} {user.LastName}".Trim();
         if (string.IsNullOrWhiteSpace(username)) username = user.Email;
-        await _emailService.SendWelcomeEmailAsync(user.Email, username, invitation.Tenant.Name, ct);
+        await _emailService.SendWelcomeEmailAsync(user.Email, username, invitation.Tenant.Name, ct, tenantId: invitation.TenantId);
 
         _logger.LogInformation(
             "Invitation accepted: {Email} joined tenant {TenantName} ({TenantId}) with role {RoleName}",

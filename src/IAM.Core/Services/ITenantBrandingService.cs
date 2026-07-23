@@ -18,6 +18,12 @@ public interface ITenantBrandingService
     Task<TenantBranding?> GetByTenantSlugAsync(string slug, CancellationToken ct = default);
 
     /// <summary>
+    /// Get branding for a tenant by its configured custom domain (used to resolve
+    /// branding for requests arriving on a tenant's own domain, e.g. login.acme.com).
+    /// </summary>
+    Task<TenantBranding?> GetByCustomDomainAsync(string domain, CancellationToken ct = default);
+
+    /// <summary>
     /// Create or update branding for a tenant. Upserts based on TenantId.
     /// </summary>
     Task<TenantBranding> UpsertAsync(Guid tenantId, TenantBranding branding, CancellationToken ct = default);
