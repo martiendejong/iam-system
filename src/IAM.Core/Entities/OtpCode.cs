@@ -22,5 +22,6 @@ public enum OtpPurpose
 {
     Login,
     MfaVerification,
-    PhoneVerification
+    PhoneVerification,
+    LoginTwoFactor
 }

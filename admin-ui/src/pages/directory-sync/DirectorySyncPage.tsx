@@ -58,6 +58,7 @@ export default function DirectorySyncPage() {
   const [error, setError] = useState('');
   const [tenantId, setTenantId] = useState('');
   const [tenants, setTenants] = useState<{ id: string; name: string }[]>([]);
+  const [roles, setRoles] = useState<{ id: string; name: string }[]>([]);
 
   // Modal state
   const [modalMode, setModalMode] = useState<ModalMode>(null);
@@ -90,6 +91,7 @@ export default function DirectorySyncPage() {
 
   useEffect(() => {
     loadTenants();
+    loadRoles();
   }, []);
 
   useEffect(() => {
@@ -107,6 +109,15 @@ export default function DirectorySyncPage() {
       }
     } catch (err: any) {
       setError('Failed to load tenants');
+    }
+  };
+
+  const loadRoles = async () => {
+    try {
+      const data = await api.getRoles();
+      setRoles(data);
+    } catch (err: any) {
+      setError('Failed to load roles');
     }
   };
 
@@ -266,6 +277,34 @@ export default function DirectorySyncPage() {
       setNewAttrValue('');
     }
   };
+
+  const updateGroupRoleMapping = (groupDn: string, roleId: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      groupToRoleMapping: { ...prev.groupToRoleMapping, [groupDn]: roleId },
+    }));
+  };
+
+  const removeGroupRoleMapping = (groupDn: string) => {
+    setFormData((prev) => {
+      const newMapping = { ...prev.groupToRoleMapping };
+      delete newMapping[groupDn];
+      return { ...prev, groupToRoleMapping: newMapping };
+    });
+  };
+
+  const [newGroupDn, setNewGroupDn] = useState('');
+  const [newGroupRoleId, setNewGroupRoleId] = useState('');
+
+  const addGroupRoleMapping = () => {
+    if (newGroupDn && newGroupRoleId) {
+      updateGroupRoleMapping(newGroupDn, newGroupRoleId);
+      setNewGroupDn('');
+      setNewGroupRoleId('');
+    }
+  };
+
+  const roleName = (roleId: string) => roles.find((r) => r.id === roleId)?.name || roleId;
 
   const statusColors: Record<string, string> = {
     Success: 'bg-green-100 text-green-800',
@@ -577,6 +616,58 @@ export default function DirectorySyncPage() {
                         />
                         <button
                           onClick={addAttrMapping}
+                          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Group to Role Mapping */}
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">
+                      Group to Role Mapping (LDAP Group DN → IAM Role)
+                    </h3>
+                    <div className="space-y-2">
+                      {Object.entries(formData.groupToRoleMapping).map(([groupDn, roleId]) => (
+                        <div key={groupDn} className="flex items-center gap-2">
+                          <span className="flex-1 text-sm text-gray-600 truncate" title={groupDn}>
+                            {groupDn}
+                          </span>
+                          <span className="w-40 text-sm font-medium text-gray-900 truncate">
+                            {roleName(roleId)}
+                          </span>
+                          <button
+                            onClick={() => removeGroupRoleMapping(groupDn)}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      <div className="flex items-center gap-2 mt-2">
+                        <input
+                          type="text"
+                          value={newGroupDn}
+                          onChange={(e) => setNewGroupDn(e.target.value)}
+                          placeholder="cn=admins,ou=groups,dc=example,dc=com"
+                          className="flex-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        />
+                        <select
+                          value={newGroupRoleId}
+                          onChange={(e) => setNewGroupRoleId(e.target.value)}
+                          className="w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                        >
+                          <option value="">Select role...</option>
+                          {roles.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={addGroupRoleMapping}
                           className="px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
                         >
                           Add

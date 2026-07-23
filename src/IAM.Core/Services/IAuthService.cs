@@ -13,6 +13,8 @@ public interface IAuthService
     Task<bool> ResetPasswordAsync(string token, string newPassword);
     Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null);
     Task<bool> ResendVerificationEmailAsync(Guid userId);
+    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null);
+    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId);
 }
 
 public class AuthResult
@@ -23,4 +25,5 @@ public class AuthResult
     public User? User { get; set; }
     public string? Error { get; set; }
     public Dictionary<string, string[]>? ValidationErrors { get; set; }
+    public bool RequiresTwoFactor { get; set; }
 }
