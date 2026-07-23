@@ -33,8 +33,11 @@ public class EmergencyOverrideController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Justification))
             return BadRequest("Justification is required");
 
-        // Get user ID from claims
-        var userIdClaim = User.FindFirst("sub")?.Value;
+        // Get user ID from claims (try multiple claim types)
+        var userIdClaim = User.FindFirst("sub")?.Value
+                       ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                       ?? User.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier")?.Value;
+
         if (!Guid.TryParse(userIdClaim, out var userId))
             return Unauthorized("User ID not found in token");
 
@@ -72,8 +75,11 @@ public class EmergencyOverrideController : ControllerBase
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        // Get user ID from claims
-        var userIdClaim = User.FindFirst("sub")?.Value;
+        // Get user ID from claims (try multiple claim types)
+        var userIdClaim = User.FindFirst("sub")?.Value
+                       ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                       ?? User.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier")?.Value;
+
         if (!Guid.TryParse(userIdClaim, out var userId))
             return Unauthorized("User ID not found in token");
 
@@ -154,8 +160,11 @@ public class EmergencyOverrideController : ControllerBase
         [FromBody] ReviewOverrideRequest request,
         CancellationToken cancellationToken = default)
     {
-        // Get user ID from claims
-        var userIdClaim = User.FindFirst("sub")?.Value;
+        // Get user ID from claims (try multiple claim types)
+        var userIdClaim = User.FindFirst("sub")?.Value
+                       ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                       ?? User.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier")?.Value;
+
         if (!Guid.TryParse(userIdClaim, out var userId))
             return Unauthorized("User ID not found in token");
 
