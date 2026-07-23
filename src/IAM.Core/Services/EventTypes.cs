@@ -17,12 +17,14 @@ public static class IamEventTypes
     public const string RoleRevoked = "role.revoked";
     public const string PolicyCreated = "policy.created";
     public const string PolicyUpdated = "policy.updated";
+    public const string PolicyEvaluated = "policy.evaluated";
 
     // Device events
     public const string DeviceRegistered = "device.registered";
     public const string DeviceAuthenticated = "device.authenticated";
     public const string DeviceDeactivated = "device.deactivated";
     public const string DeviceOffline = "device.offline";
+    public const string DeviceStatusChanged = "device.status_changed";
 
     // Certificate events
     public const string CertificateIssued = "certificate.issued";
@@ -49,8 +51,8 @@ public static class IamEventTypes
     {
         UserCreated, UserUpdated, UserDeleted, UserLoginSuccess, UserLoginFailed,
         UserPasswordChanged, UserMfaEnabled, UserMfaDisabled,
-        RoleAssigned, RoleRevoked, PolicyCreated, PolicyUpdated,
-        DeviceRegistered, DeviceAuthenticated, DeviceDeactivated, DeviceOffline,
+        RoleAssigned, RoleRevoked, PolicyCreated, PolicyUpdated, PolicyEvaluated,
+        DeviceRegistered, DeviceAuthenticated, DeviceDeactivated, DeviceOffline, DeviceStatusChanged,
         CertificateIssued, CertificateRevoked, CertificateExpiring,
         TenantCreated, TenantUpdated,
         SecurityAlert, EmergencyOverrideActivated, EmergencyOverrideDeactivated,

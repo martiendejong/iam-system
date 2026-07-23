@@ -4,16 +4,33 @@ using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace IAM.Infrastructure.Services;
 
 public class DeviceService : IDeviceService
 {
     private readonly IAMDbContext _context;
+    private readonly IEventBus _eventBus;
+    private readonly ILogger<DeviceService> _logger;
 
-    public DeviceService(IAMDbContext context)
+    public DeviceService(IAMDbContext context, IEventBus eventBus, ILogger<DeviceService> logger)
     {
         _context = context;
+        _eventBus = eventBus;
+        _logger = logger;
+    }
+
+    private async Task PublishEventAsync(string eventType, object payload, Guid? tenantId)
+    {
+        try
+        {
+            await _eventBus.PublishAsync(eventType, payload, tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish {EventType} event", eventType);
+        }
     }
 
     public async Task<DeviceResult> RegisterDeviceAsync(RegisterDeviceRequest request)
@@ -71,6 +88,15 @@ public class DeviceService : IDeviceService
 
         _context.Devices.Add(device);
         await _context.SaveChangesAsync();
+
+        await PublishEventAsync(IamEventTypes.DeviceRegistered, new
+        {
+            deviceId = device.Id,
+            deviceIdentifier = device.DeviceId,
+            tenantId = device.TenantId,
+            deviceType = device.DeviceType,
+            authenticationMethod = device.AuthenticationMethod
+        }, device.TenantId);
 
         return new DeviceResult
         {
@@ -175,6 +201,14 @@ public class DeviceService : IDeviceService
         }
 
         await _context.SaveChangesAsync();
+
+        await PublishEventAsync(IamEventTypes.DeviceDeactivated, new
+        {
+            deviceId = device.Id,
+            deviceIdentifier = device.DeviceId,
+            tenantId = device.TenantId
+        }, device.TenantId);
+
         return true;
     }
 
@@ -188,6 +222,26 @@ public class DeviceService : IDeviceService
         if (ipAddress != null) device.LastIpAddress = ipAddress;
 
         await _context.SaveChangesAsync();
+
+        await PublishEventAsync(IamEventTypes.DeviceStatusChanged, new
+        {
+            deviceId = device.Id,
+            deviceIdentifier = device.DeviceId,
+            tenantId = device.TenantId,
+            isOnline,
+            ipAddress
+        }, device.TenantId);
+
+        if (!isOnline)
+        {
+            await PublishEventAsync(IamEventTypes.DeviceOffline, new
+            {
+                deviceId = device.Id,
+                deviceIdentifier = device.DeviceId,
+                tenantId = device.TenantId
+            }, device.TenantId);
+        }
+
         return true;
     }
 

@@ -1,3 +1,4 @@
+using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -57,6 +58,7 @@ public class CertificateExpiryMonitorWorker : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+        var eventBus = scope.ServiceProvider.GetRequiredService<IEventBus>();
 
         var now = DateTime.UtcNow;
         var thirtyDaysFromNow = now.AddDays(30);
@@ -71,6 +73,7 @@ public class CertificateExpiryMonitorWorker : BackgroundService
                 c.DeviceId,
                 DeviceName = c.Device != null ? c.Device.Name : "Unknown",
                 DeviceIdentifier = c.Device != null ? c.Device.DeviceId : "Unknown",
+                TenantId = c.Device != null ? c.Device.TenantId : (Guid?)null,
                 c.SubjectName,
                 c.SerialNumber,
                 c.NotAfter
@@ -100,6 +103,8 @@ public class CertificateExpiryMonitorWorker : BackgroundService
                         "CRITICAL: Certificate {SerialNumber} for device {DeviceName} ({DeviceId}) expires in {DaysLeft:F1} days (at {ExpiresAt:u})",
                         cert.SerialNumber, deviceGroup.Key.DeviceName, deviceGroup.Key.DeviceIdentifier,
                         daysLeft, cert.NotAfter);
+
+                    await PublishCertificateExpiringEventAsync(eventBus, cert.Id, cert.DeviceId, deviceGroup.Key.DeviceIdentifier, cert.TenantId, cert.SerialNumber, cert.NotAfter, daysLeft, "critical");
                 }
             }
 
@@ -112,6 +117,8 @@ public class CertificateExpiryMonitorWorker : BackgroundService
                         "Certificate {SerialNumber} for device {DeviceName} ({DeviceId}) expires in {DaysLeft:F1} days (at {ExpiresAt:u})",
                         cert.SerialNumber, deviceGroup.Key.DeviceName, deviceGroup.Key.DeviceIdentifier,
                         daysLeft, cert.NotAfter);
+
+                    await PublishCertificateExpiringEventAsync(eventBus, cert.Id, cert.DeviceId, deviceGroup.Key.DeviceIdentifier, cert.TenantId, cert.SerialNumber, cert.NotAfter, daysLeft, "warning");
                 }
             }
         }
@@ -123,5 +130,36 @@ public class CertificateExpiryMonitorWorker : BackgroundService
         _logger.LogInformation(
             "Certificate expiry check complete: {TotalExpiring} certificates expiring across {DeviceCount} devices ({Critical} critical, {Warning} warning)",
             expiringCerts.Count, deviceCount, totalCritical, totalWarning);
+    }
+
+    private async Task PublishCertificateExpiringEventAsync(
+        IEventBus eventBus,
+        Guid certificateId,
+        Guid deviceId,
+        string deviceIdentifier,
+        Guid? tenantId,
+        string serialNumber,
+        DateTime expiresAt,
+        double daysRemaining,
+        string urgency)
+    {
+        try
+        {
+            await eventBus.PublishAsync(IamEventTypes.CertificateExpiring, new
+            {
+                certificateId,
+                deviceId,
+                deviceIdentifier,
+                tenantId,
+                serialNumber,
+                expiresAt,
+                daysRemaining,
+                urgency
+            }, tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish {EventType} event for certificate {CertificateId}", IamEventTypes.CertificateExpiring, certificateId);
+        }
     }
 }

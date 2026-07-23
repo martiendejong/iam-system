@@ -7,6 +7,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IAM.Infrastructure.Services;
@@ -16,12 +17,33 @@ public class AuthService : IAuthService
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
+    private readonly IEventBus _eventBus;
+    private readonly ILogger<AuthService> _logger;
 
-    public AuthService(IAMDbContext context, IConfiguration configuration, IEmailService emailService)
+    public AuthService(
+        IAMDbContext context,
+        IConfiguration configuration,
+        IEmailService emailService,
+        IEventBus eventBus,
+        ILogger<AuthService> logger)
     {
         _context = context;
         _configuration = configuration;
         _emailService = emailService;
+        _eventBus = eventBus;
+        _logger = logger;
+    }
+
+    private async Task PublishEventAsync(string eventType, object payload)
+    {
+        try
+        {
+            await _eventBus.PublishAsync(eventType, payload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish {EventType} event", eventType);
+        }
     }
 
     public async Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName)
@@ -71,6 +93,14 @@ public class AuthService : IAuthService
         _context.Users.Add(user);
         await _context.SaveChangesAsync();
 
+        await PublishEventAsync(IamEventTypes.UserCreated, new
+        {
+            userId = user.Id,
+            email = user.Email,
+            firstName = user.FirstName,
+            lastName = user.LastName
+        });
+
         await _emailService.SendEmailVerificationAsync(
             user.Email,
             $"{user.FirstName} {user.LastName}".Trim(),
@@ -93,6 +123,14 @@ public class AuthService : IAuthService
 
         if (user == null)
         {
+            await PublishEventAsync(IamEventTypes.UserLoginFailed, new
+            {
+                email,
+                reason = "user_not_found",
+                ipAddress,
+                userAgent
+            });
+
             return new AuthResult
             {
                 Success = false,
@@ -111,6 +149,15 @@ public class AuthService : IAuthService
             }
             await _context.SaveChangesAsync();
 
+            await PublishEventAsync(IamEventTypes.UserLoginFailed, new
+            {
+                userId = user.Id,
+                email = user.Email,
+                reason = "invalid_password",
+                ipAddress,
+                userAgent
+            });
+
             return new AuthResult
             {
                 Success = false,
@@ -120,6 +167,15 @@ public class AuthService : IAuthService
 
         if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
         {
+            await PublishEventAsync(IamEventTypes.UserLoginFailed, new
+            {
+                userId = user.Id,
+                email = user.Email,
+                reason = "account_locked",
+                ipAddress,
+                userAgent
+            });
+
             return new AuthResult
             {
                 Success = false,
@@ -129,6 +185,15 @@ public class AuthService : IAuthService
 
         if (!user.EmailConfirmed)
         {
+            await PublishEventAsync(IamEventTypes.UserLoginFailed, new
+            {
+                userId = user.Id,
+                email = user.Email,
+                reason = "email_not_confirmed",
+                ipAddress,
+                userAgent
+            });
+
             return new AuthResult
             {
                 Success = false,
@@ -138,6 +203,15 @@ public class AuthService : IAuthService
 
         if (!user.IsActive)
         {
+            await PublishEventAsync(IamEventTypes.UserLoginFailed, new
+            {
+                userId = user.Id,
+                email = user.Email,
+                reason = "account_inactive",
+                ipAddress,
+                userAgent
+            });
+
             return new AuthResult
             {
                 Success = false,
@@ -171,6 +245,14 @@ public class AuthService : IAuthService
 
         // Generate access token with token binding (binds to refresh token ID)
         var accessToken = GenerateAccessToken(user, refreshTokenId);
+
+        await PublishEventAsync(IamEventTypes.UserLoginSuccess, new
+        {
+            userId = user.Id,
+            email = user.Email,
+            ipAddress,
+            userAgent
+        });
 
         return new AuthResult
         {
@@ -369,6 +451,14 @@ public class AuthService : IAuthService
         await _context.SaveChangesAsync();
 
         var accessToken = GenerateAccessToken(user, refreshTokenId);
+
+        await PublishEventAsync(IamEventTypes.UserLoginSuccess, new
+        {
+            userId = user.Id,
+            email = user.Email,
+            ipAddress,
+            userAgent
+        });
 
         return new AuthResult
         {

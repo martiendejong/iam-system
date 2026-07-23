@@ -49,6 +49,8 @@ import VisitorManagementPage from './pages/visitors/VisitorManagementPage';
 import RegionDashboardPage from './pages/regions/RegionDashboardPage';
 import ServiceAccountsPage from './pages/service-accounts/ServiceAccountsPage';
 import DelegationPage from './pages/delegation/DelegationPage';
+import WebhooksPage from './pages/webhooks/WebhooksPage';
+import WebhookFormPage from './pages/webhooks/WebhookFormPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -520,6 +522,32 @@ function App() {
             element={
               <ProtectedRoute>
                 <DelegationPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Webhooks & Event Notifications */}
+          <Route
+            path="/webhooks"
+            element={
+              <ProtectedRoute>
+                <WebhooksPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/webhooks/new"
+            element={
+              <ProtectedRoute>
+                <WebhookFormPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/webhooks/:id"
+            element={
+              <ProtectedRoute>
+                <WebhookFormPage />
               </ProtectedRoute>
             }
           />

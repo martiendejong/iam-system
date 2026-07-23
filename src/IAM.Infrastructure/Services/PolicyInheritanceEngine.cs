@@ -3,6 +3,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 
@@ -17,16 +18,49 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
     private readonly IAMDbContext _context;
     private readonly IMemoryCache _cache;
     private readonly ILogger<PolicyInheritanceEngine> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(5);
 
     public PolicyInheritanceEngine(
         IAMDbContext context,
         IMemoryCache cache,
-        ILogger<PolicyInheritanceEngine> logger)
+        ILogger<PolicyInheritanceEngine> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _context = context;
         _cache = cache;
         _logger = logger;
+        _scopeFactory = scopeFactory;
+    }
+
+    // EvaluateAsync runs on every authorization decision, so publishing must never block it on
+    // webhook HTTP delivery/retry backoff. It also outlives the caller's request scope, so it
+    // resolves its own IEventBus from a fresh scope instead of reusing the (soon-disposed) one.
+    private void PublishPolicyEvaluatedEvent(Guid userId, Guid tenantId, string resource, string action, PolicyEvaluationResult result)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var eventBus = scope.ServiceProvider.GetRequiredService<IEventBus>();
+                await eventBus.PublishAsync(IamEventTypes.PolicyEvaluated, new
+                {
+                    userId,
+                    tenantId,
+                    resource,
+                    action,
+                    isAllowed = result.IsAllowed,
+                    policyId = result.PolicyId,
+                    evaluatedPoliciesCount = result.EvaluatedPoliciesCount,
+                    evaluationTimeMs = result.EvaluationTimeMs
+                }, tenantId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to publish policy.evaluated event for user {UserId} tenant {TenantId}", userId, tenantId);
+            }
+        });
     }
 
     public async Task<List<Policy>> GetEffectivePoliciesForTenantAsync(
@@ -165,9 +199,12 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
 
         // Evaluation logic: Explicit deny wins, then explicit allow, then default deny
         var denyPolicy = matchingPolicies.FirstOrDefault(p => p.Effect == PolicyEffect.Deny);
+        var allowPolicy = matchingPolicies.FirstOrDefault(p => p.Effect == PolicyEffect.Allow);
+
+        PolicyEvaluationResult result;
         if (denyPolicy != null)
         {
-            return new PolicyEvaluationResult
+            result = new PolicyEvaluationResult
             {
                 IsAllowed = false,
                 MatchedPolicy = denyPolicy,
@@ -178,11 +215,9 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
                 EvaluationTimeMs = stopwatch.ElapsedMilliseconds
             };
         }
-
-        var allowPolicy = matchingPolicies.FirstOrDefault(p => p.Effect == PolicyEffect.Allow);
-        if (allowPolicy != null)
+        else if (allowPolicy != null)
         {
-            return new PolicyEvaluationResult
+            result = new PolicyEvaluationResult
             {
                 IsAllowed = true,
                 MatchedPolicy = allowPolicy,
@@ -193,18 +228,24 @@ public class PolicyInheritanceEngine : IPolicyInheritanceEngine
                 EvaluationTimeMs = stopwatch.ElapsedMilliseconds
             };
         }
-
-        // Default deny
-        return new PolicyEvaluationResult
+        else
         {
-            IsAllowed = false,
-            MatchedPolicy = null,
-            PolicyId = null,
-            Reason = "No matching policy found (default deny)",
-            EvaluatedPolicies = matchingPolicies,
-            EvaluatedPoliciesCount = matchingPolicies.Count,
-            EvaluationTimeMs = stopwatch.ElapsedMilliseconds
-        };
+            // Default deny
+            result = new PolicyEvaluationResult
+            {
+                IsAllowed = false,
+                MatchedPolicy = null,
+                PolicyId = null,
+                Reason = "No matching policy found (default deny)",
+                EvaluatedPolicies = matchingPolicies,
+                EvaluatedPoliciesCount = matchingPolicies.Count,
+                EvaluationTimeMs = stopwatch.ElapsedMilliseconds
+            };
+        }
+
+        PublishPolicyEvaluatedEvent(userId, tenantId, resource, action, result);
+
+        return result;
     }
 
     public async Task<PolicyImpactAnalysis> SimulatePolicyImpactAsync(
