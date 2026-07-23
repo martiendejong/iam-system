@@ -13,13 +13,28 @@ public class EmergencyOverrideService : IEmergencyOverrideService
 {
     private readonly IAMDbContext _context;
     private readonly ILogger<EmergencyOverrideService> _logger;
+    private readonly IEventBus _eventBus;
 
     public EmergencyOverrideService(
         IAMDbContext context,
-        ILogger<EmergencyOverrideService> logger)
+        ILogger<EmergencyOverrideService> logger,
+        IEventBus eventBus)
     {
         _context = context;
         _logger = logger;
+        _eventBus = eventBus;
+    }
+
+    private async Task PublishEventAsync(string eventType, object payload, Guid? tenantId)
+    {
+        try
+        {
+            await _eventBus.PublishAsync(eventType, payload, tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish {EventType} event", eventType);
+        }
     }
 
     public async Task<EmergencyOverride> ActivateOverrideAsync(
@@ -61,6 +76,17 @@ public class EmergencyOverrideService : IEmergencyOverrideService
         // Send security notification (async fire-and-forget in production)
         await SendSecurityNotificationAsync(emergencyOverride, cancellationToken);
 
+        await PublishEventAsync(IamEventTypes.EmergencyOverrideActivated, new
+        {
+            overrideId = emergencyOverride.Id,
+            userId,
+            tenantId,
+            overrideType = overrideType.ToString(),
+            severity = severity.ToString(),
+            justification,
+            expiresAt = emergencyOverride.ExpiresAt
+        }, tenantId);
+
         _logger.LogWarning(
             "EMERGENCY OVERRIDE ACTIVATED: User:{UserId} Type:{Type} Severity:{Severity} Duration:{Duration}min Justification:{Justification}",
             userId, overrideType, severity, durationMinutes, justification);
@@ -84,6 +110,13 @@ public class EmergencyOverrideService : IEmergencyOverrideService
 
         emergencyOverride.Deactivate(deactivatedByUserId);
         await _context.SaveChangesAsync(cancellationToken);
+
+        await PublishEventAsync(IamEventTypes.EmergencyOverrideDeactivated, new
+        {
+            overrideId = emergencyOverride.Id,
+            tenantId = emergencyOverride.TenantId,
+            deactivatedByUserId
+        }, emergencyOverride.TenantId);
 
         _logger.LogWarning(
             "EMERGENCY OVERRIDE DEACTIVATED: Override:{OverrideId} DeactivatedBy:{UserId}",

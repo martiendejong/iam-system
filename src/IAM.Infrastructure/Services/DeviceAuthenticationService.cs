@@ -9,6 +9,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IAM.Infrastructure.Services;
@@ -17,11 +18,31 @@ public class DeviceAuthenticationService : IDeviceAuthenticationService
 {
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
+    private readonly IEventBus _eventBus;
+    private readonly ILogger<DeviceAuthenticationService> _logger;
 
-    public DeviceAuthenticationService(IAMDbContext context, IConfiguration configuration)
+    public DeviceAuthenticationService(
+        IAMDbContext context,
+        IConfiguration configuration,
+        IEventBus eventBus,
+        ILogger<DeviceAuthenticationService> logger)
     {
         _context = context;
         _configuration = configuration;
+        _eventBus = eventBus;
+        _logger = logger;
+    }
+
+    private async Task PublishEventAsync(string eventType, object payload, Guid? tenantId)
+    {
+        try
+        {
+            await _eventBus.PublishAsync(eventType, payload, tenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish {EventType} event", eventType);
+        }
     }
 
     public async Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId)
@@ -78,6 +99,14 @@ public class DeviceAuthenticationService : IDeviceAuthenticationService
         device.IsOnline = true;
         device.LastSeenAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
+
+        await PublishEventAsync(IamEventTypes.DeviceAuthenticated, new
+        {
+            deviceId = device.Id,
+            deviceIdentifier = device.DeviceId,
+            tenantId = device.TenantId,
+            authenticationMethod = "certificate"
+        }, device.TenantId);
 
         // Generate device access token
         var permissions = DeserializePermissions(device.Permissions);
@@ -163,6 +192,14 @@ public class DeviceAuthenticationService : IDeviceAuthenticationService
         device.IsOnline = true;
         device.LastSeenAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
+
+        await PublishEventAsync(IamEventTypes.DeviceAuthenticated, new
+        {
+            deviceId = device.Id,
+            deviceIdentifier = device.DeviceId,
+            tenantId = device.TenantId,
+            authenticationMethod = "hmac"
+        }, device.TenantId);
 
         // Generate device access token
         var permissions = DeserializePermissions(device.Permissions);

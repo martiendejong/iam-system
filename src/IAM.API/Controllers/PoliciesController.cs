@@ -16,11 +16,19 @@ public class PoliciesController : ControllerBase
 {
     private readonly IAMDbContext _context;
     private readonly IPolicyInheritanceEngine _policyEngine;
+    private readonly IEventBus _eventBus;
+    private readonly ILogger<PoliciesController> _logger;
 
-    public PoliciesController(IAMDbContext context, IPolicyInheritanceEngine policyEngine)
+    public PoliciesController(
+        IAMDbContext context,
+        IPolicyInheritanceEngine policyEngine,
+        IEventBus eventBus,
+        ILogger<PoliciesController> logger)
     {
         _context = context;
         _policyEngine = policyEngine;
+        _eventBus = eventBus;
+        _logger = logger;
     }
 
     /// <summary>
@@ -326,6 +334,24 @@ public class PoliciesController : ControllerBase
 
         _context.Policies.Add(policy);
         await _context.SaveChangesAsync();
+
+        try
+        {
+            await _eventBus.PublishAsync(IamEventTypes.PolicyCreated, new
+            {
+                policyId = policy.Id,
+                name = policy.Name,
+                tenantId = policy.TenantId,
+                resource = policy.Resource,
+                action = policy.Action,
+                effect = policy.Effect.ToString(),
+                createdByUserId = policy.CreatedByUserId
+            }, policy.TenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish {EventType} event", IamEventTypes.PolicyCreated);
+        }
 
         return CreatedAtAction(
             nameof(GetPolicy),
