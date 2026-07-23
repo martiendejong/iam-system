@@ -83,4 +83,10 @@ public class InvitationAcceptResult
     public User? User { get; set; }
     public string? Error { get; set; }
     public string? WelcomeMessage { get; set; }
+
+    /// <summary>
+    /// True when the organization's settings require MFA and the accepting user has not enabled it yet.
+    /// The frontend should redirect to MFA setup immediately after showing the welcome message.
+    /// </summary>
+    public bool MfaSetupRequired { get; set; }
 }

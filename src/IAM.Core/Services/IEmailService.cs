@@ -10,5 +10,12 @@ public interface IEmailService
     Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default);
     Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default);
     Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sends an email using an already-rendered subject/body, bypassing the built-in templates.
+    /// Used for tenant-customized email templates (e.g. custom invitation emails).
+    /// </summary>
+    Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default);
+
     Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default);
 }

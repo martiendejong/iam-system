@@ -176,7 +176,8 @@ public class InvitationsController : ControllerBase
             success = true,
             userId = result.User?.Id,
             email = result.User?.Email,
-            welcomeMessage = result.WelcomeMessage
+            welcomeMessage = result.WelcomeMessage,
+            mfaSetupRequired = result.MfaSetupRequired
         });
     }
 
