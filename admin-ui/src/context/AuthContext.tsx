@@ -1,14 +1,15 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../services/api';
-import type { User, LoginRequest } from '../types';
+import type { User, LoginRequest, LoginResponse } from '../types';
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (data: LoginRequest) => Promise<void>;
+  login: (data: LoginRequest) => Promise<LoginResponse>;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
+  setCurrentUser: (user: User) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -37,7 +38,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (data: LoginRequest) => {
     const response = await api.login(data);
-    setUser(response.user);
+    if (!response.requiresTwoFactor && response.user) {
+      setUser(response.user);
+    }
+    return response;
   };
 
   const logout = async () => {
@@ -53,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         isAuthenticated: !!user,
+        setCurrentUser: setUser,
       }}
     >
       {children}
