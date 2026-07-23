@@ -65,6 +65,15 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
+        if (result.RequiresMfa)
+        {
+            return Ok(new
+            {
+                requiresMfa = true,
+                userId = result.User!.Id
+            });
+        }
+
         // Set refresh token in HttpOnly cookie
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {

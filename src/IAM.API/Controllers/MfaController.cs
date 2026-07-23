@@ -14,11 +14,13 @@ public class MfaController : ControllerBase
 {
     private readonly ITotpService _totpService;
     private readonly IAMDbContext _context;
+    private readonly IAuthService _authService;
 
-    public MfaController(ITotpService totpService, IAMDbContext context)
+    public MfaController(ITotpService totpService, IAMDbContext context, IAuthService authService)
     {
         _totpService = totpService;
         _context = context;
+        _authService = authService;
     }
 
     /// <summary>
@@ -120,10 +122,43 @@ public class MfaController : ControllerBase
             return BadRequest(new { error = "Invalid authentication code." });
         }
 
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == request.UserId, ct);
+
+        if (user == null || !user.IsActive)
+        {
+            return BadRequest(new { error = "Invalid authentication code." });
+        }
+
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+        var loginResult = await _authService.LoginBypassPasswordAsync(user, ipAddress, userAgent);
+
+        if (!loginResult.Success)
+        {
+            return BadRequest(new { error = loginResult.Error });
+        }
+
+        Response.Cookies.Append("refreshToken", loginResult.RefreshToken!, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Expires = DateTimeOffset.UtcNow.AddDays(7)
+        });
+
         return Ok(new
         {
-            message = "Two-factor authentication verified.",
-            verified = true
+            accessToken = loginResult.AccessToken,
+            user = new
+            {
+                id = loginResult.User!.Id,
+                email = loginResult.User.Email,
+                firstName = loginResult.User.FirstName,
+                lastName = loginResult.User.LastName
+            }
         });
     }
 
