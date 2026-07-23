@@ -65,6 +65,16 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
+        if (result.RequiresStepUp)
+        {
+            return Ok(new
+            {
+                requiresStepUp = true,
+                userId = result.User!.Id,
+                message = "Additional verification required. Check your email for a code."
+            });
+        }
+
         // Set refresh token in HttpOnly cookie
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {
@@ -76,6 +86,53 @@ public class AuthController : ControllerBase
 
         // Establish OIDC session cookie so the authorize endpoint can identify the user
         // without requiring a Bearer token in the browser request
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
+            new(ClaimTypes.Email, result.User.Email),
+            new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
+        };
+        var identity = new ClaimsIdentity(claims, "IAM.Session");
+        await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity));
+
+        return Ok(new
+        {
+            accessToken = result.AccessToken,
+            user = new
+            {
+                id = result.User!.Id,
+                email = result.User.Email,
+                firstName = result.User.FirstName,
+                lastName = result.User.LastName
+            }
+        });
+    }
+
+    /// <summary>
+    /// Completes a login that was suspended for adaptive-MFA step-up verification
+    /// (see /login's requiresStepUp response) by validating the emailed code.
+    /// </summary>
+    [HttpPost("step-up/verify")]
+    public async Task<IActionResult> VerifyStepUp([FromBody] StepUpVerifyRequest request)
+    {
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.VerifyStepUpAsync(request.Email, request.Code, ipAddress, userAgent);
+
+        if (!result.Success)
+        {
+            return BadRequest(new { error = result.Error });
+        }
+
+        Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Expires = DateTimeOffset.UtcNow.AddDays(7)
+        });
+
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
@@ -174,3 +231,4 @@ public record LoginRequest(string Email, string Password);
 public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
+public record StepUpVerifyRequest(string Email, string Code);

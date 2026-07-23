@@ -16,12 +16,21 @@ public class AuthService : IAuthService
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
+    private readonly IRiskAssessmentService _riskAssessmentService;
+    private readonly IOtpService _otpService;
 
-    public AuthService(IAMDbContext context, IConfiguration configuration, IEmailService emailService)
+    public AuthService(
+        IAMDbContext context,
+        IConfiguration configuration,
+        IEmailService emailService,
+        IRiskAssessmentService riskAssessmentService,
+        IOtpService otpService)
     {
         _context = context;
         _configuration = configuration;
         _emailService = emailService;
+        _riskAssessmentService = riskAssessmentService;
+        _otpService = otpService;
     }
 
     public async Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName)
@@ -145,11 +154,38 @@ public class AuthService : IAuthService
             };
         }
 
-        // Reset failed attempts
+        // Reset failed attempts (password + account checks passed)
         user.FailedLoginAttempts = 0;
         user.IsLockedOut = false;
         user.LockoutEnd = null;
         user.LastLoginAt = DateTime.UtcNow;
+
+        // Adaptive MFA: assess login risk before issuing any tokens
+        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
+            user.Id, ipAddress ?? "unknown", userAgent);
+
+        if (riskScore.Action == RiskAction.Block)
+        {
+            await _context.SaveChangesAsync();
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Login blocked due to unusual account activity. Please contact support."
+            };
+        }
+
+        if (riskScore.Action == RiskAction.StepUp)
+        {
+            await _context.SaveChangesAsync();
+            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresStepUp = true,
+                User = user
+            };
+        }
 
         // Generate refresh token first (needed for token binding)
         var refreshToken = GenerateRefreshToken();
@@ -377,6 +413,36 @@ public class AuthService : IAuthService
             RefreshToken = refreshToken,
             User = user
         };
+    }
+
+    public async Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null)
+    {
+        var valid = await _otpService.ValidateOtpAsync(email, null, code, OtpPurpose.MfaVerification);
+
+        if (!valid)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Email == email);
+
+        if (user == null)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
     }
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)

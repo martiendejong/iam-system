@@ -21,6 +21,8 @@ export default function LoginPage() {
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
   const [socialProviders, setSocialProviders] = useState<IdentityProvider[]>([]);
+  const [stepUpRequired, setStepUpRequired] = useState(false);
+  const [stepUpCode, setStepUpCode] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -72,6 +74,8 @@ export default function LoginPage() {
     setMagicLinkSent(false);
     setForgotSent(false);
     setOtpCode('');
+    setStepUpRequired(false);
+    setStepUpCode('');
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -100,7 +104,12 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      await login({ email, password });
+      const response = await login({ email, password });
+      if (response.requiresStepUp) {
+        setStepUpRequired(true);
+        setMessage('Additional verification required. Check your email for a code.');
+        return;
+      }
       // If returnUrl is an OIDC authorize request, use full page navigation
       // so the browser sends the session cookie to the backend
       if (returnUrl.startsWith('/connect/') || returnUrl.startsWith('/auth/connect/')) {
@@ -112,6 +121,29 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Login failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStepUpVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      const response = await api.verifyStepUp(email, stepUpCode);
+      if (response.accessToken) {
+        localStorage.setItem('accessToken', response.accessToken);
+      }
+      if (returnUrl.startsWith('/connect/') || returnUrl.startsWith('/auth/connect/')) {
+        const fullUrl = returnUrl.startsWith('/auth/') ? returnUrl : '/auth' + returnUrl;
+        window.location.href = fullUrl;
+      } else {
+        navigate(returnUrl);
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Invalid or expired code. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -228,8 +260,50 @@ export default function LoginPage() {
           </div>
         )}
 
+        {/* Adaptive MFA step-up verification */}
+        {loginMethod === 'password' && stepUpRequired && (
+          <form className="mt-4 space-y-6" onSubmit={handleStepUpVerify}>
+            <div>
+              <label htmlFor="step-up-code" className="block text-sm font-medium text-gray-700">
+                Verification code
+              </label>
+              <input
+                id="step-up-code"
+                name="code"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                required
+                placeholder="000000"
+                autoFocus
+                value={stepUpCode}
+                onChange={(e) => setStepUpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-center text-2xl tracking-widest font-mono"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Enter the 6-digit code sent to {email}
+              </p>
+            </div>
+            <button
+              type="submit"
+              disabled={loading || stepUpCode.length !== 6}
+              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+            >
+              {loading ? 'Verifying...' : 'Verify Code'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setStepUpRequired(false); setStepUpCode(''); setMessage(''); }}
+              className="w-full text-sm text-indigo-600 hover:text-indigo-500"
+            >
+              Back to sign in
+            </button>
+          </form>
+        )}
+
         {/* Password login form */}
-        {loginMethod === 'password' && (
+        {loginMethod === 'password' && !stepUpRequired && (
           <form className="mt-4 space-y-6" onSubmit={handlePasswordLogin}>
             <div className="space-y-4">
               <div>
