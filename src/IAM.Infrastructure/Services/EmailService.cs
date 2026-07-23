@@ -68,6 +68,22 @@ public partial class EmailService : IEmailService
         await SendEmailAsync(email, subject, body, ct);
     }
 
+    public async Task SendLoginTwoFactorCodeAsync(string email, string username, string code, string verifyUrl, CancellationToken ct = default)
+    {
+        var subject = "Your sign-in verification code";
+        var body = BuildEmailBody(
+            greeting: $"Hi {EscapeHtml(username)},",
+            mainMessage: "Enter this code to finish signing in, or click the button below to verify automatically.",
+            ctaUrl: verifyUrl,
+            ctaText: "Verify and Sign In",
+            additionalInfo: "This code will expire in 10 minutes. If you did not attempt to sign in, please secure your account immediately.",
+            footer: null,
+            highlightCode: code
+        );
+
+        await SendEmailAsync(email, subject, body, ct);
+    }
+
     public async Task SendSessionAlertAsync(string email, string username, string deviceInfo, string ipAddress, CancellationToken ct = default)
     {
         var subject = "New sign-in detected on your account";

@@ -83,6 +83,18 @@ class ApiService {
     await this.client.post('/auth/register', data);
   }
 
+  async verifyLoginTwoFactor(userId: string, code: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/2fa/verify', { userId, code });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
+
+  async resendLoginTwoFactorCode(userId: string): Promise<void> {
+    await this.client.post('/auth/2fa/resend', { userId });
+  }
+
   async logout(): Promise<void> {
     await this.client.post('/auth/logout');
     localStorage.removeItem('accessToken');

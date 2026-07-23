@@ -5,6 +5,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace IAM.Infrastructure.Services;
 
@@ -13,6 +14,7 @@ public class OtpService : IOtpService
     private readonly IAMDbContext _context;
     private readonly IEmailService _emailService;
     private readonly ISmsService _smsService;
+    private readonly EmailSettings _emailSettings;
     private readonly ILogger<OtpService> _logger;
 
     private const int CodeLength = 6;
@@ -25,11 +27,13 @@ public class OtpService : IOtpService
         IAMDbContext context,
         IEmailService emailService,
         ISmsService smsService,
+        IOptions<EmailSettings> emailSettings,
         ILogger<OtpService> logger)
     {
         _context = context;
         _emailService = emailService;
         _smsService = smsService;
+        _emailSettings = emailSettings.Value;
         _logger = logger;
     }
 
@@ -196,6 +200,44 @@ public class OtpService : IOtpService
 
         _logger.LogInformation("OTP validated successfully for {Target} purpose {Purpose}",
             email ?? phoneNumber, purpose);
+        return true;
+    }
+
+    public async Task<bool> SendLoginTwoFactorCodeAsync(User user)
+    {
+        // Rate limit: max per email per hour (shared budget with other email OTP purposes)
+        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
+        var recentCount = await _context.OtpCodes
+            .CountAsync(c => c.Email == user.Email && c.Purpose == OtpPurpose.LoginTwoFactor && c.CreatedAt >= oneHourAgo);
+
+        if (recentCount >= MaxEmailPerAddressPerHour)
+        {
+            _logger.LogWarning("Rate limit exceeded for login 2FA code requests: {Email}", user.Email);
+            return false;
+        }
+
+        var code = GenerateNumericCode();
+        var codeHash = HashCode(code);
+
+        var otpCode = new OtpCode
+        {
+            UserId = user.Id,
+            Email = user.Email,
+            Code = codeHash,
+            Purpose = OtpPurpose.LoginTwoFactor,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(ExpiryMinutes),
+            MaxAttempts = MaxAttemptsPerCode
+        };
+
+        _context.OtpCodes.Add(otpCode);
+        await _context.SaveChangesAsync();
+
+        var baseUrl = _emailSettings.BaseUrl?.TrimEnd('/');
+        var verifyUrl = $"{baseUrl}/verify-2fa?userId={user.Id}&code={code}";
+
+        await _emailService.SendLoginTwoFactorCodeAsync(user.Email, user.FirstName, code, verifyUrl);
+
+        _logger.LogInformation("Login 2FA code sent to {Email}", user.Email);
         return true;
     }
 

@@ -3853,6 +3853,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("boolean");
 
+                    b.Property<int>("TwoFactorMethod")
+                        .HasColumnType("integer");
+
                     b.Property<string>("TwoFactorSecret")
                         .HasColumnType("text");
 
