@@ -99,76 +99,109 @@ public class TelemetryStorageService : ITelemetryStorageService
         };
     }
 
+    private static readonly HashSet<string> ValidAggregations = new(StringComparer.OrdinalIgnoreCase)
+        { "avg", "min", "max", "sum", "count" };
+
     public async Task<List<TelemetryAggregation>> AggregateAsync(TelemetryAggregationQuery query, CancellationToken ct = default)
     {
-        var dbQuery = _context.TelemetryRecords
-            .Where(r => r.MetricName == query.MetricName)
-            .Where(r => r.NumericValue.HasValue)
-            .Where(r => r.Timestamp >= query.StartTime && r.Timestamp <= query.EndTime);
+        var aggregation = query.Aggregation.ToLowerInvariant();
+        if (!ValidAggregations.Contains(aggregation))
+            throw new ArgumentException($"Unsupported aggregation '{query.Aggregation}'", nameof(query));
 
-        if (!string.IsNullOrEmpty(query.DeviceId))
-            dbQuery = dbQuery.Where(r => r.DeviceId == query.DeviceId);
+        // Bucketing/aggregation is pushed down to Postgres via date_bin() rather than loading
+        // raw rows and grouping in C# - the previous approach materialized every matching row
+        // into app memory per request, which does not scale to a 100-device/10K-point dashboard
+        // query. date_bin is available on Postgres 14+; aggregation/groupBy values come from a
+        // fixed allow-list (validated above and in the controller), never interpolated from
+        // free-form user input, so building the aggregate/group-by SQL fragments below is safe.
+        // Cast every branch to double precision so the reader can always read column 2 as a double,
+        // regardless of which aggregation (e.g. COUNT returns bigint) produced it.
+        var aggregateExpr = aggregation switch
+        {
+            "min" => "MIN(\"NumericValue\")::double precision",
+            "max" => "MAX(\"NumericValue\")::double precision",
+            "sum" => "SUM(\"NumericValue\")::double precision",
+            "count" => "COUNT(\"NumericValue\")::double precision",
+            _ => "AVG(\"NumericValue\")::double precision"
+        };
 
-        if (query.TenantId.HasValue)
-            dbQuery = dbQuery.Where(r => r.TenantId == query.TenantId.Value);
+        var groupByColumn = query.GroupBy?.ToLowerInvariant() switch
+        {
+            "device_id" => "\"DeviceId\"",
+            "device_type" => "\"DeviceType\"",
+            _ => null
+        };
+        var groupKeySelect = groupByColumn is null ? "NULL" : groupByColumn;
 
         var intervalSeconds = ParseIntervalToSeconds(query.Interval);
-        var startTicks = query.StartTime.Ticks;
+        var intervalLiteral = $"{intervalSeconds} seconds";
 
-        // Materialize the filtered data, then aggregate in memory.
-        // EF Core with PostgreSQL cannot translate arbitrary date-bucketing expressions.
-        var rawRecords = await dbQuery
-            .Select(r => new
-            {
-                r.Timestamp,
-                NumericValue = r.NumericValue!.Value,
-                r.DeviceId,
-                r.DeviceType
-            })
-            .ToListAsync(ct);
+        var sql = $@"
+            SELECT
+                date_bin(@interval::interval, ""Timestamp"", @origin) AS bucket_start,
+                {groupKeySelect} AS group_key,
+                {aggregateExpr} AS value,
+                COUNT(""NumericValue"") AS count
+            FROM ""TelemetryRecords""
+            WHERE ""MetricName"" = @metricName
+              AND ""NumericValue"" IS NOT NULL
+              AND ""Timestamp"" >= @startTime
+              AND ""Timestamp"" <= @endTime
+              AND (@deviceId IS NULL OR ""DeviceId"" = @deviceId)
+              AND (@tenantId IS NULL OR ""TenantId"" = @tenantId)
+            GROUP BY bucket_start, group_key
+            ORDER BY bucket_start, group_key";
 
-        // Group into time buckets + optional group key
-        var grouped = rawRecords
-            .GroupBy(r =>
-            {
-                var bucketIndex = (long)((r.Timestamp - query.StartTime).TotalSeconds / intervalSeconds);
-                var bucketStart = query.StartTime.AddSeconds(bucketIndex * intervalSeconds);
+        var connection = _context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen) await connection.OpenAsync(ct);
 
-                string? groupKey = query.GroupBy?.ToLowerInvariant() switch
-                {
-                    "device_id" => r.DeviceId,
-                    "device_type" => r.DeviceType,
-                    _ => null
-                };
-
-                return new { BucketStart = bucketStart, GroupKey = groupKey };
-            });
-
-        var results = new List<TelemetryAggregation>();
-
-        foreach (var group in grouped.OrderBy(g => g.Key.BucketStart).ThenBy(g => g.Key.GroupKey))
+        try
         {
-            var values = group.Select(r => r.NumericValue).ToList();
-            var aggregatedValue = query.Aggregation.ToLowerInvariant() switch
-            {
-                "min" => values.Min(),
-                "max" => values.Max(),
-                "sum" => values.Sum(),
-                "count" => values.Count,
-                _ => values.Average() // "avg" is default
-            };
+            // "Timestamp" is stored as timestamptz; Npgsql requires Kind=Utc for that mapping,
+            // and query-string-bound DateTimes commonly arrive as Kind=Unspecified.
+            var startTimeUtc = DateTime.SpecifyKind(query.StartTime, DateTimeKind.Utc);
+            var endTimeUtc = DateTime.SpecifyKind(query.EndTime, DateTimeKind.Utc);
 
-            results.Add(new TelemetryAggregation
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            AddParameter(command, "@interval", intervalLiteral);
+            AddParameter(command, "@origin", startTimeUtc);
+            AddParameter(command, "@metricName", query.MetricName);
+            AddParameter(command, "@startTime", startTimeUtc);
+            AddParameter(command, "@endTime", endTimeUtc);
+            AddParameter(command, "@deviceId", (object?)query.DeviceId ?? DBNull.Value);
+            AddParameter(command, "@tenantId", (object?)query.TenantId ?? DBNull.Value);
+
+            var results = new List<TelemetryAggregation>();
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
             {
-                BucketStart = group.Key.BucketStart,
-                BucketEnd = group.Key.BucketStart.AddSeconds(intervalSeconds),
-                Value = aggregatedValue,
-                Count = values.Count,
-                GroupKey = group.Key.GroupKey
-            });
+                var bucketStart = reader.GetDateTime(0);
+                results.Add(new TelemetryAggregation
+                {
+                    BucketStart = bucketStart,
+                    BucketEnd = bucketStart.AddSeconds(intervalSeconds),
+                    GroupKey = reader.IsDBNull(1) ? null : reader.GetString(1),
+                    Value = reader.IsDBNull(2) ? 0 : reader.GetDouble(2),
+                    Count = (int)reader.GetInt64(3)
+                });
+            }
+
+            return results;
         }
+        finally
+        {
+            if (!wasOpen) await connection.CloseAsync();
+        }
+    }
 
-        return results;
+    private static void AddParameter(System.Data.Common.DbCommand command, string name, object value)
+    {
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = name;
+        parameter.Value = value;
+        command.Parameters.Add(parameter);
     }
 
     public async Task<List<string>> GetMetricNamesAsync(string? deviceId = null, CancellationToken ct = default)
@@ -224,6 +257,29 @@ public class TelemetryStorageService : ITelemetryStorageService
             OldestRecord = oldestRecord,
             NewestRecord = newestRecord
         };
+    }
+
+    public async Task<List<TelemetryRecord>> GetLatestAsync(string deviceId, CancellationToken ct = default)
+    {
+        // EF Core cannot translate "OrderBy().First() per group" into SQL for arbitrary columns.
+        // Postgres' DISTINCT ON is the standard, index-friendly way to get one latest row per
+        // metric in a single query (uses the existing DeviceId+MetricName+Timestamp index).
+        return await _context.TelemetryRecords
+            .FromSqlInterpolated($@"
+                SELECT DISTINCT ON (""MetricName"") *
+                FROM ""TelemetryRecords""
+                WHERE ""DeviceId"" = {deviceId}
+                ORDER BY ""MetricName"", ""Timestamp"" DESC")
+            .OrderBy(r => r.MetricName)
+            .ToListAsync(ct);
+    }
+
+    public async Task<TelemetryRecord?> GetLatestAsync(string deviceId, string metricName, CancellationToken ct = default)
+    {
+        return await _context.TelemetryRecords
+            .Where(r => r.DeviceId == deviceId && r.MetricName == metricName)
+            .OrderByDescending(r => r.Timestamp)
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<int> CleanupOldDataAsync(int retentionDays = 90, CancellationToken ct = default)

@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Text.Json;
+using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -15,13 +17,19 @@ public class TelemetryHub : Hub
 {
     private readonly IDeviceAuthenticationService _deviceAuthService;
     private readonly IDeviceService _deviceService;
+    private readonly ITelemetryStorageService _telemetryService;
+    private readonly ILogger<TelemetryHub> _logger;
 
     public TelemetryHub(
         IDeviceAuthenticationService deviceAuthService,
-        IDeviceService deviceService)
+        IDeviceService deviceService,
+        ITelemetryStorageService telemetryService,
+        ILogger<TelemetryHub> logger)
     {
         _deviceAuthService = deviceAuthService;
         _deviceService = deviceService;
+        _telemetryService = telemetryService;
+        _logger = logger;
     }
 
     /// <summary>
@@ -84,6 +92,7 @@ public class TelemetryHub : Hub
             }
         }
 
+        var receivedAt = DateTime.UtcNow;
         var enrichedMessage = new
         {
             message.DeviceId,
@@ -92,18 +101,63 @@ public class TelemetryHub : Hub
             message.DataType,
             message.Payload,
             message.Timestamp,
-            receivedAt = DateTime.UtcNow
+            receivedAt
         };
 
         // Broadcast to all relevant groups simultaneously
-        var tasks = new List<Task>
+        var broadcastTasks = new List<Task>
         {
             Clients.Group($"device:{message.DeviceId}").SendAsync("TelemetryReceived", enrichedMessage),
             Clients.Group($"tenant:{message.TenantId}").SendAsync("TelemetryReceived", enrichedMessage),
             Clients.Group($"type:{message.DeviceType}").SendAsync("TelemetryReceived", enrichedMessage)
         };
 
-        await Task.WhenAll(tasks);
+        // Persist so the data survives past this broadcast (dashboard history, retention, exports).
+        // Without this, telemetry published over the hub was visible live but never queryable afterwards.
+        Guid.TryParse(message.TenantId, out var tenantId);
+        var record = ToTelemetryRecord(message, tenantId);
+        broadcastTasks.Add(_telemetryService.IngestAsync(record));
+
+        await Task.WhenAll(broadcastTasks);
+    }
+
+    private static TelemetryRecord ToTelemetryRecord(TelemetryMessage message, Guid tenantId)
+    {
+        var record = new TelemetryRecord
+        {
+            Id = Guid.NewGuid(),
+            DeviceId = message.DeviceId,
+            DeviceType = message.DeviceType,
+            MetricName = message.DataType,
+            TenantId = tenantId == Guid.Empty ? null : tenantId,
+            Timestamp = message.Timestamp
+        };
+
+        switch (message.Payload)
+        {
+            case null:
+                break;
+            case JsonElement { ValueKind: JsonValueKind.Number } number:
+                record.NumericValue = number.GetDouble();
+                break;
+            case JsonElement { ValueKind: JsonValueKind.String } str:
+                record.StringValue = str.GetString();
+                break;
+            case JsonElement element:
+                record.JsonValue = element.GetRawText();
+                break;
+            case double or int or long or float or decimal:
+                record.NumericValue = Convert.ToDouble(message.Payload);
+                break;
+            case string s:
+                record.StringValue = s;
+                break;
+            default:
+                record.JsonValue = JsonSerializer.Serialize(message.Payload);
+                break;
+        }
+
+        return record;
     }
 
     /// <summary>
