@@ -149,6 +149,21 @@ public class AuthService : IAuthService
         user.FailedLoginAttempts = 0;
         user.IsLockedOut = false;
         user.LockoutEnd = null;
+
+        if (user.TwoFactorEnabled)
+        {
+            // Password verified, but a second factor is required before tokens are issued.
+            // The client must complete the challenge via POST /api/mfa/totp/validate.
+            await _context.SaveChangesAsync();
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresMfa = true,
+                User = user
+            };
+        }
+
         user.LastLoginAt = DateTime.UtcNow;
 
         // Generate refresh token first (needed for token binding)
