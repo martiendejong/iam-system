@@ -352,6 +352,44 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Password Manager — vault.prospergenics.com (Authorization Code Flow with PKCE, public client)
+        if (await manager.FindByClientIdAsync("passwordmanager", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "passwordmanager",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Password Manager",
+                RedirectUris =
+                {
+                    new Uri("https://vault.prospergenics.com/api/auth/iam/callback"),
+                    new Uri("http://localhost:5076/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://vault.prospergenics.com/"),
+                    new Uri("http://localhost:5174/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         // Test Client #4: Backend Service (Client Credentials Flow)
         if (await manager.FindByClientIdAsync("backend_service", cancellationToken) == null)
         {
