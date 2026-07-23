@@ -24,6 +24,7 @@ public class User
     // MFA
     public bool TwoFactorEnabled { get; set; }
     public string? TwoFactorSecret { get; set; }
+    public TwoFactorMethod TwoFactorMethod { get; set; } = TwoFactorMethod.None;
 
     // Password reset
     public string? PasswordResetToken { get; set; }
@@ -39,4 +40,11 @@ public class User
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
     public ICollection<RecoveryCode> RecoveryCodes { get; set; } = new List<RecoveryCode>();
+}
+
+public enum TwoFactorMethod
+{
+    None,
+    Totp,
+    Email
 }

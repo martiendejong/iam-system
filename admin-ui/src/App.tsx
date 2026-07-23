@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import LoginPage from './pages/auth/LoginPage';
 import VerifyEmailPage from './pages/auth/VerifyEmailPage';
 import ResetPasswordPage from './pages/auth/ResetPasswordPage';
+import VerifyTwoFactorPage from './pages/auth/VerifyTwoFactorPage';
 import DashboardPage from './pages/DashboardPage';
 import UsersPage from './pages/users/UsersPage';
 import UserEditPage from './pages/users/UserEditPage';
@@ -60,6 +61,7 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/verify-2fa" element={<VerifyTwoFactorPage />} />
 
           {/* Protected routes */}
           <Route
