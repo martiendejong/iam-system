@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using IAM.Core.Services;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
@@ -52,7 +54,11 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        var result = await _authService.LoginAsync(request.Email, request.Password);
+        // Extract device fingerprinting information
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.LoginAsync(request.Email, request.Password, ipAddress, userAgent);
 
         if (!result.Success)
         {
@@ -67,6 +73,17 @@ public class AuthController : ControllerBase
             SameSite = SameSiteMode.Strict,
             Expires = DateTimeOffset.UtcNow.AddDays(7)
         });
+
+        // Establish OIDC session cookie so the authorize endpoint can identify the user
+        // without requiring a Bearer token in the browser request
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
+            new(ClaimTypes.Email, result.User.Email),
+            new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
+        };
+        var identity = new ClaimsIdentity(claims, "IAM.Session");
+        await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity));
 
         return Ok(new
         {
@@ -89,12 +106,25 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "Refresh token not found" });
         }
 
-        var result = await _authService.RefreshTokenAsync(refreshToken);
+        // Extract device fingerprinting information
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.RefreshTokenAsync(refreshToken, ipAddress, userAgent);
 
         if (!result.Success)
         {
             return Unauthorized(new { error = result.Error });
         }
+
+        // SINGLE-USE TOKENS: Update cookie with NEW refresh token (token rotation)
+        Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true,
+            SameSite = SameSiteMode.Strict,
+            Expires = DateTimeOffset.UtcNow.AddDays(7)
+        });
 
         return Ok(new
         {
@@ -111,6 +141,7 @@ public class AuthController : ControllerBase
         }
 
         Response.Cookies.Delete("refreshToken");
+        await HttpContext.SignOutAsync("IAM.Session");
 
         return Ok(new { message = "Logged out successfully" });
     }

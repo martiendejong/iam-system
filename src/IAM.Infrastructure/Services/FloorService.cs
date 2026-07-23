@@ -19,7 +19,7 @@ public class FloorService : IFloorService
         return await _context.Floors
             .Include(f => f.Building)
             .Include(f => f.Rooms)
-            .FirstOrDefaultAsync(f => f.Id == id && f.TenantId == tenantId);
+            .FirstOrDefaultAsync(f => f.Id == id && f.TenantId == tenantId && f.IsActive);
     }
 
     public async Task<IEnumerable<Floor>> GetAllAsync(Guid tenantId, bool includeInactive = false)

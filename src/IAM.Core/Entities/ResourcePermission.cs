@@ -64,7 +64,7 @@ public class ResourcePermission
     /// Tenant that owns this permission
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// Time restrictions (optional)

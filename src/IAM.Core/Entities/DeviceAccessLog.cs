@@ -8,10 +8,10 @@ public class DeviceAccessLog
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public Guid DeviceId { get; set; }
-    public IoTDevice Device { get; set; } = null!;
+    public IoTDevice? Device { get; set; }
 
     public Guid UserId { get; set; }
-    public User User { get; set; } = null!;
+    public User? User { get; set; }
 
     /// <summary>
     /// What action was performed

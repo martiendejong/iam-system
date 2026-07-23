@@ -8,10 +8,10 @@ public class RoomGroupMembership
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public Guid RoomId { get; set; }
-    public Room Room { get; set; } = null!;
+    public Room? Room { get; set; }
 
     public Guid RoomGroupId { get; set; }
-    public RoomGroup RoomGroup { get; set; } = null!;
+    public RoomGroup? RoomGroup { get; set; }
 
     /// <summary>
     /// When this room was added to the group

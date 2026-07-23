@@ -27,7 +27,7 @@ public class RoomGroup
     /// Tenant that owns this room group
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// Rooms that belong to this group

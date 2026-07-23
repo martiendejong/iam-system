@@ -18,13 +18,13 @@ public class Floor
     /// Parent building
     /// </summary>
     public Guid BuildingId { get; set; }
-    public Building Building { get; set; } = null!;
+    public Building? Building { get; set; }
 
     /// <summary>
     /// Tenant that owns this floor
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// Rooms on this floor

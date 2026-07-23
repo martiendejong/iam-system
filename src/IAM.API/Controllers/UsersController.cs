@@ -1,4 +1,5 @@
 using IAM.Core.Entities;
+using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,10 +14,12 @@ namespace IAM.API.Controllers;
 public class UsersController : ControllerBase
 {
     private readonly IAMDbContext _context;
+    private readonly IAuthService _authService;
 
-    public UsersController(IAMDbContext context)
+    public UsersController(IAMDbContext context, IAuthService authService)
     {
         _context = context;
+        _authService = authService;
     }
 
     /// <summary>
@@ -89,6 +92,40 @@ public class UsersController : ControllerBase
         {
             user.LastName = request.LastName;
         }
+
+        user.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            id = user.Id,
+            email = user.Email,
+            firstName = user.FirstName,
+            lastName = user.LastName
+        });
+    }
+
+    /// <summary>
+    /// Update any user's profile (SuperAdmin only)
+    /// </summary>
+    [HttpPut("{id}")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> UpdateUser(Guid id, [FromBody] AdminUpdateUserRequest request)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+        {
+            return NotFound();
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.FirstName))
+            user.FirstName = request.FirstName;
+        if (!string.IsNullOrWhiteSpace(request.LastName))
+            user.LastName = request.LastName;
+        if (!string.IsNullOrWhiteSpace(request.Email))
+            user.Email = request.Email;
+        if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
+            user.PhoneNumber = request.PhoneNumber;
 
         user.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
@@ -262,9 +299,9 @@ public class UsersController : ControllerBase
             return NotFound(new { error = "Role not found" });
         }
 
-        // Check if role assignment already exists
+        // Check if role assignment already exists (scoped to tenant)
         var existingAssignment = await _context.UserRoles
-            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == request.RoleId);
+            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == request.RoleId && ur.TenantId == request.TenantId);
 
         if (existingAssignment != null)
         {
@@ -303,14 +340,45 @@ public class UsersController : ControllerBase
     }
 
     /// <summary>
+    /// Resend email verification to an unverified user (SuperAdmin only)
+    /// </summary>
+    [HttpPost("{id}/resend-verification")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> ResendVerification(Guid id)
+    {
+        var sent = await _authService.ResendVerificationEmailAsync(id);
+
+        if (!sent)
+            return BadRequest(new { error = "User not found or email is already verified" });
+
+        return Ok(new { message = "Verification email sent" });
+    }
+
+    /// <summary>
+    /// Trigger a password reset email for a user (SuperAdmin only)
+    /// </summary>
+    [HttpPost("{id}/send-password-reset")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> SendPasswordReset(Guid id)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        await _authService.SendPasswordResetAsync(user.Email);
+
+        return Ok(new { message = "Password reset email sent" });
+    }
+
+    /// <summary>
     /// Remove role from user (SuperAdmin only)
     /// </summary>
     [HttpDelete("{userId}/roles/{roleId}")]
     [Authorize(Roles = "SuperAdmin")]
-    public async Task<IActionResult> RemoveRole(Guid userId, Guid roleId)
+    public async Task<IActionResult> RemoveRole(Guid userId, Guid roleId, [FromQuery] Guid? tenantId)
     {
         var userRole = await _context.UserRoles
-            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == roleId);
+            .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.RoleId == roleId && ur.TenantId == tenantId);
 
         if (userRole == null)
         {
@@ -322,7 +390,33 @@ public class UsersController : ControllerBase
 
         return Ok(new { message = "Role removed successfully" });
     }
+
+    /// <summary>
+    /// Change password for any user (SuperAdmin only)
+    /// </summary>
+    [HttpPost("{id}/change-password")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> ChangeUserPassword(Guid id, [FromBody] AdminChangePasswordRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
+            return BadRequest(new { error = "Password must be at least 8 characters" });
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Password changed successfully" });
+    }
 }
 
 public record UpdateProfileRequest(string? FirstName, string? LastName);
 public record AssignRoleRequest(Guid RoleId, Guid? TenantId, DateTime? ExpiresAt);
+public record AdminChangePasswordRequest(string NewPassword);
+public record AdminUpdateUserRequest(string? FirstName, string? LastName, string? Email, string? PhoneNumber);

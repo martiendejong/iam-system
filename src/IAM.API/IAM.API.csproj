@@ -1,19 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.0" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.11" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0">
+    <PackageReference Include="Fido2.AspNet" Version="4.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.*" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.*">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.10" />
     <PackageReference Include="OpenIddict.AspNetCore" Version="5.9.0" />
     <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="5.9.0" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
@@ -23,5 +25,30 @@
     <ProjectReference Include="..\IAM.Core\IAM.Core.csproj" />
     <ProjectReference Include="..\IAM.Infrastructure\IAM.Infrastructure.csproj" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <AdminUiRoot>$(MSBuildProjectDirectory)\..\..\admin-ui\</AdminUiRoot>
+  </PropertyGroup>
+
+  <!--
+    app.UseStaticFiles() + app.MapFallbackToFile("index.html") (Program.cs) serve the SPA from
+    wwwroot, but nothing produced wwwroot: admin-ui/dist was never part of this project and a
+    plain `dotnet publish` shipped a wwwroot-less app, so /login (and every other client route)
+    404'd until someone manually xcopied a dist build onto the deploy target. Build the SPA and
+    fold its output into the publish payload so `dotnet publish` alone is sufficient.
+  -->
+  <Target Name="PublishAdminUi" AfterTargets="ComputeFilesToPublish">
+    <Exec Command="npm install" WorkingDirectory="$(AdminUiRoot)" Condition="!Exists('$(AdminUiRoot)node_modules')" />
+    <Exec Command="npm run build" WorkingDirectory="$(AdminUiRoot)" />
+
+    <ItemGroup>
+      <AdminUiDistFiles Include="$(AdminUiRoot)dist\**" />
+      <ResolvedFileToPublish Include="@(AdminUiDistFiles->'%(FullPath)')" Exclude="@(ResolvedFileToPublish)">
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 
 </Project>

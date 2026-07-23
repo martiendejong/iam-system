@@ -20,7 +20,7 @@ public class IoTDeviceService : IIoTDeviceService
             .Include(d => d.Room)
                 .ThenInclude(r => r.Floor)
                     .ThenInclude(f => f.Building)
-            .FirstOrDefaultAsync(d => d.Id == id && d.TenantId == tenantId);
+            .FirstOrDefaultAsync(d => d.Id == id && d.TenantId == tenantId && d.IsActive);
     }
 
     public async Task<IoTDevice?> GetByDeviceIdAsync(string deviceId, Guid tenantId)

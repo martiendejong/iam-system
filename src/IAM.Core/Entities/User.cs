@@ -8,6 +8,7 @@ public class User
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? PhoneNumber { get; set; }
+    public string? AvatarUrl { get; set; }
 
     // Email verification
     public bool EmailConfirmed { get; set; }
@@ -37,4 +38,5 @@ public class User
     public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
+    public ICollection<RecoveryCode> RecoveryCodes { get; set; } = new List<RecoveryCode>();
 }

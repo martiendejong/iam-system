@@ -22,7 +22,7 @@ public class RoomService : IRoomService
             .Include(r => r.Devices)
             .Include(r => r.GroupMemberships)
                 .ThenInclude(gm => gm.RoomGroup)
-            .FirstOrDefaultAsync(r => r.Id == id && r.TenantId == tenantId);
+            .FirstOrDefaultAsync(r => r.Id == id && r.TenantId == tenantId && r.IsActive);
     }
 
     public async Task<IEnumerable<Room>> GetAllAsync(Guid tenantId, bool includeInactive = false)

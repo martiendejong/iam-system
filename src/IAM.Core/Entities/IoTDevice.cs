@@ -29,13 +29,13 @@ public class IoTDevice
     /// Parent room
     /// </summary>
     public Guid RoomId { get; set; }
-    public Room Room { get; set; } = null!;
+    public Room? Room { get; set; }
 
     /// <summary>
     /// Tenant that owns this device
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// Streaming configuration

@@ -19,13 +19,13 @@ public class Room
     /// Parent floor
     /// </summary>
     public Guid FloorId { get; set; }
-    public Floor Floor { get; set; } = null!;
+    public Floor? Floor { get; set; }
 
     /// <summary>
     /// Tenant that owns this room
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// IoT devices in this room

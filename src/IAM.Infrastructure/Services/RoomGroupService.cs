@@ -21,7 +21,7 @@ public class RoomGroupService : IRoomGroupService
             .Include(rg => rg.Building)
             .Include(rg => rg.RoomMemberships)
                 .ThenInclude(rm => rm.Room)
-            .FirstOrDefaultAsync(rg => rg.Id == id && rg.TenantId == tenantId);
+            .FirstOrDefaultAsync(rg => rg.Id == id && rg.TenantId == tenantId && rg.IsActive);
     }
 
     public async Task<IEnumerable<RoomGroup>> GetAllAsync(Guid tenantId, bool includeInactive = false)

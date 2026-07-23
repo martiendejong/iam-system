@@ -84,6 +84,7 @@ temp/
 
 # Secrets
 secrets/
+!admin-ui/src/pages/secrets/
 *.key
 *.pem
 *.pfx

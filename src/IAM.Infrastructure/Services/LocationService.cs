@@ -18,7 +18,7 @@ public class LocationService : ILocationService
     {
         return await _context.Locations
             .Include(l => l.Buildings)
-            .FirstOrDefaultAsync(l => l.Id == id && l.TenantId == tenantId);
+            .FirstOrDefaultAsync(l => l.Id == id && l.TenantId == tenantId && l.IsActive);
     }
 
     public async Task<IEnumerable<Location>> GetAllAsync(Guid tenantId, bool includeInactive = false)

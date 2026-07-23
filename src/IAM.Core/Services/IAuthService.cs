@@ -5,12 +5,14 @@ namespace IAM.Core.Services;
 public interface IAuthService
 {
     Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName);
-    Task<AuthResult> LoginAsync(string email, string password);
-    Task<AuthResult> RefreshTokenAsync(string refreshToken);
+    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> RefreshTokenAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
     Task<bool> RevokeTokenAsync(string refreshToken);
     Task<bool> VerifyEmailAsync(string token);
     Task<bool> SendPasswordResetAsync(string email);
     Task<bool> ResetPasswordAsync(string token, string newPassword);
+    Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null);
+    Task<bool> ResendVerificationEmailAsync(Guid userId);
 }
 
 public class AuthResult

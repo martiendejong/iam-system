@@ -19,7 +19,7 @@ public class BuildingService : IBuildingService
         return await _context.Buildings
             .Include(b => b.Location)
             .Include(b => b.Floors)
-            .FirstOrDefaultAsync(b => b.Id == id && b.TenantId == tenantId);
+            .FirstOrDefaultAsync(b => b.Id == id && b.TenantId == tenantId && b.IsActive);
     }
 
     public async Task<IEnumerable<Building>> GetAllAsync(Guid tenantId, bool includeInactive = false)

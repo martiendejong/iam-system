@@ -47,7 +47,10 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
         var grantResponse = await _client.PostAsJsonAsync("/api/resourcepermission/grant", grantRequest);
         Assert.Equal(HttpStatusCode.Created, grantResponse.StatusCode);
 
-        // Act - Check if user has View permission on the device (4 levels down)
+        // Act - Check if user has View permission on the device (4 levels down),
+        // as the user the permission was actually granted to (testUserId == the "user" test token's sub)
+        var userToken = await TestHelpers.GetUserTokenAsync(_client);
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var checkResponse = await _client.GetAsync(
             $"/api/resourcepermission/check?resourceType={ResourceType.IoTDevice}&resourceId={device.Id}&action={PermissionAction.View}");
 
@@ -79,7 +82,9 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
 
         await _client.PostAsJsonAsync("/api/resourcepermission/grant", grantRequest);
 
-        // Act - Check if user has View permission on the device
+        // Act - Check if user has View permission on the device, as the user the permission was granted to
+        var userToken = await TestHelpers.GetUserTokenAsync(_client);
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var checkResponse = await _client.GetAsync(
             $"/api/resourcepermission/check?resourceType={ResourceType.IoTDevice}&resourceId={device.Id}&action={PermissionAction.View}");
 
@@ -115,7 +120,9 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
 
         await _client.PostAsJsonAsync("/api/resourcepermission/grant", grantRequest);
 
-        // Act - Check Stream permission on device (5 levels down)
+        // Act - Check Stream permission on device (5 levels down), as the user the permission was granted to
+        var userToken = await TestHelpers.GetUserTokenAsync(_client);
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var checkResponse = await _client.GetAsync(
             $"/api/resourcepermission/check?resourceType={ResourceType.IoTDevice}&resourceId={device.Id}&action={PermissionAction.Stream}");
 
@@ -164,7 +171,9 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
             InheritToChildren = false
         });
 
-        // Act - Get effective permissions (should combine all three)
+        // Act - Get effective permissions (should combine all three), as the user the permissions were granted to
+        var userToken = await TestHelpers.GetUserTokenAsync(_client);
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var response = await _client.GetAsync(
             $"/api/resourcepermission/effective?resourceType={ResourceType.IoTDevice}&resourceId={device.Id}");
 
@@ -199,7 +208,9 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
 
         var permission = await grantResponse.Content.ReadFromJsonAsync<ResourcePermission>();
 
-        // Verify permission exists
+        // Verify permission exists, checking as the user the permission was granted to
+        var userToken = await TestHelpers.GetUserTokenAsync(_client);
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var checkBefore = await _client.GetAsync(
             $"/api/resourcepermission/check?resourceType={ResourceType.IoTDevice}&resourceId={device.Id}&action={PermissionAction.View}");
         var hasPermissionBefore = await checkBefore.Content.ReadFromJsonAsync<bool>();
@@ -239,7 +250,9 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
             InheritToChildren = true
         });
 
-        // Act - Get accessible devices
+        // Act - Get accessible devices, as the user the permission was granted to
+        var userToken = await TestHelpers.GetUserTokenAsync(_client);
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var response = await _client.GetAsync($"/api/resourcepermission/accessible/{ResourceType.IoTDevice}");
 
         // Assert

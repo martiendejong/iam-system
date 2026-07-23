@@ -22,7 +22,7 @@ public class Location
     /// Tenant that owns this location
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// Buildings at this location

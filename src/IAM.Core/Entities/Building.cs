@@ -14,13 +14,13 @@ public class Building
     /// Parent location
     /// </summary>
     public Guid LocationId { get; set; }
-    public Location Location { get; set; } = null!;
+    public Location? Location { get; set; }
 
     /// <summary>
     /// Tenant that owns this building
     /// </summary>
     public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 
     /// <summary>
     /// Floors in this building

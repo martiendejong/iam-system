@@ -10,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Server.AspNetCore;
+using OpenIddict.Validation.AspNetCore;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace IAM.API.Controllers;
@@ -22,17 +23,30 @@ public class AuthorizationController : ControllerBase
     private readonly IOpenIddictApplicationManager _applicationManager;
     private readonly IOpenIddictAuthorizationManager _authorizationManager;
     private readonly IOpenIddictScopeManager _scopeManager;
+    private readonly string _loginBasePath;
 
     public AuthorizationController(
         IAMDbContext context,
         IOpenIddictApplicationManager applicationManager,
         IOpenIddictAuthorizationManager authorizationManager,
-        IOpenIddictScopeManager scopeManager)
+        IOpenIddictScopeManager scopeManager,
+        IConfiguration configuration)
     {
         _context = context;
         _applicationManager = applicationManager;
         _authorizationManager = authorizationManager;
         _scopeManager = scopeManager;
+
+        // ARR strips the /auth/ prefix before forwarding to Kestrel, so redirect to /login
+        // must include /auth prefix so the browser lands on the IAM admin-UI login page.
+        var issuer = configuration["Jwt:Issuer"] ?? "";
+        _loginBasePath = "";
+        if (!string.IsNullOrEmpty(issuer) && Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri))
+        {
+            var path = issuerUri.AbsolutePath.TrimEnd('/');
+            if (path.Length > 0 && path != "/")
+                _loginBasePath = path;
+        }
     }
 
     /// <summary>
@@ -46,20 +60,15 @@ public class AuthorizationController : ControllerBase
         var request = HttpContext.GetOpenIddictServerRequest() ??
                       throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
-        // Try to retrieve the user principal stored in the authentication cookie
-        var result = await HttpContext.AuthenticateAsync();
+        // Try to retrieve the user principal stored in the IAM session cookie
+        var result = await HttpContext.AuthenticateAsync("IAM.Session");
 
-        // If the user is not authenticated, redirect to login page
+        // If the user is not authenticated, redirect to React login page with return URL
         if (!result.Succeeded || result.Principal == null)
         {
-            // TODO: Redirect to login page with return URL
-            return Challenge(
-                authenticationSchemes: "Identity.Application",
-                properties: new AuthenticationProperties
-                {
-                    RedirectUri = Request.PathBase + Request.Path + QueryString.Create(
-                        Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList())
-                });
+            var returnUrl = Request.Path + QueryString.Create(
+                Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
+            return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
         }
 
         // Retrieve user from database
@@ -170,7 +179,7 @@ public class AuthorizationController : ControllerBase
     /// <summary>
     /// OIDC UserInfo Endpoint - returns user information
     /// </summary>
-    [Authorize(AuthenticationSchemes = OpenIddictServerAspNetCoreDefaults.AuthenticationScheme)]
+    [Authorize(AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme)]
     [HttpGet("userinfo")]
     [HttpPost("userinfo")]
     [Produces("application/json")]
