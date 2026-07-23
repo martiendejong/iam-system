@@ -382,6 +382,7 @@ public class TenantsController : ControllerBase
     /// List members of a tenant (users with at least one role scoped to this tenant)
     /// </summary>
     [HttpGet("{id}/members")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> GetMembers(Guid id)
     {
         var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == id);
@@ -423,6 +424,7 @@ public class TenantsController : ControllerBase
     /// Replace a member's role(s) within this tenant with a single new role
     /// </summary>
     [HttpPut("{id}/members/{userId}/role")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> ChangeMemberRole(Guid id, Guid userId, [FromBody] ChangeMemberRoleRequest request)
     {
         var role = await _context.Roles.FirstOrDefaultAsync(r => r.Id == request.RoleId);
@@ -461,6 +463,7 @@ public class TenantsController : ControllerBase
     /// Remove a member from this tenant (revokes all of their tenant-scoped roles)
     /// </summary>
     [HttpDelete("{id}/members/{userId}")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
     {
         var existingRoles = await _context.UserRoles

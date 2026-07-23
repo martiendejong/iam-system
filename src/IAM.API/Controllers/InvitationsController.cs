@@ -31,6 +31,7 @@ public class InvitationsController : ControllerBase
     /// Send an invitation to a user
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> SendInvitation([FromBody] SendInvitationRequest request)
     {
         var userId = GetCurrentUserId();
@@ -69,6 +70,7 @@ public class InvitationsController : ControllerBase
     /// Send bulk invitations from CSV upload (columns: name, email, role)
     /// </summary>
     [HttpPost("bulk")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> SendBulkInvitations([FromForm] BulkInviteRequest request)
     {
         var userId = GetCurrentUserId();
@@ -132,6 +134,7 @@ public class InvitationsController : ControllerBase
     /// List all invitations for a tenant
     /// </summary>
     [HttpGet]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> GetInvitations([FromQuery] Guid tenantId)
     {
         var invitations = await _invitationService.GetInvitationsByTenantAsync(tenantId);
@@ -185,6 +188,7 @@ public class InvitationsController : ControllerBase
     /// Revoke a pending invitation
     /// </summary>
     [HttpDelete("{id}")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> RevokeInvitation(Guid id)
     {
         var revoked = await _invitationService.RevokeInvitationAsync(id);
@@ -201,6 +205,7 @@ public class InvitationsController : ControllerBase
     /// Get pending invitations for a tenant
     /// </summary>
     [HttpGet("pending")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> GetPendingInvitations([FromQuery] Guid tenantId)
     {
         var invitations = await _invitationService.GetPendingInvitationsAsync(tenantId);
