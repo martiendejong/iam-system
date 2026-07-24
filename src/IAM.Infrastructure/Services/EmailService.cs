@@ -193,6 +193,11 @@ public partial class EmailService : IEmailService
         await SendEmailAsync(email, subject, body, ct);
     }
 
+    public async Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default)
+    {
+        await SendEmailAsync(email, subject, htmlBody, ct);
+    }
+
     public async Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default)
     {
         try

@@ -16,12 +16,15 @@ public interface IInvitationService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Send bulk invitations from parsed CSV data (name, email, role columns)
+    /// Send bulk invitations from parsed CSV data (name, email, role columns).
+    /// Rows that would grant the SuperAdmin role are rejected per-row unless
+    /// <paramref name="callerIsSuperAdmin"/> is true.
     /// </summary>
     Task<BulkInviteResult> SendBulkInvitationsAsync(
         IEnumerable<BulkInviteEntry> entries,
         Guid tenantId,
         Guid invitedByUserId,
+        bool callerIsSuperAdmin,
         CancellationToken ct = default);
 
     /// <summary>
@@ -83,4 +86,10 @@ public class InvitationAcceptResult
     public User? User { get; set; }
     public string? Error { get; set; }
     public string? WelcomeMessage { get; set; }
+
+    /// <summary>
+    /// True when the organization's settings require MFA and the accepting user has not enabled it yet.
+    /// The frontend should redirect to MFA setup immediately after showing the welcome message.
+    /// </summary>
+    public bool MfaSetupRequired { get; set; }
 }

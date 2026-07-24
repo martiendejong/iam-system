@@ -47,6 +47,7 @@ public class IAMDbContext : DbContext
     public DbSet<DataProcessingAgreement> DataProcessingAgreements => Set<DataProcessingAgreement>();
     public DbSet<Invitation> Invitations => Set<Invitation>();
     public DbSet<OrganizationSettings> OrganizationSettings => Set<OrganizationSettings>();
+    public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
     public DbSet<DirectorySyncConfig> DirectorySyncConfigs => Set<DirectorySyncConfig>();
     public DbSet<DirectorySyncLog> DirectorySyncLogs => Set<DirectorySyncLog>();
     public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
@@ -972,6 +973,23 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.DefaultRoleId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // EmailTemplate configuration (per-tenant customizable email content)
+        modelBuilder.Entity<EmailTemplate>(entity =>
+        {
+            entity.ToTable("EmailTemplates");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.Key }).IsUnique();
+
+            entity.Property(e => e.Key).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.BodyHtml).IsRequired().HasColumnType("text");
+
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // DirectorySyncConfig configuration (LDAP/AD sync)

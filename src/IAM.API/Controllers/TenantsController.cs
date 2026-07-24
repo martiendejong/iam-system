@@ -377,6 +377,114 @@ public class TenantsController : ControllerBase
             isActive = t.IsActive
         }));
     }
+
+    /// <summary>
+    /// List members of a tenant (users with at least one role scoped to this tenant)
+    /// </summary>
+    [HttpGet("{id}/members")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
+    public async Task<IActionResult> GetMembers(Guid id)
+    {
+        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == id);
+        if (!tenantExists)
+        {
+            return NotFound(new { error = "Tenant not found" });
+        }
+
+        var userRoles = await _context.UserRoles
+            .Include(ur => ur.User)
+            .Include(ur => ur.Role)
+            .Where(ur => ur.TenantId == id)
+            .OrderBy(ur => ur.User.Email)
+            .ToListAsync();
+
+        var members = userRoles
+            .GroupBy(ur => ur.User)
+            .Select(g => new
+            {
+                userId = g.Key.Id,
+                email = g.Key.Email,
+                firstName = g.Key.FirstName,
+                lastName = g.Key.LastName,
+                isActive = g.Key.IsActive,
+                joinedAt = g.Min(ur => ur.GrantedAt),
+                roles = g.Select(ur => new
+                {
+                    roleId = ur.RoleId,
+                    roleName = ur.Role.Name,
+                    grantedAt = ur.GrantedAt,
+                    expiresAt = ur.ExpiresAt
+                })
+            });
+
+        return Ok(members);
+    }
+
+    /// <summary>
+    /// Replace a member's role(s) within this tenant with a single new role
+    /// </summary>
+    [HttpPut("{id}/members/{userId}/role")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
+    public async Task<IActionResult> ChangeMemberRole(Guid id, Guid userId, [FromBody] ChangeMemberRoleRequest request)
+    {
+        var role = await _context.Roles.FirstOrDefaultAsync(r => r.Id == request.RoleId);
+        if (role == null)
+        {
+            return NotFound(new { error = "Role not found" });
+        }
+
+        if (role.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase) && !User.IsInRole("SuperAdmin"))
+        {
+            return Forbid();
+        }
+
+        var existingRoles = await _context.UserRoles
+            .Where(ur => ur.UserId == userId && ur.TenantId == id)
+            .ToListAsync();
+
+        if (existingRoles.Count == 0)
+        {
+            return NotFound(new { error = "User is not a member of this tenant" });
+        }
+
+        var currentUserId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+        _context.UserRoles.RemoveRange(existingRoles);
+        _context.UserRoles.Add(new UserRole
+        {
+            UserId = userId,
+            RoleId = request.RoleId,
+            TenantId = id,
+            GrantedBy = currentUserId,
+            GrantedAt = DateTime.UtcNow
+        });
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Member role updated", roleId = request.RoleId, roleName = role.Name });
+    }
+
+    /// <summary>
+    /// Remove a member from this tenant (revokes all of their tenant-scoped roles)
+    /// </summary>
+    [HttpDelete("{id}/members/{userId}")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
+    public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
+    {
+        var existingRoles = await _context.UserRoles
+            .Where(ur => ur.UserId == userId && ur.TenantId == id)
+            .ToListAsync();
+
+        if (existingRoles.Count == 0)
+        {
+            return NotFound(new { error = "User is not a member of this tenant" });
+        }
+
+        _context.UserRoles.RemoveRange(existingRoles);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "Member removed from tenant" });
+    }
 }
 
 public record CreateTenantRequest(
@@ -394,3 +502,5 @@ public record UpdateTenantRequest(
     Dictionary<string, object>? Settings,
     bool? IsActive
 );
+
+public record ChangeMemberRoleRequest(Guid RoleId);

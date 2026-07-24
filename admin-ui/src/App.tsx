@@ -34,6 +34,7 @@ import ConsentManagementPage from './pages/consent/ConsentManagementPage';
 import PortalPrivacyPage from './pages/portal/PortalPrivacyPage';
 import PortalLinkedAccountsPage from './pages/portal/PortalLinkedAccountsPage';
 import InvitationsPage from './pages/invitations/InvitationsPage';
+import AcceptInvitePage from './pages/invitations/AcceptInvitePage';
 import DirectorySyncPage from './pages/directory-sync/DirectorySyncPage';
 import AccessRequestsPage from './pages/workflows/AccessRequestsPage';
 import WorkflowTemplatesPage from './pages/workflows/WorkflowTemplatesPage';
@@ -62,6 +63,7 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/accept-invite" element={<AcceptInvitePage />} />
           <Route path="/verify-2fa" element={<VerifyTwoFactorPage />} />
 
           {/* Protected routes */}

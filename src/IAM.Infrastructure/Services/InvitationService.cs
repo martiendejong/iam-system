@@ -15,6 +15,7 @@ public class InvitationService : IInvitationService
     private readonly IEmailService _emailService;
     private readonly ILogger<InvitationService> _logger;
     private readonly int _defaultExpiryDays;
+    private readonly string? _emailBaseUrl;
 
     public InvitationService(
         IAMDbContext context,
@@ -26,6 +27,16 @@ public class InvitationService : IInvitationService
         _emailService = emailService;
         _logger = logger;
         _defaultExpiryDays = configuration.GetValue("Invitations:DefaultExpiryDays", 7);
+        _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
+    }
+
+    private static string RenderTemplate(string template, Dictionary<string, string> placeholders)
+    {
+        foreach (var (key, value) in placeholders)
+        {
+            template = template.Replace(key, value);
+        }
+        return template;
     }
 
     public async Task<Invitation> SendInvitationAsync(
@@ -111,7 +122,31 @@ public class InvitationService : IInvitationService
         var inviter = await _context.Users.FirstOrDefaultAsync(u => u.Id == invitedByUserId, ct);
         var inviterName = inviter != null ? $"{inviter.FirstName} {inviter.LastName}".Trim() : "A team member";
 
-        await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
+        var customTemplate = await _context.Set<EmailTemplate>()
+            .FirstOrDefaultAsync(t => t.TenantId == tenantId && t.Key == "Invitation" && t.IsActive, ct);
+
+        if (customTemplate != null)
+        {
+            var inviteUrl = $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={token}";
+            var placeholders = new Dictionary<string, string>
+            {
+                ["{{InviterName}}"] = inviterName,
+                ["{{TenantName}}"] = tenant.Name,
+                ["{{RoleName}}"] = role.Name,
+                ["{{InviteUrl}}"] = inviteUrl,
+                ["{{Email}}"] = email
+            };
+
+            await _emailService.SendRawEmailAsync(
+                email,
+                RenderTemplate(customTemplate.Subject, placeholders),
+                RenderTemplate(customTemplate.BodyHtml, placeholders),
+                ct);
+        }
+        else
+        {
+            await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
+        }
 
         _logger.LogInformation(
             "Invitation sent to {Email} for tenant {TenantName} ({TenantId}) by user {InviterId}",
@@ -124,6 +159,7 @@ public class InvitationService : IInvitationService
         IEnumerable<BulkInviteEntry> entries,
         Guid tenantId,
         Guid invitedByUserId,
+        bool callerIsSuperAdmin,
         CancellationToken ct = default)
     {
         var result = new BulkInviteResult();
@@ -180,6 +216,22 @@ public class InvitationService : IInvitationService
                     });
                     result.Failed++;
                     continue;
+                }
+
+                if (!callerIsSuperAdmin)
+                {
+                    var targetRole = tenantRoles.FirstOrDefault(r => r.Id == roleId);
+                    if (targetRole != null && targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.Errors.Add(new BulkInviteError
+                        {
+                            Row = i + 1,
+                            Email = entry.Email,
+                            Error = "Only a SuperAdmin can grant the SuperAdmin role"
+                        });
+                        result.Failed++;
+                        continue;
+                    }
                 }
 
                 await SendInvitationAsync(entry.Email, tenantId, roleId, invitedByUserId, ct: ct);
@@ -305,7 +357,8 @@ public class InvitationService : IInvitationService
         {
             Success = true,
             User = user,
-            WelcomeMessage = orgSettings?.WelcomeMessage
+            WelcomeMessage = orgSettings?.WelcomeMessage,
+            MfaSetupRequired = orgSettings?.RequireMfa == true && !user.TwoFactorEnabled
         };
     }
 

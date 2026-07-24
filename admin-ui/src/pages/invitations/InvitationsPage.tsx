@@ -15,6 +15,16 @@ interface Invitation {
   createdAt: string;
 }
 
+interface Member {
+  userId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  isActive: boolean;
+  joinedAt: string;
+  roles: { roleId: string; roleName: string; grantedAt: string; expiresAt: string | null }[];
+}
+
 interface OrgSettings {
   id?: string;
   tenantId: string;
@@ -26,7 +36,7 @@ interface OrgSettings {
   welcomeMessage: string | null;
 }
 
-type TabId = 'invite' | 'pending' | 'all' | 'settings' | 'bulk';
+type TabId = 'invite' | 'pending' | 'all' | 'members' | 'settings' | 'bulk';
 
 export default function InvitationsPage() {
   // State
@@ -36,6 +46,7 @@ export default function InvitationsPage() {
   const [selectedTenantId, setSelectedTenantId] = useState('');
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [pendingInvitations, setPendingInvitations] = useState<Invitation[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -71,6 +82,7 @@ export default function InvitationsPage() {
       loadInvitations();
       loadPendingInvitations();
       loadOrgSettings();
+      loadMembers();
     }
   }, [selectedTenantId]);
 
@@ -126,6 +138,38 @@ export default function InvitationsPage() {
       });
     } catch (err) {
       // Settings might not exist yet, that's OK
+    }
+  };
+
+  const loadMembers = async () => {
+    try {
+      const data = await api.getTenantMembers(selectedTenantId);
+      setMembers(data);
+    } catch (err) {
+      setError('Failed to load members');
+    }
+  };
+
+  const handleChangeMemberRole = async (userId: string, roleId: string) => {
+    if (!roleId) return;
+    try {
+      await api.changeMemberRole(selectedTenantId, userId, roleId);
+      setSuccess('Member role updated');
+      loadMembers();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to update member role');
+    }
+  };
+
+  const handleRemoveMember = async (userId: string, email: string) => {
+    if (!confirm(`Remove ${email} from this organization?`)) return;
+
+    try {
+      await api.removeMember(selectedTenantId, userId);
+      setSuccess('Member removed');
+      loadMembers();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to remove member');
     }
   };
 
@@ -238,6 +282,7 @@ export default function InvitationsPage() {
     { id: 'invite', label: 'Send Invite' },
     { id: 'pending', label: `Pending (${pendingInvitations.length})` },
     { id: 'all', label: 'All Invitations' },
+    { id: 'members', label: `Members (${members.length})` },
     { id: 'bulk', label: 'Bulk CSV Upload' },
     { id: 'settings', label: 'Organization Settings' },
   ];
@@ -447,6 +492,65 @@ export default function InvitationsPage() {
                               Revoke
                             </button>
                           )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {/* Members Tab */}
+          {activeTab === 'members' && (
+            <div className="p-6">
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Members</h2>
+              {members.length === 0 ? (
+                <p className="text-gray-500">No members in this organization yet</p>
+              ) : (
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Joined</th>
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {members.map((m) => (
+                      <tr key={m.userId}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {`${m.firstName} ${m.lastName}`.trim() || '—'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{m.email}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          <select
+                            defaultValue=""
+                            onChange={(e) => handleChangeMemberRole(m.userId, e.target.value)}
+                            className="block rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                          >
+                            <option value="" disabled>
+                              {m.roles.map((r) => r.roleName).join(', ') || 'No role'}
+                            </option>
+                            {roles.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(m.joinedAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <button
+                            onClick={() => handleRemoveMember(m.userId, m.email)}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            Remove
+                          </button>
                         </td>
                       </tr>
                     ))}

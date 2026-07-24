@@ -31,6 +31,7 @@ public class InvitationsController : ControllerBase
     /// Send an invitation to a user
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> SendInvitation([FromBody] SendInvitationRequest request)
     {
         var userId = GetCurrentUserId();
@@ -38,6 +39,13 @@ public class InvitationsController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(request.Email))
             return BadRequest(new { error = "Email is required" });
+
+        var targetRole = await _context.Roles.FirstOrDefaultAsync(r => r.Id == request.RoleId);
+        if (targetRole == null)
+            return BadRequest(new { error = "Role not found" });
+
+        if (targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase) && !User.IsInRole("SuperAdmin"))
+            return Forbid();
 
         try
         {
@@ -69,6 +77,7 @@ public class InvitationsController : ControllerBase
     /// Send bulk invitations from CSV upload (columns: name, email, role)
     /// </summary>
     [HttpPost("bulk")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> SendBulkInvitations([FromForm] BulkInviteRequest request)
     {
         var userId = GetCurrentUserId();
@@ -112,7 +121,7 @@ public class InvitationsController : ControllerBase
         if (entries.Count == 0)
             return BadRequest(new { error = "CSV file contains no data rows" });
 
-        var result = await _invitationService.SendBulkInvitationsAsync(entries, request.TenantId, userId.Value);
+        var result = await _invitationService.SendBulkInvitationsAsync(entries, request.TenantId, userId.Value, User.IsInRole("SuperAdmin"));
 
         return Ok(new
         {
@@ -132,6 +141,7 @@ public class InvitationsController : ControllerBase
     /// List all invitations for a tenant
     /// </summary>
     [HttpGet]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> GetInvitations([FromQuery] Guid tenantId)
     {
         var invitations = await _invitationService.GetInvitationsByTenantAsync(tenantId);
@@ -176,7 +186,8 @@ public class InvitationsController : ControllerBase
             success = true,
             userId = result.User?.Id,
             email = result.User?.Email,
-            welcomeMessage = result.WelcomeMessage
+            welcomeMessage = result.WelcomeMessage,
+            mfaSetupRequired = result.MfaSetupRequired
         });
     }
 
@@ -184,6 +195,7 @@ public class InvitationsController : ControllerBase
     /// Revoke a pending invitation
     /// </summary>
     [HttpDelete("{id}")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> RevokeInvitation(Guid id)
     {
         var revoked = await _invitationService.RevokeInvitationAsync(id);
@@ -200,6 +212,7 @@ public class InvitationsController : ControllerBase
     /// Get pending invitations for a tenant
     /// </summary>
     [HttpGet("pending")]
+    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
     public async Task<IActionResult> GetPendingInvitations([FromQuery] Guid tenantId)
     {
         var invitations = await _invitationService.GetPendingInvitationsAsync(tenantId);

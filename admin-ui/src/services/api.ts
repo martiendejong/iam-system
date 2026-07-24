@@ -364,6 +364,21 @@ class ApiService {
     const response = await this.client.put(`/organization-settings/${tenantId}`, data);
     return response.data;
   }
+
+  // Member management endpoints
+  async getTenantMembers(tenantId: string): Promise<any[]> {
+    const response = await this.client.get(`/tenants/${tenantId}/members`);
+    return response.data;
+  }
+
+  async changeMemberRole(tenantId: string, userId: string, roleId: string): Promise<any> {
+    const response = await this.client.put(`/tenants/${tenantId}/members/${userId}/role`, { roleId });
+    return response.data;
+  }
+
+  async removeMember(tenantId: string, userId: string): Promise<void> {
+    await this.client.delete(`/tenants/${tenantId}/members/${userId}`);
+  }
 }
 
 export const api = new ApiService();
