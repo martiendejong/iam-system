@@ -1,5 +1,18 @@
 # Agent Progress
 
+## 2026-07-24 — task 869e8wk2a (add deploy-time version tracking)
+Done: PR #77 — `<Version>0.1.0</Version>` baseline added to src/IAM.API/IAM.API.csproj
+(the exact PublishProjectPath JengoAGI's VersionTrackingService/IamDeployService already
+scan), plus a new "Tag Release" CI job that pushes an annotated vX.Y.Z git tag on every
+merge to develop once tests pass, bumping the highest existing tag's patch number.
+Verified: `dotnet build IAMSystem.slnx -c Release` clean (0 errors); built IAM.API.dll's
+FileVersion reads 0.1.0.0; ci.yml re-parsed with yaml.safe_load (valid, 9 jobs); the new
+job's bash logic syntax-checked (bash -n) and functionally tested against a scratch repo
+(no tags -> v0.1.0; v1.2.3/v1.2.10/v1.10.0 -> correctly bumps highest to v1.10.1).
+Left: nothing — the tag-release job only fires on push to develop so it can't be
+exercised live from this PR itself; it mirrors the existing deploy-staging job's
+`if: github.ref == 'refs/heads/develop'` gate.
+
 ## 2026-07-24 — task 869e8w6v7 (fix Frontend Tests & Build / End-to-End Tests CI jobs)
 Done: Frontend Tests & Build now points at admin-ui/ (was src/IAM.Admin.Web, which
 doesn't exist) and installs Vitest + Testing Library, with a real component test for
