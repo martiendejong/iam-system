@@ -79,8 +79,28 @@ class ApiService {
     return response.data;
   }
 
+  async verifyStepUp(email: string, code: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/step-up/verify', { email, code });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
+
   async register(data: RegisterRequest): Promise<void> {
     await this.client.post('/auth/register', data);
+  }
+
+  async verifyLoginTwoFactor(userId: string, code: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/2fa/verify', { userId, code });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
+
+  async resendLoginTwoFactorCode(userId: string): Promise<void> {
+    await this.client.post('/auth/2fa/resend', { userId });
   }
 
   async logout(): Promise<void> {

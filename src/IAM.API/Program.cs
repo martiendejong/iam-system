@@ -1,7 +1,9 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using IAM.API.Auth;
 using IAM.API.Middleware;
 using IAM.API.Workers;
+using IAM.Core.Interfaces;
 using Microsoft.AspNetCore.Authentication;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -13,6 +15,8 @@ using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 using StackExchange.Redis;
+
+[assembly: InternalsVisibleTo("IAM.API.Tests")]
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,7 +33,11 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 // Add services to the container
 builder.Services.AddOpenApi();
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+    });
 
 // Database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -104,6 +112,15 @@ builder.Services.AddHttpClient("RegionHealth")
     {
         ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
     });
+
+// Building Management System services
+builder.Services.AddScoped<ILocationService, LocationService>();
+builder.Services.AddScoped<IBuildingService, BuildingService>();
+builder.Services.AddScoped<IFloorService, FloorService>();
+builder.Services.AddScoped<IRoomService, RoomService>();
+builder.Services.AddScoped<IRoomGroupService, RoomGroupService>();
+builder.Services.AddScoped<IIoTDeviceService, IoTDeviceService>();
+builder.Services.AddScoped<IResourcePermissionService, ResourcePermissionService>();
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
@@ -217,7 +234,10 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(key),
-        ClockSkew = TimeSpan.Zero
+        ClockSkew = TimeSpan.Zero,
+        // Configure claim mappings for roles and names
+        RoleClaimType = System.Security.Claims.ClaimTypes.Role,
+        NameClaimType = System.Security.Claims.ClaimTypes.Name
     };
 })
 .AddCookie("IAM.Session", options =>
@@ -344,3 +364,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.Run();
+
+// Make Program class accessible to test projects
+public partial class Program { }

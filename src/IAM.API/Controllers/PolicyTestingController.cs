@@ -29,8 +29,11 @@ public class PolicyTestingController : ControllerBase
         [FromBody] CreatePolicyTestRequest request,
         CancellationToken cancellationToken = default)
     {
-        // Get user ID from claims
-        var userIdClaim = User.FindFirst("sub")?.Value;
+        // Get user ID from claims (try multiple claim types)
+        var userIdClaim = User.FindFirst("sub")?.Value
+                       ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                       ?? User.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier")?.Value;
+
         if (!Guid.TryParse(userIdClaim, out var userId))
             return Unauthorized("User ID not found in token");
 
