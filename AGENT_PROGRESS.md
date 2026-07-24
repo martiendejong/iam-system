@@ -1,5 +1,18 @@
 # Agent Progress
 
+## 2026-07-24 — task 869cmvq8k (review round 3 — close remaining privilege escalation)
+Done: closed the "half-closed" gap from review round 2 on PR #72 — SendInvitation
+(InvitationsController), ChangeMemberRole (TenantsController), and bulk CSV invite
+now reject granting the SuperAdmin role unless the caller already holds SuperAdmin
+(403 for the two synchronous endpoints, a per-row error for bulk CSV rows), mirroring
+the existing SuperAdmin-only precedent in UsersController.AssignRole/RemoveRole.
+Verified: merged origin/develop (2 commits: telemetry PR #70, Python SDK PR #68,
+no conflicts), dotnet build clean (0 errors), 83/85 backend tests pass (2 pre-existing
+skips), admin-ui tsc+vite build clean.
+Left: nothing new. Frontend role `<select>` still doesn't filter out SuperAdmin for
+non-SuperAdmin callers — reviewer explicitly flagged this as non-blocking since the
+API is the real control, so left untouched to keep this fix narrowly scoped.
+
 ## 2026-07-24 — task 869cmtykg (review fixes)
 Done: addressed Martien's CHANGES REQUESTED review on PR #70 — pinned
 IAM.API.Tests to explicit EF Core 10.0.10 refs (test project didn't compile
