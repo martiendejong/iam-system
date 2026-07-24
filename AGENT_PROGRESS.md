@@ -20,3 +20,19 @@ invite themselves into any tenant with any role, and GetInvitations/GetPendingIn
 RevokeInvitation leaked/let anyone tamper with any tenant's invitation list.
 Verified: dotnet build 0 errors, dotnet test 2/2 pass, admin-ui tsc+vite build clean.
 Left: nothing.
+
+## 2026-07-24 — task 869cmvq8k (review round 2)
+Done: PR #72 had drifted 3 commits behind develop and gone CONFLICTING (2FA branding
+PR #66 + Directory Sync PR #71 both landed since the last fix). Merged develop in,
+resolved IEmailService/InvitationService conflicts (kept this branch's custom-email-
+template path, wired develop's new tenantId branding param through the fallback call),
+and regenerated the 6000-line ModelSnapshot.cs via `dotnet ef migrations add` (verified
+zero drift with a follow-up empty-migration check) instead of hand-resolving ~30 conflict
+hunks. Also fixed FakeEmailService in EmailTwoFactorLoginTests.cs (missing new interface
+members). Pushed as commit 96f8bda — PR is MERGEABLE again, build clean, 75/77 tests pass.
+Verified: dotnet build 0 errors, dotnet test 75 passed/2 skipped/0 failed, admin-ui tsc+vite build clean.
+Left: found a NEW privilege-escalation gap while reviewing round 2's fix — neither
+SendInvitation nor ChangeMemberRole validates the requested roleId against the caller's
+own privilege, so a BuildingManager (whose own permissions don't even include User.Invite)
+can invite or promote anyone straight to SuperAdmin. Sent back to CHANGES REQUESTED;
+UsersController.AssignRole's existing SuperAdmin-only pattern is the fix to mirror.
