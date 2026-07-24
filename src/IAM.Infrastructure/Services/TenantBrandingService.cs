@@ -30,6 +30,13 @@ public class TenantBrandingService : ITenantBrandingService
             .FirstOrDefaultAsync(b => b.Tenant.Slug == slug, ct);
     }
 
+    public async Task<TenantBranding?> GetByCustomDomainAsync(string domain, CancellationToken ct = default)
+    {
+        return await _context.TenantBrandings
+            .Include(b => b.Tenant)
+            .FirstOrDefaultAsync(b => b.CustomDomain == domain, ct);
+    }
+
     public async Task<TenantBranding> UpsertAsync(Guid tenantId, TenantBranding branding, CancellationToken ct = default)
     {
         var existing = await _context.TenantBrandings

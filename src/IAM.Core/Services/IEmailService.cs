@@ -9,7 +9,7 @@ public interface IEmailService
     Task SendSessionAlertAsync(string email, string username, string deviceInfo, string ipAddress, CancellationToken ct = default);
     Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default);
     Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default);
-    Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default);
-    Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default);
+    Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null);
+    Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null);
     Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default);
 }

@@ -84,6 +84,37 @@ public class TenantBrandingController : ControllerBase
     }
 
     /// <summary>
+    /// Get branding by custom domain (public endpoint for login pages served on a
+    /// tenant's own domain, e.g. login.acme.com). No authentication required.
+    /// </summary>
+    [HttpGet("by-domain/{domain}")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetBrandingByDomain(string domain, CancellationToken ct)
+    {
+        var branding = await _brandingService.GetByCustomDomainAsync(domain, ct);
+
+        if (branding == null)
+        {
+            return NotFound(new { error = "No tenant is configured for this domain" });
+        }
+
+        return Ok(new
+        {
+            tenantSlug = branding.Tenant?.Slug,
+            tenantName = branding.Tenant?.Name,
+            logoUrl = branding.LogoUrl,
+            primaryColor = branding.PrimaryColor ?? "#4F46E5",
+            secondaryColor = branding.SecondaryColor ?? "#7C3AED",
+            backgroundUrl = branding.BackgroundUrl,
+            customCss = branding.CustomCss,
+            faviconUrl = branding.FaviconUrl,
+            loginTitle = branding.LoginTitle,
+            loginSubtitle = branding.LoginSubtitle,
+            whiteLabelEnabled = branding.WhiteLabelEnabled
+        });
+    }
+
+    /// <summary>
     /// Create or update branding for a tenant.
     /// </summary>
     [HttpPut("{tenantId}")]

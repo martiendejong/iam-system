@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
+import { brandingApi } from '../../services/brandingApi';
+import type { PublicTenantBranding } from '../../services/brandingApi';
 import type { IdentityProvider } from '../../types';
 
 type LoginMethod = 'password' | 'magic-link' | 'sms';
@@ -21,6 +23,7 @@ export default function LoginPage() {
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
   const [socialProviders, setSocialProviders] = useState<IdentityProvider[]>([]);
+  const [branding, setBranding] = useState<PublicTenantBranding | null>(null);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [stepUpCode, setStepUpCode] = useState('');
   const [twoFactorPending, setTwoFactorPending] = useState(false);
@@ -30,10 +33,25 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnUrl = searchParams.get('returnUrl') || '/dashboard';
+  const tenantSlug = searchParams.get('tenant');
 
   useEffect(() => {
     loadSocialProviders();
+    loadBranding();
   }, []);
+
+  const loadBranding = async () => {
+    try {
+      const data = tenantSlug
+        ? await brandingApi.getPublicBranding(tenantSlug)
+        : await brandingApi.getBrandingByDomain(window.location.hostname);
+      setBranding(data);
+    } catch {
+      // No tenant branding configured for this slug/domain - fall back to platform defaults
+    }
+  };
+
+  const primaryColor = branding?.primaryColor || '#4F46E5';
 
   const loadSocialProviders = async () => {
     try {
@@ -254,14 +272,36 @@ export default function LoginPage() {
     }`;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div
+      className="min-h-screen flex items-center justify-center bg-gray-50"
+      style={{
+        backgroundImage: branding?.backgroundUrl ? `url(${branding.backgroundUrl})` : undefined,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+      }}
+    >
+      {branding?.customCss && <style>{branding.customCss}</style>}
       <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow-lg">
         <div>
-          <h2 className="text-center text-3xl font-bold text-gray-900">
-            IAM System
-          </h2>
+          {branding?.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={branding.tenantName || 'Logo'}
+              className="h-12 mx-auto object-contain mb-2"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
+          ) : (
+            !branding?.whiteLabelEnabled && (
+              <h2 className="text-center text-3xl font-bold text-gray-900">
+                IAM System
+              </h2>
+            )
+          )}
+          <h1 className="text-center text-xl font-semibold text-gray-900 mt-2">
+            {branding?.loginTitle || (branding?.tenantName ? `Welcome to ${branding.tenantName}` : '')}
+          </h1>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Sign in to your account
+            {branding?.loginSubtitle || 'Sign in to your account'}
           </p>
         </div>
 
@@ -435,7 +475,8 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                style={{ backgroundColor: primaryColor }}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
               >
                 {loading ? 'Signing in...' : 'Sign in'}
               </button>

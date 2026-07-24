@@ -10,12 +10,26 @@ namespace IAM.Infrastructure.Services;
 public partial class EmailService : IEmailService
 {
     private readonly EmailSettings _settings;
+    private readonly ITenantBrandingService _brandingService;
     private readonly ILogger<EmailService> _logger;
 
-    public EmailService(IOptions<EmailSettings> settings, ILogger<EmailService> logger)
+    public EmailService(IOptions<EmailSettings> settings, ITenantBrandingService brandingService, ILogger<EmailService> logger)
     {
         _settings = settings.Value;
+        _brandingService = brandingService;
         _logger = logger;
+    }
+
+    private async Task<(string? logoUrl, string? headerHtml, string? footerHtml, bool whiteLabel)> GetBrandingAsync(Guid? tenantId, CancellationToken ct)
+    {
+        if (tenantId == null)
+            return (null, null, null, false);
+
+        var branding = await _brandingService.GetByTenantIdAsync(tenantId.Value, ct);
+        if (branding == null)
+            return (null, null, null, false);
+
+        return (branding.LogoUrl, branding.EmailHeaderHtml, branding.EmailFooterHtml, branding.WhiteLabelEnabled);
     }
 
     public async Task SendEmailVerificationAsync(string email, string username, string verificationToken, CancellationToken ct = default)
@@ -135,9 +149,10 @@ public partial class EmailService : IEmailService
         await SendEmailAsync(email, subject, body, ct);
     }
 
-    public async Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default)
+    public async Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null)
     {
         var loginUrl = $"{_settings.BaseUrl?.TrimEnd('/')}/login";
+        var branding = await GetBrandingAsync(tenantId, ct);
 
         var subject = $"Welcome to {tenantName}";
         var body = BuildEmailBody(
@@ -146,15 +161,20 @@ public partial class EmailService : IEmailService
             ctaUrl: loginUrl,
             ctaText: "Sign In",
             additionalInfo: "If you have any questions, reach out to your organization administrator.",
-            footer: null
+            footer: null,
+            logoUrl: branding.logoUrl,
+            headerHtml: branding.headerHtml,
+            footerHtml: branding.footerHtml,
+            whiteLabel: branding.whiteLabel
         );
 
         await SendEmailAsync(email, subject, body, ct);
     }
 
-    public async Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default)
+    public async Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null)
     {
         var inviteUrl = $"{_settings.BaseUrl?.TrimEnd('/')}/accept-invite?token={inviteToken}";
+        var branding = await GetBrandingAsync(tenantId, ct);
 
         var subject = $"{inviterName} invited you to join {tenantName}";
         var body = BuildEmailBody(
@@ -163,7 +183,11 @@ public partial class EmailService : IEmailService
             ctaUrl: inviteUrl,
             ctaText: "Accept Invitation",
             additionalInfo: "This invitation link will expire in 7 days. If you were not expecting this invitation, you can safely ignore this email.",
-            footer: null
+            footer: null,
+            logoUrl: branding.logoUrl,
+            headerHtml: branding.headerHtml,
+            footerHtml: branding.footerHtml,
+            whiteLabel: branding.whiteLabel
         );
 
         await SendEmailAsync(email, subject, body, ct);
@@ -256,7 +280,11 @@ public partial class EmailService : IEmailService
         string? ctaText,
         string? additionalInfo,
         string? footer,
-        string? highlightCode = null)
+        string? highlightCode = null,
+        string? logoUrl = null,
+        string? headerHtml = null,
+        string? footerHtml = null,
+        bool whiteLabel = false)
     {
         var ctaSection = "";
         if (!string.IsNullOrEmpty(ctaUrl) && !string.IsNullOrEmpty(ctaText))
@@ -316,6 +344,21 @@ public partial class EmailService : IEmailService
             """;
         }
 
+        var headerContent = !string.IsNullOrEmpty(headerHtml)
+            ? headerHtml
+            : !string.IsNullOrEmpty(logoUrl)
+                ? $"""<img src="{logoUrl}" alt="Logo" style="height:32px;max-width:200px;" />"""
+                : """&#128274; IAM System""";
+
+        var brandFooterSection = !string.IsNullOrEmpty(footerHtml)
+            ? footerHtml
+            : whiteLabel
+                ? ""
+                : """
+                    Sent by IAM System &mdash; Identity &amp; Access Management<br/>
+                    This is an automated message. Please do not reply directly.
+                """;
+
         return $"""
             <!DOCTYPE html>
             <html lang="en">
@@ -335,7 +378,7 @@ public partial class EmailService : IEmailService
                                         <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
                                             <tr>
                                                 <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:20px;font-weight:700;color:#ffffff;letter-spacing:-0.2px;">
-                                                    &#128274; IAM System
+                                                    {headerContent}
                                                 </td>
                                             </tr>
                                         </table>
@@ -367,8 +410,7 @@ public partial class EmailService : IEmailService
                                 <!-- Footer branding -->
                                 <tr>
                                     <td style="padding:24px 40px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:11px;color:#9aa0a6;">
-                                        Sent by IAM System &mdash; Identity &amp; Access Management<br/>
-                                        This is an automated message. Please do not reply directly.
+                                        {brandFooterSection}
                                     </td>
                                 </tr>
                             </table>
