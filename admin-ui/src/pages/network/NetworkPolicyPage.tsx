@@ -80,7 +80,7 @@ export default function NetworkPolicyPage() {
         case 'allowlist':
           setAllowlistEntries(await networkPolicyApi.getIpAllowlist(selectedTenantId));
           break;
-        case 'geo':
+        case 'geo': {
           const restriction = await networkPolicyApi.getGeoRestriction(selectedTenantId);
           setGeoRestriction(restriction);
           if (restriction) {
@@ -99,6 +99,7 @@ export default function NetworkPolicyPage() {
             setGeoActive(true);
           }
           break;
+        }
         case 'geofence':
           setGeoFences(await networkPolicyApi.getGeoFences(selectedTenantId));
           break;

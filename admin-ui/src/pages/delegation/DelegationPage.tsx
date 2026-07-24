@@ -81,7 +81,7 @@ export default function DelegationPage() {
       if (tenantsData.length > 0) {
         setSelectedTenantId(tenantsData[0].id);
       }
-    } catch (err: any) {
+    } catch {
       setError('Failed to load initial data');
     }
   };

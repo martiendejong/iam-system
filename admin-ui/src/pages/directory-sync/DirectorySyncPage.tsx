@@ -107,7 +107,7 @@ export default function DirectorySyncPage() {
       if (data.length > 0) {
         setTenantId(data[0].id);
       }
-    } catch (err: any) {
+    } catch {
       setError('Failed to load tenants');
     }
   };
@@ -116,7 +116,7 @@ export default function DirectorySyncPage() {
     try {
       const data = await api.getRoles();
       setRoles(data);
-    } catch (err: any) {
+    } catch {
       setError('Failed to load roles');
     }
   };

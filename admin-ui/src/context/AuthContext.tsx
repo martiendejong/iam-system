@@ -26,7 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const currentUser = await api.getCurrentUser();
           setUser(currentUser);
-        } catch (error) {
+        } catch {
           localStorage.removeItem('accessToken');
         }
       }
@@ -65,6 +65,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// Co-locating this hook with AuthProvider (rather than splitting into its own
+// file) is intentional — every consumer imports both from one module. This
+// only costs Vite Fast Refresh a full remount on edits to this file in dev.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
