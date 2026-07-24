@@ -1,6 +1,9 @@
+import logging
+
 import httpx
 from typing import Optional, List, Dict, Any
 
+from .auth import RetryTransport
 from .models import (
     Device,
     DeviceRegistrationResult,
@@ -16,11 +19,15 @@ from .models import (
     TelemetryAggregationResult,
 )
 
+logger = logging.getLogger("iam_sdk")
+
 
 class IamAdminClient:
     """IAM System admin client for managing users, devices, tenants, and policies.
 
-    Requires a valid access token obtained via IamClient.login().
+    Requires a valid access token obtained via IamClient.login(). Transient
+    connection failures and 5xx responses are retried with exponential
+    backoff via `RetryTransport`.
 
     Usage:
         async with IamClient("https://localhost:5161") as auth:
@@ -31,12 +38,17 @@ class IamAdminClient:
             users = await admin.list_users()
     """
 
-    def __init__(self, base_url: str, access_token: str):
+    def __init__(
+        self,
+        base_url: str,
+        access_token: str,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers={"Authorization": f"Bearer {access_token}"},
-            verify=False,
+            transport=transport or RetryTransport(),
         )
 
     # ==================================================================
@@ -294,7 +306,8 @@ class IamAdminClient:
             f"/api/devices/{device_id}", json=payload
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     async def deactivate_device(self, device_id: str) -> None:
         """Deactivate a device and revoke all its certificates.
@@ -425,7 +438,8 @@ class IamAdminClient:
             },
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     async def deactivate_user(self, user_id: str) -> None:
         """Deactivate a user (SuperAdmin only).
@@ -479,7 +493,8 @@ class IamAdminClient:
             f"/api/users/{user_id}/roles", json=payload
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     async def remove_role(self, user_id: str, role_id: str) -> None:
         """Remove a role from a user (SuperAdmin only).
@@ -655,7 +670,8 @@ class IamAdminClient:
             f"/api/tenants/{tenant_id}", json=payload
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     async def delete_tenant(self, tenant_id: str) -> None:
         """Delete a tenant (only if it has no children or role assignments).
@@ -684,7 +700,8 @@ class IamAdminClient:
             f"/api/tenants/{tenant_id}/hierarchy"
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     async def get_building_structure(
         self, building_id: str
@@ -701,7 +718,8 @@ class IamAdminClient:
             f"/api/tenants/buildings/{building_id}/structure"
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     # ==================================================================
     # Roles
@@ -1273,8 +1291,9 @@ class IamAdminClient:
             "/api/telemetry/metrics", params=params
         )
         response.raise_for_status()
-        data = response.json()
-        return data.get("metrics", [])
+        data: Dict[str, Any] = response.json()
+        metrics: List[str] = data.get("metrics", [])
+        return metrics
 
     async def get_telemetry_statistics(
         self, tenant_id: Optional[str] = None
@@ -1295,7 +1314,8 @@ class IamAdminClient:
             "/api/telemetry/statistics", params=params
         )
         response.raise_for_status()
-        return response.json()
+        result: Dict[str, Any] = response.json()
+        return result
 
     # ==================================================================
     # Lifecycle

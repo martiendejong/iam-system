@@ -1,0 +1,45 @@
+[tool.poetry]
+name = "iam-sdk"
+version = "1.1.0"
+description = "Python SDK for the IAM System -- device auth, real-time telemetry, admin API, and Jupyter/pandas integration for IoT and data science"
+authors = ["IAM System"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "iam_sdk" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+httpx = "^0.25.0"
+pydantic = "^2.0.0"
+tenacity = "^8.2.0"
+signalrcore = "^0.9.5"
+pandas = { version = "^2.0.0", optional = true }
+
+[tool.poetry.extras]
+jupyter = ["pandas"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.24.0"
+mypy = "^1.10.0"
+pandas = "^2.0.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["iam_sdk"]
+
+[[tool.mypy.overrides]]
+module = "signalrcore.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pandas.*"
+ignore_missing_imports = true

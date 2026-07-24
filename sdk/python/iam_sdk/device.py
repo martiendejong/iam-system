@@ -1,10 +1,12 @@
 import hashlib
 import hmac
+import logging
 import time
 import uuid
 import httpx
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
+from .auth import RetryTransport
 from .models import (
     DeviceAuthResponse,
     DeviceAuthorizeResponse,
@@ -12,13 +14,16 @@ from .models import (
     TelemetryRecord,
 )
 
+logger = logging.getLogger("iam_sdk")
+
 
 class IamDeviceClient:
     """IAM System device authentication client for IoT devices.
 
     Supports certificate-based and HMAC-SHA256 authentication, resource
     authorization, MQTT topic authorization, heartbeat reporting, and
-    telemetry ingestion.
+    telemetry ingestion. Transient connection failures and 5xx responses
+    are retried with exponential backoff via `RetryTransport`.
 
     Usage:
         async with IamDeviceClient("https://localhost:5161", "sensor-001") as device:
@@ -27,10 +32,17 @@ class IamDeviceClient:
             await device.heartbeat()
     """
 
-    def __init__(self, base_url: str, device_id: str):
+    def __init__(
+        self,
+        base_url: str,
+        device_id: str,
+        transport: Optional[httpx.AsyncBaseTransport] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.device_id = device_id
-        self._client = httpx.AsyncClient(base_url=self.base_url, verify=False)
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url, transport=transport or RetryTransport()
+        )
         self._access_token: Optional[str] = None
 
     # ------------------------------------------------------------------
@@ -70,6 +82,7 @@ class IamDeviceClient:
         data = response.json()
 
         self._access_token = data.get("accessToken")
+        logger.debug("iam_sdk: device %s authenticated via certificate", self.device_id)
 
         return DeviceAuthResponse(
             success=True,
@@ -131,6 +144,7 @@ class IamDeviceClient:
         data = response.json()
 
         self._access_token = data.get("accessToken")
+        logger.debug("iam_sdk: device %s authenticated via HMAC", self.device_id)
 
         return DeviceAuthResponse(
             success=True,
@@ -262,7 +276,7 @@ class IamDeviceClient:
         """
         payload = []
         for record in records:
-            item: dict = {
+            item: Dict[str, Any] = {
                 "deviceId": record.device_id,
                 "metricName": record.metric_name,
             }
@@ -290,6 +304,11 @@ class IamDeviceClient:
             headers=self._auth_headers,
         )
         response.raise_for_status()
+        logger.debug(
+            "iam_sdk: device %s sent %d telemetry record(s)",
+            self.device_id,
+            len(records),
+        )
 
     # ------------------------------------------------------------------
     # Internals
@@ -301,7 +320,7 @@ class IamDeviceClient:
         return self._access_token is not None
 
     @property
-    def _auth_headers(self) -> dict:
+    def _auth_headers(self) -> Dict[str, str]:
         """Return Authorization header if authenticated."""
         if self._access_token:
             return {"Authorization": f"Bearer {self._access_token}"}
