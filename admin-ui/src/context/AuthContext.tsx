@@ -9,6 +9,7 @@ interface AuthContextType {
   login: (data: LoginRequest) => Promise<LoginResponse>;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
+  setCurrentUser: (user: User) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -37,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (data: LoginRequest) => {
     const response = await api.login(data);
-    if (response.user) {
+    if (!response.requiresStepUp && !response.requiresTwoFactor && response.user) {
       setUser(response.user);
     }
     return response;
@@ -56,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         isAuthenticated: !!user,
+        setCurrentUser: setUser,
       }}
     >
       {children}

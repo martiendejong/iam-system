@@ -158,6 +158,20 @@ public class AuthService : IAuthService
         user.FailedLoginAttempts = 0;
         user.IsLockedOut = false;
         user.LockoutEnd = null;
+
+        if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
+        {
+            await _context.SaveChangesAsync();
+            await _otpService.SendLoginTwoFactorCodeAsync(user);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresTwoFactor = true,
+                User = user
+            };
+        }
+
         user.LastLoginAt = DateTime.UtcNow;
 
         // Adaptive MFA: assess login risk before issuing any tokens
@@ -443,6 +457,49 @@ public class AuthService : IAuthService
         }
 
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
+    }
+
+    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null)
+    {
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        var valid = await _otpService.ValidateOtpAsync(user.Email, null, code, OtpPurpose.LoginTwoFactor);
+
+        if (!valid)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
+    }
+
+    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
+        {
+            // Don't reveal account state to an unauthenticated caller
+            return true;
+        }
+
+        return await _otpService.SendLoginTwoFactorCodeAsync(user);
     }
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)

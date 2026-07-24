@@ -19,6 +19,8 @@ public interface IAuthService
     /// (see AuthResult.RequiresStepUp), by validating the emailed OTP and issuing tokens.
     /// </summary>
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null);
+    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId);
 }
 
 public class AuthResult
@@ -36,4 +38,5 @@ public class AuthResult
     /// the challenge via VerifyStepUpAsync.
     /// </summary>
     public bool RequiresStepUp { get; set; }
+    public bool RequiresTwoFactor { get; set; }
 }

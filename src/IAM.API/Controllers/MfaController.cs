@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -128,6 +129,59 @@ public class MfaController : ControllerBase
     }
 
     /// <summary>
+    /// Enable email-based two-factor authentication for the current user. Requires a verified email address.
+    /// </summary>
+    [HttpPost("email/enable")]
+    public async Task<IActionResult> EnableEmailMfa(CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { error = "Invalid user" });
+
+        var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        if (!user.EmailConfirmed)
+            return BadRequest(new { error = "Verify your email address before enabling email two-factor authentication." });
+
+        if (user.TwoFactorEnabled)
+            return BadRequest(new { error = "Two-factor authentication is already enabled." });
+
+        user.TwoFactorEnabled = true;
+        user.TwoFactorMethod = TwoFactorMethod.Email;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync(ct);
+
+        return Ok(new { message = "Email-based two-factor authentication has been enabled.", method = "email" });
+    }
+
+    /// <summary>
+    /// Disable email-based two-factor authentication for the current user.
+    /// </summary>
+    [HttpPost("email/disable")]
+    public async Task<IActionResult> DisableEmailMfa(CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { error = "Invalid user" });
+
+        var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        if (!user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
+            return BadRequest(new { error = "Email two-factor authentication is not enabled." });
+
+        user.TwoFactorEnabled = false;
+        user.TwoFactorMethod = TwoFactorMethod.None;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync(ct);
+
+        return Ok(new { message = "Email-based two-factor authentication has been disabled." });
+    }
+
+    /// <summary>
     /// Generate a new set of recovery codes. Replaces any existing recovery codes.
     /// Requires an active TOTP enrollment.
     /// </summary>
@@ -174,7 +228,7 @@ public class MfaController : ControllerBase
         return Ok(new
         {
             twoFactorEnabled = user.TwoFactorEnabled,
-            method = user.TwoFactorEnabled ? "totp" : (string?)null,
+            method = user.TwoFactorEnabled ? user.TwoFactorMethod.ToString().ToLowerInvariant() : (string?)null,
             recoveryCodesRemaining = remainingRecoveryCodes,
             hasPendingSetup = !user.TwoFactorEnabled && !string.IsNullOrWhiteSpace(user.TwoFactorSecret)
         });
