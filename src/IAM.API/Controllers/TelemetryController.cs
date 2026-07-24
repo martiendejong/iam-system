@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Text;
+using IAM.API.Hubs;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 
 namespace IAM.API.Controllers;
 
@@ -13,10 +15,31 @@ namespace IAM.API.Controllers;
 public class TelemetryController : ControllerBase
 {
     private readonly ITelemetryStorageService _telemetryService;
+    private readonly IHubContext<TelemetryHub> _telemetryHub;
 
-    public TelemetryController(ITelemetryStorageService telemetryService)
+    public TelemetryController(ITelemetryStorageService telemetryService, IHubContext<TelemetryHub> telemetryHub)
     {
         _telemetryService = telemetryService;
+        _telemetryHub = telemetryHub;
+    }
+
+    private Task BroadcastAsync(TelemetryRecord record, CancellationToken ct)
+    {
+        var message = new
+        {
+            record.DeviceId,
+            record.DeviceType,
+            record.TenantId,
+            DataType = record.MetricName,
+            Payload = (object?)record.NumericValue ?? record.StringValue ?? record.JsonValue,
+            record.Timestamp,
+            receivedAt = DateTime.UtcNow
+        };
+
+        return Task.WhenAll(
+            _telemetryHub.Clients.Group($"device:{record.DeviceId}").SendAsync("TelemetryReceived", message, ct),
+            _telemetryHub.Clients.Group($"tenant:{record.TenantId}").SendAsync("TelemetryReceived", message, ct),
+            _telemetryHub.Clients.Group($"type:{record.DeviceType}").SendAsync("TelemetryReceived", message, ct));
     }
 
     /// <summary>
@@ -41,6 +64,7 @@ public class TelemetryController : ControllerBase
         };
 
         await _telemetryService.IngestAsync(record, ct);
+        await BroadcastAsync(record, ct);
 
         return Ok(new
         {
@@ -53,7 +77,7 @@ public class TelemetryController : ControllerBase
     }
 
     /// <summary>
-    /// Ingest a batch of telemetry records (up to 1000 per request).
+    /// Ingest a batch of telemetry records (up to 10,000 per request).
     /// </summary>
     [HttpPost("ingest/batch")]
     public async Task<IActionResult> IngestBatch([FromBody] BatchIngestTelemetryRequest request, CancellationToken ct)
@@ -63,9 +87,9 @@ public class TelemetryController : ControllerBase
             return BadRequest(new { error = "No records provided" });
         }
 
-        if (request.Records.Count > 1000)
+        if (request.Records.Count > 10_000)
         {
-            return BadRequest(new { error = "Maximum 1000 records per batch. Received: " + request.Records.Count });
+            return BadRequest(new { error = "Maximum 10,000 records per batch. Received: " + request.Records.Count });
         }
 
         var records = request.Records.Select(r => new TelemetryRecord
@@ -84,6 +108,12 @@ public class TelemetryController : ControllerBase
         }).ToList();
 
         await _telemetryService.IngestBatchAsync(records, ct);
+
+        // Broadcast one "latest point" message per device rather than one per record -
+        // a 10K-record batch would otherwise flood SignalR clients with 10K individual sends.
+        await Task.WhenAll(records
+            .GroupBy(r => r.DeviceId)
+            .Select(g => BroadcastAsync(g.OrderByDescending(r => r.Timestamp).First(), ct)));
 
         return Ok(new
         {
@@ -199,6 +229,32 @@ public class TelemetryController : ControllerBase
                 value = a.Value,
                 count = a.Count,
                 groupKey = a.GroupKey
+            })
+        });
+    }
+
+    /// <summary>
+    /// Latest value for every metric reported by a device.
+    /// </summary>
+    [HttpGet("latest/{deviceId}")]
+    public async Task<IActionResult> GetLatest(string deviceId, CancellationToken ct)
+    {
+        var records = await _telemetryService.GetLatestAsync(deviceId, ct);
+
+        return Ok(new
+        {
+            deviceId,
+            metrics = records.Select(r => new
+            {
+                metricName = r.MetricName,
+                numericValue = r.NumericValue,
+                stringValue = r.StringValue,
+                jsonValue = r.JsonValue,
+                unit = r.Unit,
+                deviceType = r.DeviceType,
+                tenantId = r.TenantId,
+                tags = r.Tags,
+                timestamp = r.Timestamp
             })
         });
     }

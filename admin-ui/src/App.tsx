@@ -50,6 +50,7 @@ import VisitorManagementPage from './pages/visitors/VisitorManagementPage';
 import RegionDashboardPage from './pages/regions/RegionDashboardPage';
 import ServiceAccountsPage from './pages/service-accounts/ServiceAccountsPage';
 import DelegationPage from './pages/delegation/DelegationPage';
+import TelemetryDashboardPage from './pages/telemetry/TelemetryDashboardPage';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
@@ -472,6 +473,16 @@ function App() {
             element={
               <ProtectedRoute>
                 <RiskDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Telemetry */}
+          <Route
+            path="/telemetry"
+            element={
+              <ProtectedRoute>
+                <TelemetryDashboardPage />
               </ProtectedRoute>
             }
           />

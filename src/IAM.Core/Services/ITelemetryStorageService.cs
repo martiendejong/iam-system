@@ -11,6 +11,16 @@ public interface ITelemetryStorageService
     Task<List<string>> GetMetricNamesAsync(string? deviceId = null, CancellationToken ct = default);
     Task<TelemetryStatistics> GetStatisticsAsync(Guid? tenantId = null, CancellationToken ct = default);
     Task<int> CleanupOldDataAsync(int retentionDays = 90, CancellationToken ct = default);
+
+    /// <summary>
+    /// Latest recorded value for every metric reported by a device.
+    /// </summary>
+    Task<List<TelemetryRecord>> GetLatestAsync(string deviceId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Latest recorded value for a single metric on a device, or null if none exists.
+    /// </summary>
+    Task<TelemetryRecord?> GetLatestAsync(string deviceId, string metricName, CancellationToken ct = default);
 }
 
 public class TelemetryQuery
