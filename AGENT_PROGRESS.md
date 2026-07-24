@@ -1,5 +1,19 @@
 # Agent Progress
 
+## 2026-07-24 — task 869cmtykg (review fixes)
+Done: addressed Martien's CHANGES REQUESTED review on PR #70 — pinned
+IAM.API.Tests to explicit EF Core 10.0.10 refs (test project didn't compile
+before), gave AggregateAsync's deviceId/tenantId parameters an explicit DbType
+so Postgres can plan the query when they're null (was 42P08 on every
+dashboard chart, since the frontend never sends a tenantId), and moved the
+retention-cleanup test to the Postgres-backed class since ExecuteDeleteAsync
+has no EF InMemory translation — that test had never actually run before.
+Verified: dotnet build clean (API + tests), 82/82 IAM.API.Tests pass (was 0
+running due to the compile break), 1/1 IAM.Core.Tests, admin-ui build clean.
+Merged origin/develop into the branch (4 commits behind) before pushing.
+Left: nothing new; same TimescaleDB/InfluxDB and frontend-SignalR gaps
+already flagged in the original PR #70 description remain out of scope.
+
 ## 2026-07-23 — task 869e7ngck
 Done: PR #64 (merged) added coach-app + jengo-agi + jengo-meeting + jengo-workspace to
 DatabaseSeeder.cs — all 4 existed live in iam_db via manual SQL only, never in source.
