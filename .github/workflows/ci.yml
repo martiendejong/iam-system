@@ -162,6 +162,43 @@ jobs:
       run: |
         echo "::notice::End-to-End Tests skipped - no E2E test project exists yet (tests/IAM.E2E.Tests was never created). See ClickUp task 869e8w6v7."
 
+  # Tag Release (develop branch only, after tests pass) — gives JengoAGI's
+  # VersionTrackingService a real, bumped-per-merge git tag to detect instead of the
+  # static <Version> baseline in IAM.API.csproj, so a deployed instance's actual version
+  # can always be told apart from an older one.
+  tag-release:
+    name: Tag Release
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+    if: github.ref == 'refs/heads/develop'
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Compute and push next version tag
+      run: |
+        git fetch --tags
+        LATEST=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+        if [ -z "$LATEST" ]; then
+          NEXT="v0.1.0"
+        else
+          VER="${LATEST#v}"
+          MAJOR="${VER%%.*}"
+          REST="${VER#*.}"
+          MINOR="${REST%%.*}"
+          PATCH="${REST#*.}"
+          NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+        fi
+        echo "Tagging release $NEXT at $(git rev-parse HEAD)"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "$NEXT" -m "Release $NEXT"
+        git push origin "$NEXT"
+
   # Build Docker Image (on main branch only)
   docker-build:
     name: Build Docker Image
