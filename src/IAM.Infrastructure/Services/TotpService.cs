@@ -116,6 +116,7 @@ public class TotpService : ITotpService
 
         // Code is valid - activate TOTP
         user.TwoFactorEnabled = true;
+        user.TwoFactorMethod = TwoFactorMethod.Totp;
         user.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(ct);
@@ -138,6 +139,7 @@ public class TotpService : ITotpService
         // Disable TOTP and clear secret
         user.TwoFactorEnabled = false;
         user.TwoFactorSecret = null;
+        user.TwoFactorMethod = TwoFactorMethod.None;
         user.UpdatedAt = DateTime.UtcNow;
 
         // Remove all recovery codes for this user

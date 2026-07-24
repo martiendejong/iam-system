@@ -64,10 +64,15 @@ export interface RegisterRequest {
 }
 
 export interface LoginResponse {
-  accessToken: string;
-  expiresIn: number;
-  tokenType: string;
-  user: User;
+  accessToken?: string;
+  expiresIn?: number;
+  tokenType?: string;
+  user?: User;
+  /** True when adaptive risk-based MFA requires an extra emailed-code step before tokens are issued */
+  requiresStepUp?: boolean;
+  requiresTwoFactor?: boolean;
+  userId?: string;
+  message?: string;
 }
 
 // Identity Provider types
