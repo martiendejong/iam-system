@@ -159,6 +159,7 @@ public class InvitationService : IInvitationService
         IEnumerable<BulkInviteEntry> entries,
         Guid tenantId,
         Guid invitedByUserId,
+        bool callerIsSuperAdmin,
         CancellationToken ct = default)
     {
         var result = new BulkInviteResult();
@@ -215,6 +216,22 @@ public class InvitationService : IInvitationService
                     });
                     result.Failed++;
                     continue;
+                }
+
+                if (!callerIsSuperAdmin)
+                {
+                    var targetRole = tenantRoles.FirstOrDefault(r => r.Id == roleId);
+                    if (targetRole != null && targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.Errors.Add(new BulkInviteError
+                        {
+                            Row = i + 1,
+                            Email = entry.Email,
+                            Error = "Only a SuperAdmin can grant the SuperAdmin role"
+                        });
+                        result.Failed++;
+                        continue;
+                    }
                 }
 
                 await SendInvitationAsync(entry.Email, tenantId, roleId, invitedByUserId, ct: ct);

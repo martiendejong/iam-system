@@ -40,6 +40,13 @@ public class InvitationsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Email))
             return BadRequest(new { error = "Email is required" });
 
+        var targetRole = await _context.Roles.FirstOrDefaultAsync(r => r.Id == request.RoleId);
+        if (targetRole == null)
+            return BadRequest(new { error = "Role not found" });
+
+        if (targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase) && !User.IsInRole("SuperAdmin"))
+            return Forbid();
+
         try
         {
             var invitation = await _invitationService.SendInvitationAsync(
@@ -114,7 +121,7 @@ public class InvitationsController : ControllerBase
         if (entries.Count == 0)
             return BadRequest(new { error = "CSV file contains no data rows" });
 
-        var result = await _invitationService.SendBulkInvitationsAsync(entries, request.TenantId, userId.Value);
+        var result = await _invitationService.SendBulkInvitationsAsync(entries, request.TenantId, userId.Value, User.IsInRole("SuperAdmin"));
 
         return Ok(new
         {

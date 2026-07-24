@@ -433,6 +433,11 @@ public class TenantsController : ControllerBase
             return NotFound(new { error = "Role not found" });
         }
 
+        if (role.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase) && !User.IsInRole("SuperAdmin"))
+        {
+            return Forbid();
+        }
+
         var existingRoles = await _context.UserRoles
             .Where(ur => ur.UserId == userId && ur.TenantId == id)
             .ToListAsync();
