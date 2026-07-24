@@ -1,8 +1,10 @@
 using Fido2NetLib;
 using Fido2NetLib.Objects;
 using IAM.Core.Services;
+using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace IAM.API.Controllers;
 
@@ -11,13 +13,19 @@ namespace IAM.API.Controllers;
 public class PasskeyController : ControllerBase
 {
     private readonly IPasskeyService _passkeyService;
+    private readonly IAuthService _authService;
+    private readonly IAMDbContext _context;
     private readonly ILogger<PasskeyController> _logger;
 
     public PasskeyController(
         IPasskeyService passkeyService,
+        IAuthService authService,
+        IAMDbContext context,
         ILogger<PasskeyController> logger)
     {
         _passkeyService = passkeyService;
+        _authService = authService;
+        _context = context;
         _logger = logger;
     }
 
@@ -141,14 +149,43 @@ public class PasskeyController : ControllerBase
                 return Unauthorized(new { error = "Passkey authentication failed" });
             }
 
-            // TODO: Generate JWT token for the authenticated user
-            // For now, just return success with user ID
+            var user = await _context.Users
+                .Include(u => u.UserRoles)
+                    .ThenInclude(ur => ur.Role)
+                .FirstOrDefaultAsync(u => u.Id == userId.Value, cancellationToken);
+
+            if (user == null || !user.IsActive)
+            {
+                return Unauthorized(new { error = "Passkey authentication failed" });
+            }
+
+            var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+            var userAgent = Request.Headers["User-Agent"].ToString();
+            var loginResult = await _authService.LoginBypassPasswordAsync(user, ipAddress, userAgent);
+
+            if (!loginResult.Success)
+            {
+                return Unauthorized(new { error = loginResult.Error });
+            }
+
+            Response.Cookies.Append("refreshToken", loginResult.RefreshToken!, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Expires = DateTimeOffset.UtcNow.AddDays(7)
+            });
+
             return Ok(new
             {
-                userId = userId.Value,
-                message = "Authentication successful",
-                // In production, return JWT token here
-                // token = GenerateJwtToken(userId.Value)
+                accessToken = loginResult.AccessToken,
+                user = new
+                {
+                    id = loginResult.User!.Id,
+                    email = loginResult.User.Email,
+                    firstName = loginResult.User.FirstName,
+                    lastName = loginResult.User.LastName
+                }
             });
         }
         catch (Exception ex)
