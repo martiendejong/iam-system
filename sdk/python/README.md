@@ -1,17 +1,23 @@
 # IAM System Python SDK
 
-Python SDK for the IAM System -- Identity and Access Management for IoT-enabled buildings.
+Python SDK for the IAM System -- Identity and Access Management for IoT-enabled
+buildings, real-time telemetry streaming, and Jupyter/pandas-based data science
+workflows.
 
 ## Installation
 
+Using Poetry (this package's own build system):
+
 ```bash
-pip install -e .
+poetry install
+poetry install --extras jupyter  # adds pandas for iam_sdk.jupyter
 ```
 
-Or install dependencies directly:
+Or with pip, against a built wheel / editable checkout:
 
 ```bash
-pip install httpx pydantic
+pip install .
+pip install ".[jupyter]"
 ```
 
 ## Quick Start
@@ -218,6 +224,86 @@ async def main():
 asyncio.run(main())
 ```
 
+### Real-Time Telemetry Streaming
+
+`TelemetryClient` connects to the IAM System's SignalR telemetry hub
+(`/hubs/telemetry`) and bridges it into `asyncio`, so you can consume live
+events with a normal `async for` loop:
+
+```python
+import asyncio
+from iam_sdk import IamClient, TelemetryClient
+
+async def main():
+    async with IamClient("https://localhost:5161") as auth:
+        login = await auth.login("admin@example.com", "Password123!")
+
+    live = TelemetryClient("https://localhost:5161", login.access_token)
+    await live.connect()
+    live.subscribe_to_device("sensor-001")
+    live.subscribe_to_tenant("building-hq")
+
+    async for message in live.stream():
+        print(message)  # {"deviceId": ..., "metricName": ..., "numericValue": ...}
+
+    await live.disconnect()
+
+asyncio.run(main())
+```
+
+Callback style is also supported (`on_telemetry`, `on_device_status_changed`,
+`on_device_command`), and reconnection after a dropped connection is handled
+automatically by `signalrcore`'s built-in reconnect policy
+(`max_reconnect_attempts` / `reconnect_interval_seconds` on the constructor).
+
+### Jupyter Notebook Integration
+
+Install the `jupyter` extra (`pip install iam-sdk[jupyter]`) for pandas-based
+helpers under `iam_sdk.jupyter`:
+
+- **`IAMContext`** -- provision and authenticate a device inline in a
+  notebook cell, with automatic deactivation on exit.
+- **`TelemetryQuery`** -- wraps `IamAdminClient.query_telemetry` /
+  `aggregate_telemetry` with `.to_dataframe()` for direct pandas output.
+- **`device_status_table(devices)`** / **`telemetry_chart(records)`** --
+  rich display helpers that render as tables/plots in notebook output.
+
+```python
+from iam_sdk.jupyter import IAMContext, TelemetryQuery, device_status_table
+
+async with IAMContext(base_url, admin_token, tenant_id="building-hq") as ctx:
+    registration, device = await ctx.provision_device("sensor-042")
+    await device.send_telemetry([...])
+
+query = TelemetryQuery(admin)
+frame = await query.query(device_id="sensor-001", metric_name="temperature")
+df = frame.to_dataframe()
+```
+
+See `examples/notebooks/` for runnable examples: `device_provisioning.ipynb`,
+`telemetry_analysis.ipynb`, `policy_management.ipynb`.
+
+### Reliability & Observability
+
+- **Automatic token refresh**: `IamClient` proactively refreshes the access
+  token ~30 seconds before it expires (`TokenCache`), so long-running scripts
+  and notebooks don't need to manage token lifetime manually.
+- **Retry with backoff**: every HTTP client (`IamClient`, `IamDeviceClient`,
+  `IamAdminClient`) retries connection failures and 5xx responses with
+  exponential backoff + jitter via `RetryTransport` (tenacity-backed). 4xx
+  responses are never retried.
+- **Logging**: the SDK logs through the standard `logging` module under the
+  `iam_sdk` logger (and `iam_sdk.telemetry` / `iam_sdk.jupyter` for those
+  subsystems) -- configure verbosity the usual way:
+  ```python
+  import logging
+  logging.getLogger("iam_sdk").setLevel(logging.DEBUG)
+  ```
+- **Typed exceptions**: `IamAuthError` (bad credentials / expired refresh
+  token), `IamApiError` (non-auth API failures, carries `status_code` and
+  `response_body`), and `TelemetryConnectionError` let callers branch on
+  failure type instead of parsing `httpx` exceptions directly.
+
 ## API Reference
 
 ### IamClient
@@ -254,8 +340,40 @@ asyncio.run(main())
 | **Policies** | `list_policies`, `get_policy`, `create_policy`, `evaluate_policy`, `simulate_policy`, `get_effective_policies`, `delete_policy` |
 | **Telemetry** | `query_telemetry`, `aggregate_telemetry`, `get_telemetry_metrics`, `get_telemetry_statistics` |
 
+### TelemetryClient
+
+| Method | Description |
+|--------|-------------|
+| `connect()` / `disconnect()` | Open/close the SignalR connection |
+| `subscribe_to_device(id)` / `unsubscribe_from_device(id)` | Device-scoped telemetry |
+| `subscribe_to_tenant(id)` / `unsubscribe_from_tenant(id)` | Tenant-scoped telemetry |
+| `subscribe_to_device_type(type)` | Device-type-scoped telemetry (no unsubscribe -- server limitation) |
+| `stream()` | Async iterator over incoming `TelemetryReceived` messages |
+| `on_telemetry`, `on_device_status_changed`, `on_device_command` | Register callbacks |
+| `publish_telemetry`, `report_device_status`, `send_device_command` | Push events (edge-gateway use cases) |
+
+### iam_sdk.jupyter
+
+| Name | Description |
+|------|-------------|
+| `IAMContext` | Inline device provisioning with automatic cleanup |
+| `TelemetryQuery` | `.query()` / `.aggregate()` returning `.to_dataframe()`-capable results |
+| `device_status_table(devices)` | pandas DataFrame of device status |
+| `telemetry_chart(records)` | Line chart of telemetry records |
+
+## Testing
+
+```bash
+poetry install --extras jupyter
+poetry run pytest
+poetry run mypy
+```
+
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - httpx >= 0.25.0
 - pydantic >= 2.0.0
+- tenacity >= 8.2.0
+- signalrcore >= 0.9.5
+- pandas >= 2.0.0 (optional, `jupyter` extra)
