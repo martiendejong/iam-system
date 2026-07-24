@@ -4,6 +4,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Baseline for JengoAGI's VersionTrackingService until the first "tag-release" CI
+         run (see .github/workflows/ci.yml) pushes a real vX.Y.Z tag, which then takes
+         priority over this static value. -->
+    <Version>0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
