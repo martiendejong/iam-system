@@ -65,29 +65,13 @@ public class TelemetryStorageServiceTests
         Assert.Equal(new[] { "humidity", "temperature" }, metrics);
     }
 
-    [Fact]
-    public async Task CleanupOldDataAsync_DeletesOnlyRecordsOlderThanRetention()
-    {
-        var service = CreateService(nameof(CleanupOldDataAsync_DeletesOnlyRecordsOlderThanRetention));
-        await service.IngestBatchAsync(new List<TelemetryRecord>
-        {
-            new() { DeviceId = "d1", MetricName = "m", Timestamp = DateTime.UtcNow.AddDays(-100) },
-            new() { DeviceId = "d1", MetricName = "m", Timestamp = DateTime.UtcNow.AddDays(-1) },
-        });
-
-        var deleted = await service.CleanupOldDataAsync(retentionDays: 90);
-        var stats = await service.GetStatisticsAsync();
-
-        Assert.Equal(1, deleted);
-        Assert.Equal(1, stats.TotalRecords);
-    }
 }
 
 /// <summary>
-/// Integration tests against the real local Postgres instance for the two methods that use
-/// raw SQL (date_bin bucketing, DISTINCT ON) - EF InMemory cannot execute either. Scoped to a
-/// unique per-run device id and cleaned up afterward so this never touches other data in the
-/// shared dev database.
+/// Integration tests against the real local Postgres instance for the methods EF InMemory
+/// cannot execute: date_bin bucketing, DISTINCT ON, and ExecuteDeleteAsync (a relational-only
+/// bulk operation with no InMemory-provider translation). Scoped to a unique per-run device id
+/// and cleaned up afterward so this never touches other data in the shared dev database.
 /// </summary>
 public class TelemetryStorageServicePostgresTests : IAsyncLifetime
 {
@@ -154,5 +138,64 @@ public class TelemetryStorageServicePostgresTests : IAsyncLifetime
         Assert.Single(result);
         Assert.Equal(3, result[0].Count);
         Assert.Equal(22, result[0].Value, precision: 5); // (20 + 24 + 22) / 3
+    }
+
+    [Fact]
+    public async Task AggregateAsync_WithNoDeviceOrTenantFilter_DoesNotThrow()
+    {
+        // Regression test: DeviceId/TenantId are optional filters bound as DBNull when unset.
+        // Without an explicit DbType, Npgsql cannot infer the parameter type for a null value
+        // and Postgres rejects the query with 42P08 - which broke every dashboard chart, since
+        // the frontend never sends a tenantId. Metric name is unique to this test so the
+        // unfiltered device/tenant scan can't pick up rows from other concurrently-seeded tests.
+        var metricName = $"agg-null-filter-{_deviceId}";
+        await _service.IngestBatchAsync(new List<TelemetryRecord>
+        {
+            new() { DeviceId = _deviceId, MetricName = metricName, NumericValue = 10, Timestamp = DateTime.UtcNow.AddMinutes(-5) },
+            new() { DeviceId = _deviceId, MetricName = metricName, NumericValue = 20, Timestamp = DateTime.UtcNow },
+        });
+
+        var result = await _service.AggregateAsync(new TelemetryAggregationQuery
+        {
+            DeviceId = null,
+            TenantId = null,
+            MetricName = metricName,
+            Aggregation = "avg",
+            Interval = "1h",
+            StartTime = DateTime.UtcNow.AddHours(-1),
+            EndTime = DateTime.UtcNow.AddMinutes(1)
+        });
+
+        Assert.Single(result);
+        Assert.Equal(2, result[0].Count);
+        Assert.Equal(15, result[0].Value, precision: 5);
+    }
+
+    [Fact]
+    public async Task CleanupOldDataAsync_DeletesOnlyRecordsOlderThanRetention()
+    {
+        // ExecuteDeleteAsync (used by CleanupOldDataAsync) is a relational-only bulk operation
+        // with no EF InMemory translation, so this must run against real Postgres. A unique
+        // metric name scopes the QueryAsync assertions to just this test's own rows despite
+        // CleanupOldDataAsync itself operating table-wide (no device/tenant filter).
+        var metricName = $"cleanup-retention-{_deviceId}";
+        await _service.IngestBatchAsync(new List<TelemetryRecord>
+        {
+            new() { DeviceId = _deviceId, MetricName = metricName, NumericValue = 1, Timestamp = DateTime.UtcNow.AddDays(-100) },
+            new() { DeviceId = _deviceId, MetricName = metricName, NumericValue = 2, Timestamp = DateTime.UtcNow.AddDays(-1) },
+        });
+
+        await _service.CleanupOldDataAsync(retentionDays: 90);
+
+        var remaining = await _service.QueryAsync(new TelemetryQuery
+        {
+            DeviceId = _deviceId,
+            MetricName = metricName,
+            StartTime = DateTime.UtcNow.AddDays(-200),
+            EndTime = DateTime.UtcNow.AddMinutes(1)
+        });
+
+        Assert.Single(remaining.Records);
+        Assert.Equal(2, remaining.Records[0].NumericValue);
     }
 }

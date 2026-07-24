@@ -170,8 +170,12 @@ public class TelemetryStorageService : ITelemetryStorageService
             AddParameter(command, "@metricName", query.MetricName);
             AddParameter(command, "@startTime", startTimeUtc);
             AddParameter(command, "@endTime", endTimeUtc);
-            AddParameter(command, "@deviceId", (object?)query.DeviceId ?? DBNull.Value);
-            AddParameter(command, "@tenantId", (object?)query.TenantId ?? DBNull.Value);
+            // DbType must be set explicitly even when the value is DBNull - without it, Npgsql
+            // cannot infer the Postgres parameter type for a null value and the query fails with
+            // 42P08 ("could not determine data type of parameter") on every call that omits an
+            // optional device/tenant filter, which is every chart the admin dashboard loads today.
+            AddParameter(command, "@deviceId", (object?)query.DeviceId ?? DBNull.Value, System.Data.DbType.String);
+            AddParameter(command, "@tenantId", (object?)query.TenantId ?? DBNull.Value, System.Data.DbType.Guid);
 
             var results = new List<TelemetryAggregation>();
             await using var reader = await command.ExecuteReaderAsync(ct);
@@ -196,11 +200,13 @@ public class TelemetryStorageService : ITelemetryStorageService
         }
     }
 
-    private static void AddParameter(System.Data.Common.DbCommand command, string name, object value)
+    private static void AddParameter(System.Data.Common.DbCommand command, string name, object value, System.Data.DbType? dbType = null)
     {
         var parameter = command.CreateParameter();
         parameter.ParameterName = name;
         parameter.Value = value;
+        if (dbType.HasValue)
+            parameter.DbType = dbType.Value;
         command.Parameters.Add(parameter);
     }
 
