@@ -137,10 +137,16 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
+    - name: Check for SONAR_TOKEN
+      id: sonar_check
+      run: echo "has_token=${{ secrets.SONAR_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
     - name: SonarCloud Scan
       # SONAR_TOKEN is not yet configured as a repo secret. Skip cleanly instead of
       # failing every push until one is added (see ClickUp task 869e8w66h).
-      if: ${{ secrets.SONAR_TOKEN != '' }}
+      # (the `secrets` context is not usable directly in `if:`, so it's checked
+      # in the preceding run step and passed through as a step output instead)
+      if: steps.sonar_check.outputs.has_token == 'true'
       uses: SonarSource/sonarcloud-github-action@master
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
