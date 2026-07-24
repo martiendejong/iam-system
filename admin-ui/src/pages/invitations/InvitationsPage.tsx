@@ -93,7 +93,7 @@ export default function InvitationsPage() {
       if (data.length > 0 && !selectedTenantId) {
         setSelectedTenantId(data[0].id);
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load tenants');
     }
   };
@@ -102,7 +102,7 @@ export default function InvitationsPage() {
     try {
       const data = await api.getRoles();
       setRoles(data);
-    } catch (err) {
+    } catch {
       setError('Failed to load roles');
     }
   };
@@ -111,7 +111,7 @@ export default function InvitationsPage() {
     try {
       const data = await api.getInvitations(selectedTenantId);
       setInvitations(data);
-    } catch (err) {
+    } catch {
       setError('Failed to load invitations');
     }
   };
@@ -120,7 +120,7 @@ export default function InvitationsPage() {
     try {
       const data = await api.getPendingInvitations(selectedTenantId);
       setPendingInvitations(data);
-    } catch (err) {
+    } catch {
       setError('Failed to load pending invitations');
     }
   };
@@ -136,7 +136,7 @@ export default function InvitationsPage() {
         maxMembers: data.maxMembers || 0,
         welcomeMessage: data.welcomeMessage || '',
       });
-    } catch (err) {
+    } catch {
       // Settings might not exist yet, that's OK
     }
   };
@@ -145,7 +145,7 @@ export default function InvitationsPage() {
     try {
       const data = await api.getTenantMembers(selectedTenantId);
       setMembers(data);
-    } catch (err) {
+    } catch {
       setError('Failed to load members');
     }
   };

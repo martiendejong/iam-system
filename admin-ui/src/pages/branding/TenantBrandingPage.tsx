@@ -47,7 +47,7 @@ export default function TenantBrandingPage() {
       if (data.length > 0) {
         setSelectedTenantId(data[0].id);
       }
-    } catch (err: any) {
+    } catch {
       setError('Failed to load tenants');
     }
   };

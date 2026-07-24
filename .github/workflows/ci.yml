@@ -55,28 +55,37 @@ jobs:
       with:
         node-version: '20'
         cache: 'npm'
-        cache-dependency-path: src/IAM.Admin.Web/package-lock.json
+        cache-dependency-path: admin-ui/package-lock.json
 
     - name: Install dependencies
-      working-directory: src/IAM.Admin.Web
+      working-directory: admin-ui
       run: npm ci
 
     - name: Run linter
-      working-directory: src/IAM.Admin.Web
+      working-directory: admin-ui
       run: npm run lint
 
     - name: Run tests
-      working-directory: src/IAM.Admin.Web
+      working-directory: admin-ui
       run: npm test -- --coverage
 
     - name: Build
-      working-directory: src/IAM.Admin.Web
+      working-directory: admin-ui
       run: npm run build
 
+    - name: Check for CODECOV_TOKEN
+      id: codecov_check
+      run: echo "has_token=${{ secrets.CODECOV_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
     - name: Upload coverage
+      # CODECOV_TOKEN is not configured as a repo secret. Skip cleanly instead
+      # of failing the job on every push until one is added (same pattern as
+      # the SonarCloud skip in the Code Quality job below, see 869e8w66h).
+      if: steps.codecov_check.outputs.has_token == 'true'
       uses: codecov/codecov-action@v4
       with:
-        files: src/IAM.Admin.Web/coverage/coverage-final.json
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: admin-ui/coverage/coverage-final.json
         flags: frontend
 
   # Security Scan
@@ -142,57 +151,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-test]
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: iam_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '9.0.x'
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-
-    - name: Start backend
+    - name: E2E suite not yet implemented
+      # `tests/IAM.E2E.Tests` (the project this job used to run) was never
+      # created - only tests/IAM.API.Tests and tests/IAM.Core.Tests exist.
+      # Disabled here rather than left failing on every PR (see 869e8w6v7,
+      # follow-up to the SonarCloud skip pattern in the Code Quality job
+      # below, 869e8w66h). Re-enable once a real Playwright E2E project
+      # exists under tests/.
       run: |
-        cd src/IAM.API
-        dotnet run &
-        sleep 10
-      env:
-        ConnectionStrings__DefaultConnection: "Host=localhost;Database=iam_test;Username=postgres;Password=postgres"
-        ASPNETCORE_ENVIRONMENT: Test
-
-    - name: Install Playwright
-      working-directory: tests/IAM.E2E.Tests
-      run: npm ci && npx playwright install --with-deps
-
-    - name: Run E2E tests
-      working-directory: tests/IAM.E2E.Tests
-      run: npx playwright test
-
-    - name: Upload Playwright report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: playwright-report
-        path: tests/IAM.E2E.Tests/playwright-report/
+        echo "::notice::End-to-End Tests skipped - no E2E test project exists yet (tests/IAM.E2E.Tests was never created). See ClickUp task 869e8w6v7."
 
   # Build Docker Image (on main branch only)
   docker-build:

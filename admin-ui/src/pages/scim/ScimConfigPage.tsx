@@ -66,7 +66,7 @@ export default function ScimConfigPage() {
     try {
       const data = await scimApi.getProvisioningLogs(selectedTenantId);
       setLogs(data);
-    } catch (err: any) {
+    } catch {
       // Non-critical, don't show error
     }
   };
