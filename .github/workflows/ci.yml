@@ -12,27 +12,49 @@ jobs:
     name: Backend Tests & Build
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: iam_db
+          POSTGRES_USER: iam_user
+          POSTGRES_PASSWORD: "IAM_Db_P@ss2026!"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=iam_db;Username=iam_user;Password=IAM_Db_P@ss2026!"
+
     steps:
     - uses: actions/checkout@v4
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: '10.0.x'
 
     - name: Restore dependencies
-      run: dotnet restore src/IAM.API/IAM.API.csproj
+      run: dotnet restore IAMSystem.slnx
 
     - name: Build
-      run: dotnet build src/IAM.API/IAM.API.csproj --configuration Release --no-restore
+      run: dotnet build IAMSystem.slnx --configuration Release --no-restore
 
-    - name: Run unit tests
-      run: dotnet test tests/IAM.UnitTests/IAM.UnitTests.csproj --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+    - name: Install EF Core tools
+      run: |
+        dotnet tool install --global dotnet-ef
+        echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
-    - name: Run integration tests
-      run: dotnet test tests/IAM.Integration.Tests/IAM.Integration.Tests.csproj --configuration Release --no-build --verbosity normal
-      env:
-        ConnectionStrings__DefaultConnection: "Host=localhost;Database=iam_test;Username=postgres;Password=postgres"
+    - name: Apply database migrations
+      working-directory: src/IAM.API
+      run: dotnet ef database update
+
+    - name: Run tests
+      run: dotnet test IAMSystem.slnx --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
     - name: Publish test results
       uses: dorny/test-reporter@v1
@@ -113,9 +135,12 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: '10.0.x'
 
     - name: SonarCloud Scan
+      # SONAR_TOKEN is not yet configured as a repo secret. Skip cleanly instead of
+      # failing every push until one is added (see ClickUp task 869e8w66h).
+      if: ${{ secrets.SONAR_TOKEN != '' }}
       uses: SonarSource/sonarcloud-github-action@master
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
