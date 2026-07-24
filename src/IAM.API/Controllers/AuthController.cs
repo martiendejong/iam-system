@@ -65,6 +65,16 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
+        if (result.RequiresStepUp)
+        {
+            return Ok(new
+            {
+                requiresStepUp = true,
+                userId = result.User!.Id,
+                message = "Additional verification required. Check your email for a code."
+            });
+        }
+
         if (result.RequiresTwoFactor)
         {
             return Ok(new
@@ -136,6 +146,26 @@ public class AuthController : ControllerBase
                 lastName = result.User.LastName
             }
         });
+    }
+
+    /// <summary>
+    /// Completes a login that was suspended for adaptive-MFA step-up verification
+    /// (see /login's requiresStepUp response) by validating the emailed code.
+    /// </summary>
+    [HttpPost("step-up/verify")]
+    public async Task<IActionResult> VerifyStepUp([FromBody] StepUpVerifyRequest request)
+    {
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.VerifyStepUpAsync(request.Email, request.Code, ipAddress, userAgent);
+
+        if (!result.Success)
+        {
+            return BadRequest(new { error = result.Error });
+        }
+
+        return await CompleteLoginAsync(result);
     }
 
     [HttpPost("refresh")]
@@ -214,5 +244,6 @@ public record LoginRequest(string Email, string Password);
 public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
+public record StepUpVerifyRequest(string Email, string Code);
 public record TwoFactorVerifyRequest(Guid UserId, string Code);
 public record ResendTwoFactorRequest(Guid UserId);

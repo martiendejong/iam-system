@@ -351,6 +351,50 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.ToTable("BlockedIpLogs", (string)null);
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.Building", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Code")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("LocationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("TotalFloors")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LocationId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("IsActive", "TenantId");
+
+                    b.ToTable("Buildings", (string)null);
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.BulkOperation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -939,6 +983,62 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.ToTable("Devices", (string)null);
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.DeviceAccessLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("AccessedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Action")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Context")
+                        .HasColumnType("jsonb");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<TimeSpan?>("Duration")
+                        .HasColumnType("interval");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("UserAgent")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccessedAt");
+
+                    b.HasIndex("DeviceId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("Action", "Success");
+
+                    b.HasIndex("DeviceId", "AccessedAt");
+
+                    b.HasIndex("UserId", "AccessedAt");
+
+                    b.ToTable("DeviceAccessLogs", (string)null);
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.DeviceCertificate", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1328,6 +1428,51 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.HasIndex("UserId", "Provider");
 
                     b.ToTable("ExternalLogins", (string)null);
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Floor", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("AreaSquareMeters")
+                        .HasColumnType("double precision");
+
+                    b.Property<Guid>("BuildingId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FloorNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BuildingId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("BuildingId", "FloorNumber");
+
+                    b.HasIndex("IsActive", "TenantId");
+
+                    b.ToTable("Floors", (string)null);
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.GeoFence", b =>
@@ -1723,6 +1868,99 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.ToTable("Invitations", (string)null);
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.IoTDevice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Capabilities")
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeviceId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastDataAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Manufacturer")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Metadata")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int?>("Port")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("RoomId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("StreamProtocol")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("StreamUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<bool>("SupportsStreaming")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceId")
+                        .IsUnique();
+
+                    b.HasIndex("RoomId");
+
+                    b.HasIndex("SupportsStreaming");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("IsActive", "TenantId");
+
+                    b.HasIndex("Type", "Status");
+
+                    b.ToTable("IoTDevices", (string)null);
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.IpAllowlistEntry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1757,6 +1995,56 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "IsActive");
 
                     b.ToTable("IpAllowlistEntries", (string)null);
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Location", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("City")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<double?>("Latitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("Longitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("IsActive", "TenantId");
+
+                    b.ToTable("Locations", (string)null);
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.LoginRiskScore", b =>
@@ -2628,6 +2916,102 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.ToTable("RegionSyncEvents", (string)null);
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.ResourcePermission", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Actions")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("BuildingId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("FloorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("GrantedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("GrantedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("InheritToChildren")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid?>("IoTDeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid?>("LocationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ResourceType")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("RoleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RoomGroupId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("RoomId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ValidFrom")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ValidUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BuildingId");
+
+                    b.HasIndex("FloorId");
+
+                    b.HasIndex("GrantedByUserId");
+
+                    b.HasIndex("IoTDeviceId");
+
+                    b.HasIndex("LocationId");
+
+                    b.HasIndex("RoleId");
+
+                    b.HasIndex("RoomGroupId");
+
+                    b.HasIndex("RoomId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("IsActive", "ValidUntil");
+
+                    b.HasIndex("ResourceType", "ResourceId");
+
+                    b.ToTable("ResourcePermissions", (string)null);
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.RiskThreshold", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2772,6 +3156,138 @@ namespace IAM.Infrastructure.Data.Migrations
                             Permissions = "[\"Room.View\",\"Device.ViewOwn\",\"Amenity.Book\",\"Maintenance.Request\"]",
                             UpdatedAt = new DateTime(2026, 3, 22, 0, 0, 0, 0, DateTimeKind.Utc)
                         });
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Room", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<double?>("AreaSquareMeters")
+                        .HasColumnType("double precision");
+
+                    b.Property<int?>("Capacity")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FloorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("RoomNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FloorId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("FloorId", "RoomNumber");
+
+                    b.HasIndex("IsActive", "TenantId");
+
+                    b.HasIndex("Type", "IsActive");
+
+                    b.ToTable("Rooms", (string)null);
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.RoomGroup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("BuildingId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<Guid?>("FloorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BuildingId");
+
+                    b.HasIndex("FloorId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("IsActive", "TenantId");
+
+                    b.ToTable("RoomGroups", (string)null);
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.RoomGroupMembership", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("AddedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("RoomGroupId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RoomId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoomGroupId");
+
+                    b.HasIndex("RoomId", "RoomGroupId")
+                        .IsUnique();
+
+                    b.ToTable("RoomGroupMemberships", (string)null);
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.ScheduleTemplate", b =>
@@ -4578,6 +5094,25 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.Building", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Location", "Location")
+                        .WithMany("Buildings")
+                        .HasForeignKey("LocationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Location");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.BulkOperation", b =>
                 {
                     b.HasOne("IAM.Core.Entities.User", "CreatedByUser")
@@ -4695,6 +5230,25 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.DeviceAccessLog", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.IoTDevice", "Device")
+                        .WithMany("AccessLogs")
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.DeviceCertificate", b =>
                 {
                     b.HasOne("IAM.Core.Entities.Device", "Device")
@@ -4767,6 +5321,25 @@ namespace IAM.Infrastructure.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Floor", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Building", "Building")
+                        .WithMany("Floors")
+                        .HasForeignKey("BuildingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Building");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.GeoFence", b =>
@@ -4909,7 +5482,37 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.IoTDevice", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Room", "Room")
+                        .WithMany("Devices")
+                        .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Room");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.IpAllowlistEntry", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Location", b =>
                 {
                     b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
                         .WithMany()
@@ -5154,6 +5757,80 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.ResourcePermission", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Building", "Building")
+                        .WithMany("Permissions")
+                        .HasForeignKey("BuildingId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Floor", "Floor")
+                        .WithMany("Permissions")
+                        .HasForeignKey("FloorId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.User", "GrantedByUser")
+                        .WithMany()
+                        .HasForeignKey("GrantedByUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.IoTDevice", "IoTDevice")
+                        .WithMany("Permissions")
+                        .HasForeignKey("IoTDeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Location", "Location")
+                        .WithMany("Permissions")
+                        .HasForeignKey("LocationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Role", "Role")
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("IAM.Core.Entities.RoomGroup", "RoomGroup")
+                        .WithMany("Permissions")
+                        .HasForeignKey("RoomGroupId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Room", "Room")
+                        .WithMany("Permissions")
+                        .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("Building");
+
+                    b.Navigation("Floor");
+
+                    b.Navigation("GrantedByUser");
+
+                    b.Navigation("IoTDevice");
+
+                    b.Navigation("Location");
+
+                    b.Navigation("Role");
+
+                    b.Navigation("Room");
+
+                    b.Navigation("RoomGroup");
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.RiskThreshold", b =>
                 {
                     b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
@@ -5172,6 +5849,69 @@ namespace IAM.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Room", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Floor", "Floor")
+                        .WithMany("Rooms")
+                        .HasForeignKey("FloorId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Floor");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.RoomGroup", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.Building", "Building")
+                        .WithMany()
+                        .HasForeignKey("BuildingId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Floor", "Floor")
+                        .WithMany()
+                        .HasForeignKey("FloorId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Building");
+
+                    b.Navigation("Floor");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.RoomGroupMembership", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.RoomGroup", "RoomGroup")
+                        .WithMany("RoomMemberships")
+                        .HasForeignKey("RoomGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.Room", "Room")
+                        .WithMany("GroupMemberships")
+                        .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Room");
+
+                    b.Navigation("RoomGroup");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.ScheduleTemplate", b =>
@@ -5541,6 +6281,13 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("Alerts");
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.Building", b =>
+                {
+                    b.Navigation("Floors");
+
+                    b.Navigation("Permissions");
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.Device", b =>
                 {
                     b.Navigation("Certificates");
@@ -5549,6 +6296,13 @@ namespace IAM.Infrastructure.Data.Migrations
             modelBuilder.Entity("IAM.Core.Entities.DirectorySyncConfig", b =>
                 {
                     b.Navigation("SyncLogs");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Floor", b =>
+                {
+                    b.Navigation("Permissions");
+
+                    b.Navigation("Rooms");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Group", b =>
@@ -5565,6 +6319,20 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("ScheduleTemplates");
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.IoTDevice", b =>
+                {
+                    b.Navigation("AccessLogs");
+
+                    b.Navigation("Permissions");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Location", b =>
+                {
+                    b.Navigation("Buildings");
+
+                    b.Navigation("Permissions");
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.Policy", b =>
                 {
                     b.Navigation("InheritedPolicies");
@@ -5578,6 +6346,22 @@ namespace IAM.Infrastructure.Data.Migrations
             modelBuilder.Entity("IAM.Core.Entities.Role", b =>
                 {
                     b.Navigation("UserRoles");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.Room", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("GroupMemberships");
+
+                    b.Navigation("Permissions");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.RoomGroup", b =>
+                {
+                    b.Navigation("Permissions");
+
+                    b.Navigation("RoomMemberships");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.ScheduleTemplate", b =>

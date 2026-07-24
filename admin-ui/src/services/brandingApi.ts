@@ -19,6 +19,20 @@ export interface TenantBranding {
   updatedAt?: string;
 }
 
+export interface PublicTenantBranding {
+  tenantSlug?: string | null;
+  tenantName?: string | null;
+  logoUrl?: string | null;
+  primaryColor: string;
+  secondaryColor: string;
+  backgroundUrl?: string | null;
+  customCss?: string | null;
+  faviconUrl?: string | null;
+  loginTitle?: string | null;
+  loginSubtitle?: string | null;
+  whiteLabelEnabled: boolean;
+}
+
 export interface UpsertBrandingRequest {
   logoUrl?: string | null;
   primaryColor?: string | null;
@@ -51,8 +65,13 @@ export const brandingApi = {
     await client.delete(`/branding/${tenantId}`);
   },
 
-  async getPublicBranding(tenantSlug: string): Promise<TenantBranding> {
-    const response = await client.get<TenantBranding>(`/branding/public/${tenantSlug}`);
+  async getPublicBranding(tenantSlug: string): Promise<PublicTenantBranding> {
+    const response = await client.get<PublicTenantBranding>(`/branding/public/${tenantSlug}`);
+    return response.data;
+  },
+
+  async getBrandingByDomain(domain: string): Promise<PublicTenantBranding> {
+    const response = await client.get<PublicTenantBranding>(`/branding/by-domain/${domain}`);
     return response.data;
   },
 };

@@ -13,6 +13,12 @@ public interface IAuthService
     Task<bool> ResetPasswordAsync(string token, string newPassword);
     Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null);
     Task<bool> ResendVerificationEmailAsync(Guid userId);
+
+    /// <summary>
+    /// Completes a login that was suspended for adaptive-MFA step-up verification
+    /// (see AuthResult.RequiresStepUp), by validating the emailed OTP and issuing tokens.
+    /// </summary>
+    Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null);
     Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null);
     Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId);
 }
@@ -25,5 +31,12 @@ public class AuthResult
     public User? User { get; set; }
     public string? Error { get; set; }
     public Dictionary<string, string[]>? ValidationErrors { get; set; }
+
+    /// <summary>
+    /// True when the risk assessment for this login required an additional step-up
+    /// verification (adaptive MFA). No tokens are issued yet; the caller must complete
+    /// the challenge via VerifyStepUpAsync.
+    /// </summary>
+    public bool RequiresStepUp { get; set; }
     public bool RequiresTwoFactor { get; set; }
 }

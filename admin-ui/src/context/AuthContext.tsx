@@ -38,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (data: LoginRequest) => {
     const response = await api.login(data);
-    if (!response.requiresTwoFactor && response.user) {
+    if (!response.requiresStepUp && !response.requiresTwoFactor && response.user) {
       setUser(response.user);
     }
     return response;

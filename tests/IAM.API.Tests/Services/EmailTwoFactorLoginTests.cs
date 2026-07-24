@@ -53,7 +53,8 @@ public class EmailTwoFactorLoginTests
         var smsService = new FakeSmsService();
         var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" });
         var otpService = new OtpService(context, emailService, smsService, emailSettings, NullLogger<OtpService>.Instance);
-        var authService = new AuthService(context, CreateConfiguration(), emailService, otpService);
+        var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
+        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService);
         return (authService, otpService, emailService, context);
     }
 
@@ -176,8 +177,8 @@ public class EmailTwoFactorLoginTests
         public Task SendSessionAlertAsync(string email, string username, string deviceInfo, string ipAddress, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default) => Task.CompletedTask;
-        public Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default) => Task.CompletedTask;
-        public Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
+        public Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
         public Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.CompletedTask;
         public Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default) => Task.FromResult(true);
     }

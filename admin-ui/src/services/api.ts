@@ -79,6 +79,14 @@ class ApiService {
     return response.data;
   }
 
+  async verifyStepUp(email: string, code: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/step-up/verify', { email, code });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
+
   async register(data: RegisterRequest): Promise<void> {
     await this.client.post('/auth/register', data);
   }

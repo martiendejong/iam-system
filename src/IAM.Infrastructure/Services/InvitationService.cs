@@ -145,7 +145,7 @@ public class InvitationService : IInvitationService
         }
         else
         {
-            await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct);
+            await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
         }
 
         _logger.LogInformation(
@@ -330,7 +330,7 @@ public class InvitationService : IInvitationService
         // Send welcome email
         var username = $"{user.FirstName} {user.LastName}".Trim();
         if (string.IsNullOrWhiteSpace(username)) username = user.Email;
-        await _emailService.SendWelcomeEmailAsync(user.Email, username, invitation.Tenant.Name, ct);
+        await _emailService.SendWelcomeEmailAsync(user.Email, username, invitation.Tenant.Name, ct, tenantId: invitation.TenantId);
 
         _logger.LogInformation(
             "Invitation accepted: {Email} joined tenant {TenantName} ({TenantId}) with role {RoleName}",
