@@ -107,3 +107,11 @@ SendInvitation nor ChangeMemberRole validates the requested roleId against the c
 own privilege, so a BuildingManager (whose own permissions don't even include User.Invite)
 can invite or promote anyone straight to SuperAdmin. Sent back to CHANGES REQUESTED;
 UsersController.AssignRole's existing SuperAdmin-only pattern is the fix to mirror.
+
+## 2026-07-31 — task 869ec262y (login page ignores returnUrl) — WIP
+Plan: LoginPage.tsx already has a `navigateAfterLogin()` helper (added in PR #74)
+used by password/step-up/email-2FA flows, but (a) it has no open-redirect guard on
+`returnUrl`, and (b) the SMS OTP verify handler bypasses it entirely, hardcoding
+`navigate('/dashboard')` and never calling `setCurrentUser`, so SMS-authenticated
+users would get bounced back to /login by ProtectedRoute even before the returnUrl
+bug. Adding a sanitizer + fixing the SMS handler to match the other three call sites.
