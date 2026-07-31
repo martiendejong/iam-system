@@ -5,6 +5,7 @@ import { api } from '../../services/api';
 import { brandingApi } from '../../services/brandingApi';
 import type { PublicTenantBranding } from '../../services/brandingApi';
 import type { IdentityProvider } from '../../types';
+import { sanitizeReturnUrl } from './returnUrl';
 
 type LoginMethod = 'password' | 'magic-link' | 'sms';
 type LoginView = 'login' | 'forgot';
@@ -32,7 +33,7 @@ export default function LoginPage() {
   const { login, setCurrentUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const returnUrl = searchParams.get('returnUrl') || '/dashboard';
+  const returnUrl = sanitizeReturnUrl(searchParams.get('returnUrl'));
   const tenantSlug = searchParams.get('tenant');
 
   useEffect(() => {
@@ -256,7 +257,10 @@ export default function LoginPage() {
       if (response.data.accessToken) {
         localStorage.setItem('accessToken', response.data.accessToken);
       }
-      navigate('/dashboard');
+      if (response.data.user) {
+        setCurrentUser(response.data.user);
+      }
+      navigateAfterLogin();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Invalid code. Please try again.');
     } finally {

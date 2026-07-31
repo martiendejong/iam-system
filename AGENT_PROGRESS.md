@@ -107,3 +107,22 @@ SendInvitation nor ChangeMemberRole validates the requested roleId against the c
 own privilege, so a BuildingManager (whose own permissions don't even include User.Invite)
 can invite or promote anyone straight to SuperAdmin. Sent back to CHANGES REQUESTED;
 UsersController.AssignRole's existing SuperAdmin-only pattern is the fix to mirror.
+
+## 2026-07-31 — task 869ec262y (login page ignores returnUrl)
+Done: PR #79 — LoginPage.tsx already had a `navigateAfterLogin()` helper (PR #74)
+used by password/step-up/email-2FA flows, but it had no open-redirect guard, and
+the SMS OTP verify handler bypassed it entirely (hardcoded `navigate('/dashboard')`
+and never called `setCurrentUser`, so SMS-authenticated users would have been
+bounced back to /login by ProtectedRoute regardless of the returnUrl bug). Added
+`sanitizeReturnUrl()` (admin-ui/src/pages/auth/returnUrl.ts — starts-with-`/`,
+rejects `//` and `/\` open-redirect variants) used at the single point `returnUrl`
+is read, and routed the SMS handler through `navigateAfterLogin()` + `setCurrentUser`
+like the other three call sites. Filed follow-up 869ec3dn6: magic-link login has a
+deeper, pre-existing gap (no `/magic-link` route exists at all for the emailed
+link) that's out of scope for a returnUrl fix.
+Verified: `npm run build` clean, `npm run lint` 0 errors (287 pre-existing `any`
+warnings, unchanged), `npm test` 15/15 pass — includes new jsdom/RTL tests that
+render the real LoginPage and assert window.location.href / router navigation for
+password+OIDC-returnUrl, password+plain-returnUrl, password+open-redirect-attempt,
+and SMS-OTP+OIDC-returnUrl.
+Left: magic-link + 2FA-email-link round trips still don't carry returnUrl (869ec3dn6).
