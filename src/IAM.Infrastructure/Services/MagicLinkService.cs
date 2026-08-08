@@ -75,7 +75,7 @@ public class MagicLinkService : IMagicLinkService
 
         // Build magic link URL and send email
         var baseUrl = _emailSettings.BaseUrl?.TrimEnd('/');
-        var magicLinkUrl = $"{baseUrl}/auth/magic-link?token={token}";
+        var magicLinkUrl = $"{baseUrl}/magic-link?token={token}";
         if (!string.IsNullOrWhiteSpace(returnUrl))
         {
             magicLinkUrl += $"&returnUrl={Uri.EscapeDataString(returnUrl)}";

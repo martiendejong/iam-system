@@ -154,3 +154,22 @@ Verified: `dotnet build` 0 errors; `dotnet test` 90/90 pass (2 pre-existing skip
 fallback) and `VerifyTwoFactorPage.test.tsx` (5 tests, same matrix) and 2 new LoginPage
 tests (magic-link request includes returnUrl, 2FA resend keeps it).
 Left: nothing new.
+
+## 2026-08-09 — task 869ec3dn6 round 2 (fix reviewer-flagged double `/auth/` prefix)
+Done: PR #82 round 2 — `MagicLinkService.cs:78` built the emailed link as
+`{baseUrl}/auth/magic-link?token=...`; the deployed `Email:BaseUrl` already ends in
+`/auth`, so the real URL became `.../auth/auth/magic-link` and the SPA router
+(basename="/auth") couldn't match it, falling through to the catch-all and bouncing to
+`/dashboard` → login — the exact bug this task exists to fix. Dropped the leading `/auth`
+so the built URL matches `OtpService.cs:236`'s `{baseUrl}/verify-2fa` shape.
+`MagicLinkServiceTests.cs`'s fixture used a fake BaseUrl without the `/auth` suffix so it
+never caught this; changed it to `https://iam.example.com/auth` (matching production
+shape) and swapped the loose `Assert.Contains("/auth/magic-link?token=")` for
+`Assert.StartsWith(...)` — `Contains` still matched the buggy double-`/auth/` URL because
+the second `/auth/magic-link?token=` occurrence is itself a valid substring match;
+`StartsWith` doesn't have that gap.
+Verified: reintroduced the old bug locally and confirmed both `MagicLinkServiceTests`
+assertions fail against it, then reverted to the fix and re-ran — `dotnet test` 90/90
+pass (2 pre-existing skips); `dotnet build` 0 errors; frontend unchanged from round 1,
+re-ran `npm run build` (clean), `npx tsc --noEmit` (clean), `npm test` 28/28 pass.
+Left: nothing.

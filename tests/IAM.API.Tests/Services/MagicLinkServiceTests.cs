@@ -22,7 +22,7 @@ public class MagicLinkServiceTests
     {
         var context = CreateContext();
         var emailService = new FakeEmailService();
-        var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" });
+        var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com/auth" });
         var service = new MagicLinkService(context, emailService, emailSettings, NullLogger<MagicLinkService>.Instance);
         return (service, emailService, context);
     }
@@ -53,7 +53,7 @@ public class MagicLinkServiceTests
         Assert.True(result);
         Assert.Single(emailService.SentMagicLinkUrls);
         Assert.Contains("returnUrl=%2Fconnect%2Fauthorize%3Fclient_id%3Djengo-agi", emailService.SentMagicLinkUrls[0]);
-        Assert.Contains("/auth/magic-link?token=", emailService.SentMagicLinkUrls[0]);
+        Assert.StartsWith("https://iam.example.com/auth/magic-link?token=", emailService.SentMagicLinkUrls[0]);
     }
 
     [Fact]
@@ -69,6 +69,7 @@ public class MagicLinkServiceTests
         Assert.True(result);
         Assert.Single(emailService.SentMagicLinkUrls);
         Assert.DoesNotContain("returnUrl=", emailService.SentMagicLinkUrls[0]);
+        Assert.StartsWith("https://iam.example.com/auth/magic-link?token=", emailService.SentMagicLinkUrls[0]);
     }
 
     [Fact]
