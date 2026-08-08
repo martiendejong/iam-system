@@ -1,4 +1,4 @@
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import MagicLinkCallbackPage from './MagicLinkCallbackPage';
@@ -12,6 +12,8 @@ vi.mock('../../context/AuthContext', () => ({
 vi.mock('../../services/api', () => ({
   api: {
     verifyMagicLink: vi.fn(),
+    verifyLoginTwoFactor: vi.fn(),
+    resendLoginTwoFactorCode: vi.fn(),
   },
 }));
 
@@ -126,5 +128,81 @@ describe('MagicLinkCallbackPage', () => {
 
     await waitFor(() => expect(screen.getByText('Sign-in failed')).toBeInTheDocument());
     expect(mockedApi.verifyMagicLink).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for task 869eft100: a magic link only proves email possession.
+  // An account with email 2FA enabled must not be signed in until that second factor
+  // is verified too.
+  describe('when the account has email 2FA enabled', () => {
+    it('does not sign the user in and asks for a verification code instead', async () => {
+      mockedApi.verifyMagicLink.mockResolvedValue({
+        requiresTwoFactor: true,
+        userId: 'user-1',
+        message: 'A verification code has been sent to your email.',
+      });
+
+      renderCallbackPage('?token=abc123');
+
+      await waitFor(() => expect(screen.getByText('A verification code has been sent to your email.')).toBeInTheDocument());
+      expect(setCurrentUser).not.toHaveBeenCalled();
+      expect(screen.queryByText("You're signed in!")).not.toBeInTheDocument();
+    });
+
+    it('completes sign-in and redirects once the correct code is submitted', async () => {
+      mockedApi.verifyMagicLink.mockResolvedValue({
+        requiresTwoFactor: true,
+        userId: 'user-1',
+        message: 'A verification code has been sent to your email.',
+      });
+      mockedApi.verifyLoginTwoFactor.mockResolvedValue({
+        accessToken: 'tok',
+        user: { id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' },
+      });
+
+      renderCallbackPage(`?token=abc123&returnUrl=${encodeURIComponent('/portal/profile')}`);
+
+      await waitFor(() => expect(screen.getByLabelText('Verification code')).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify and Sign In' }));
+
+      await waitFor(() => expect(mockedApi.verifyLoginTwoFactor).toHaveBeenCalledWith('user-1', '123456'));
+      await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
+      await waitFor(() => expect(screen.getByText('Portal Profile Page')).toBeInTheDocument(), { timeout: 2000 });
+    });
+
+    it('shows an error and does not sign in when the code is wrong', async () => {
+      mockedApi.verifyMagicLink.mockResolvedValue({
+        requiresTwoFactor: true,
+        userId: 'user-1',
+        message: 'A verification code has been sent to your email.',
+      });
+      mockedApi.verifyLoginTwoFactor.mockRejectedValue(new Error('invalid code'));
+
+      renderCallbackPage('?token=abc123');
+
+      await waitFor(() => expect(screen.getByLabelText('Verification code')).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '000000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify and Sign In' }));
+
+      await waitFor(() => expect(screen.getByText('Invalid or expired code. Please try again.')).toBeInTheDocument());
+      expect(setCurrentUser).not.toHaveBeenCalled();
+    });
+
+    it('resends the code on request', async () => {
+      mockedApi.verifyMagicLink.mockResolvedValue({
+        requiresTwoFactor: true,
+        userId: 'user-1',
+        message: 'A verification code has been sent to your email.',
+      });
+      mockedApi.resendLoginTwoFactorCode.mockResolvedValue(undefined);
+
+      renderCallbackPage('?token=abc123');
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Resend code' })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Resend code' }));
+
+      await waitFor(() => expect(mockedApi.resendLoginTwoFactorCode).toHaveBeenCalledWith('user-1', '/dashboard'));
+      await waitFor(() => expect(screen.getByText('A new verification code has been sent to your email.')).toBeInTheDocument());
+    });
   });
 });

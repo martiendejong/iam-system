@@ -1,5 +1,25 @@
 # Agent Progress
 
+## 2026-08-09 — task 869eft100 (magic-link login bypasses 2FA)
+Done: `MagicLinkController.VerifyMagicLink` called `AuthService.LoginBypassPasswordAsync`
+directly after validating the token, skipping the account's email 2FA check entirely.
+Added `IAuthService.CompletePasswordlessLoginAsync` (mirrors the 2FA gate already in
+`LoginAsync`: if `TwoFactorEnabled && TwoFactorMethod == Email`, email a code and return
+`RequiresTwoFactor` instead of tokens) and switched the magic-link controller to call it.
+`MagicLinkCallbackPage.tsx` now handles a `requiresTwoFactor` response by showing an
+inline code-entry form (mirrors LoginPage's password+2FA form) that completes sign-in via
+the existing `/api/auth/2fa/verify` endpoint.
+Verified: backend `dotnet test tests/IAM.API.Tests` 92/94 pass (2 pre-existing skips), incl.
+3 new AuthService tests proving 2FA-enabled accounts get suspended + emailed a code, and
+non-2FA accounts are unaffected. Frontend `npx vitest run` 32/32 pass incl. 4 new tests
+(2FA prompt shown, correct code signs in, wrong code errors, resend works). `tsc -b && vite
+build` clean.
+Left: sibling controllers `OtpController.VerifyEmailOtp`/`VerifySmsOtp` have the identical
+`LoginBypassPasswordAsync`-skips-2FA pattern for passwordless OTP login — out of scope for
+this task (which was carved out narrowly to magic-link only); filed as a follow-up task.
+`PasskeyController` was left untouched — WebAuthn passkeys are a recognized standalone
+strong factor, not an "alternate primary factor" needing a second check.
+
 ## 2026-07-24 — task 869e8wk2a (add deploy-time version tracking)
 Done: PR #77 — `<Version>0.1.0</Version>` baseline added to src/IAM.API/IAM.API.csproj
 (the exact PublishProjectPath JengoAGI's VersionTrackingService/IamDeployService already

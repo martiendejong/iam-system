@@ -173,6 +173,63 @@ public class EmailTwoFactorLoginTests
     }
 
     [Fact]
+    public async Task CompletePasswordlessLoginAsync_WithEmailTwoFactorEnabled_DoesNotIssueTokensAndSendsCode()
+    {
+        // Regression test for the magic-link 2FA bypass (task 869eft100): an alternate
+        // primary factor (magic link, passwordless OTP) must not skip the account's
+        // email 2FA requirement any more than a password login can.
+        var (authService, _, emailService, context) = CreateServices();
+        var user = CreateUser("Password123!", emailTwoFactorEnabled: true);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        var result = await authService.CompletePasswordlessLoginAsync(user);
+
+        Assert.True(result.Success);
+        Assert.True(result.RequiresTwoFactor);
+        Assert.Null(result.AccessToken);
+        Assert.Null(result.RefreshToken);
+        Assert.Single(emailService.SentTwoFactorCodes);
+        Assert.Equal(user.Email, emailService.SentTwoFactorCodes[0].Email);
+    }
+
+    [Fact]
+    public async Task CompletePasswordlessLoginAsync_WithEmailTwoFactorEnabled_CompletesViaVerifyLoginTwoFactor()
+    {
+        var (authService, _, emailService, context) = CreateServices();
+        var user = CreateUser("Password123!", emailTwoFactorEnabled: true);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        var loginResult = await authService.CompletePasswordlessLoginAsync(user);
+        Assert.True(loginResult.RequiresTwoFactor);
+        var sentCode = emailService.SentTwoFactorCodes[0].Code;
+
+        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, sentCode);
+
+        Assert.True(verifyResult.Success);
+        Assert.NotNull(verifyResult.AccessToken);
+        Assert.NotNull(verifyResult.RefreshToken);
+    }
+
+    [Fact]
+    public async Task CompletePasswordlessLoginAsync_WithoutTwoFactor_IssuesTokensDirectly()
+    {
+        var (authService, _, emailService, context) = CreateServices();
+        var user = CreateUser("Password123!", emailTwoFactorEnabled: false);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        var result = await authService.CompletePasswordlessLoginAsync(user);
+
+        Assert.True(result.Success);
+        Assert.False(result.RequiresTwoFactor);
+        Assert.NotNull(result.AccessToken);
+        Assert.NotNull(result.RefreshToken);
+        Assert.Empty(emailService.SentTwoFactorCodes);
+    }
+
+    [Fact]
     public async Task VerifyLoginTwoFactorAsync_ForUserWithoutEmailTwoFactor_Fails()
     {
         var (authService, _, _, context) = CreateServices();

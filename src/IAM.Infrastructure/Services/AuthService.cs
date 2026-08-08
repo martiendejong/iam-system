@@ -429,6 +429,23 @@ public class AuthService : IAuthService
         };
     }
 
+    public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null)
+    {
+        if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
+        {
+            await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresTwoFactor = true,
+                User = user
+            };
+        }
+
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
+    }
+
     public async Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null)
     {
         var valid = await _otpService.ValidateOtpAsync(email, null, code, OtpPurpose.MfaVerification);
