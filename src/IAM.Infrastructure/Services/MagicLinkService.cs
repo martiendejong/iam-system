@@ -31,7 +31,7 @@ public class MagicLinkService : IMagicLinkService
         _logger = logger;
     }
 
-    public async Task<bool> SendMagicLinkAsync(string email, MagicLinkPurpose purpose, string? ipAddress = null)
+    public async Task<bool> SendMagicLinkAsync(string email, MagicLinkPurpose purpose, string? ipAddress = null, string? returnUrl = null)
     {
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
         if (user == null)
@@ -76,6 +76,10 @@ public class MagicLinkService : IMagicLinkService
         // Build magic link URL and send email
         var baseUrl = _emailSettings.BaseUrl?.TrimEnd('/');
         var magicLinkUrl = $"{baseUrl}/auth/magic-link?token={token}";
+        if (!string.IsNullOrWhiteSpace(returnUrl))
+        {
+            magicLinkUrl += $"&returnUrl={Uri.EscapeDataString(returnUrl)}";
+        }
 
         await _emailService.SendMfaCodeAsync(email, user.FirstName, magicLinkUrl);
 

@@ -93,7 +93,7 @@ public class AuthService : IAuthService
         };
     }
 
-    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null)
+    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null)
     {
         var user = await _context.Users
             .Include(u => u.UserRoles)
@@ -162,7 +162,7 @@ public class AuthService : IAuthService
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
             await _context.SaveChangesAsync();
-            await _otpService.SendLoginTwoFactorCodeAsync(user);
+            await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
 
             return new AuthResult
             {
@@ -489,7 +489,7 @@ public class AuthService : IAuthService
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
     }
 
-    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId)
+    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null)
     {
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
 
@@ -499,7 +499,7 @@ public class AuthService : IAuthService
             return true;
         }
 
-        return await _otpService.SendLoginTwoFactorCodeAsync(user);
+        return await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
     }
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)

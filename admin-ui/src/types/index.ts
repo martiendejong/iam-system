@@ -53,6 +53,7 @@ export type TenantTypeValue = typeof TenantType[keyof typeof TenantType];
 export interface LoginRequest {
   email: string;
   password: string;
+  returnUrl?: string;
 }
 
 export interface RegisterRequest {

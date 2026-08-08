@@ -58,7 +58,7 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.LoginAsync(request.Email, request.Password, ipAddress, userAgent);
+        var result = await _authService.LoginAsync(request.Email, request.Password, ipAddress, userAgent, request.ReturnUrl);
 
         if (!result.Success)
         {
@@ -107,7 +107,7 @@ public class AuthController : ControllerBase
     [HttpPost("2fa/resend")]
     public async Task<IActionResult> ResendTwoFactorCode([FromBody] ResendTwoFactorRequest request)
     {
-        await _authService.ResendLoginTwoFactorCodeAsync(request.UserId);
+        await _authService.ResendLoginTwoFactorCodeAsync(request.UserId, request.ReturnUrl);
 
         // Always return success (don't reveal account state to an unauthenticated caller)
         return Ok(new { message = "If two-factor authentication is enabled for this account, a new code has been sent." });
@@ -240,10 +240,10 @@ public class AuthController : ControllerBase
 }
 
 public record RegisterRequest(string Email, string Password, string FirstName, string LastName);
-public record LoginRequest(string Email, string Password);
+public record LoginRequest(string Email, string Password, string? ReturnUrl = null);
 public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record StepUpVerifyRequest(string Email, string Code);
 public record TwoFactorVerifyRequest(Guid UserId, string Code);
-public record ResendTwoFactorRequest(Guid UserId);
+public record ResendTwoFactorRequest(Guid UserId, string? ReturnUrl = null);

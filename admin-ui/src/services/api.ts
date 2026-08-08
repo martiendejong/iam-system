@@ -99,8 +99,16 @@ class ApiService {
     return response.data;
   }
 
-  async resendLoginTwoFactorCode(userId: string): Promise<void> {
-    await this.client.post('/auth/2fa/resend', { userId });
+  async resendLoginTwoFactorCode(userId: string, returnUrl?: string): Promise<void> {
+    await this.client.post('/auth/2fa/resend', { userId, returnUrl });
+  }
+
+  async verifyMagicLink(token: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/magic-link/verify', { token });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
   }
 
   async logout(): Promise<void> {

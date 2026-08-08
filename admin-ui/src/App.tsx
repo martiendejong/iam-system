@@ -4,6 +4,7 @@ import LoginPage from './pages/auth/LoginPage';
 import VerifyEmailPage from './pages/auth/VerifyEmailPage';
 import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import VerifyTwoFactorPage from './pages/auth/VerifyTwoFactorPage';
+import MagicLinkCallbackPage from './pages/auth/MagicLinkCallbackPage';
 import DashboardPage from './pages/DashboardPage';
 import UsersPage from './pages/users/UsersPage';
 import UserEditPage from './pages/users/UserEditPage';
@@ -65,6 +66,7 @@ function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/accept-invite" element={<AcceptInvitePage />} />
           <Route path="/verify-2fa" element={<VerifyTwoFactorPage />} />
+          <Route path="/magic-link" element={<MagicLinkCallbackPage />} />
 
           {/* Protected routes */}
           <Route
