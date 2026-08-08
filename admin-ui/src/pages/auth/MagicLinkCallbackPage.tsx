@@ -8,7 +8,12 @@ export default function MagicLinkCallbackPage() {
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') ?? '';
   const returnUrl = sanitizeReturnUrl(searchParams.get('returnUrl'));
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const [status, setStatus] = useState<'loading' | 'twoFactor' | 'success' | 'error'>('loading');
+  const [twoFactorUserId, setTwoFactorUserId] = useState('');
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorMessage, setTwoFactorMessage] = useState('');
+  const [twoFactorError, setTwoFactorError] = useState('');
+  const [verifying, setVerifying] = useState(false);
   const navigate = useNavigate();
   const { setCurrentUser } = useAuth();
 
@@ -19,6 +24,15 @@ export default function MagicLinkCallbackPage() {
     }
     api.verifyMagicLink(token)
       .then((response) => {
+        // The magic link only proves the user controls the mailbox. If the account
+        // also has email 2FA enabled, that is a separate factor that still needs to
+        // be verified before completing sign-in — mirrors the password + 2FA flow.
+        if (response.requiresTwoFactor && response.userId) {
+          setTwoFactorUserId(response.userId);
+          setTwoFactorMessage(response.message || 'A verification code has been sent to your email.');
+          setStatus('twoFactor');
+          return;
+        }
         if (response.user) {
           setCurrentUser(response.user);
         }
@@ -28,6 +42,34 @@ export default function MagicLinkCallbackPage() {
       .catch(() => setStatus('error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  const handleTwoFactorVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTwoFactorError('');
+    setVerifying(true);
+    try {
+      const response = await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode);
+      if (response.user) {
+        setCurrentUser(response.user);
+      }
+      setStatus('success');
+      setTimeout(() => navigateAfterAuth(returnUrl, navigate), 1500);
+    } catch {
+      setTwoFactorError('Invalid or expired code. Please try again.');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    setTwoFactorError('');
+    try {
+      await api.resendLoginTwoFactorCode(twoFactorUserId, returnUrl);
+      setTwoFactorMessage('A new verification code has been sent to your email.');
+    } catch {
+      setTwoFactorError('Failed to resend code. Please try again.');
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -40,6 +82,58 @@ export default function MagicLinkCallbackPage() {
               <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
             </div>
             <p className="text-sm text-gray-600">Signing you in…</p>
+          </>
+        )}
+
+        {status === 'twoFactor' && (
+          <>
+            <p className="text-sm text-gray-600">{twoFactorMessage}</p>
+            {twoFactorError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
+                {twoFactorError}
+              </div>
+            )}
+            <form className="space-y-6 text-left" onSubmit={handleTwoFactorVerify}>
+              <div>
+                <label htmlFor="magic-link-two-factor-code" className="block text-sm font-medium text-gray-700">
+                  Verification code
+                </label>
+                <input
+                  id="magic-link-two-factor-code"
+                  name="code"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  required
+                  placeholder="000000"
+                  autoFocus
+                  value={twoFactorCode}
+                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-center text-2xl tracking-widest font-mono"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={verifying || twoFactorCode.length !== 6}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+              >
+                {verifying ? 'Verifying...' : 'Verify and Sign In'}
+              </button>
+              <div className="flex items-center justify-between text-sm">
+                <button
+                  type="button"
+                  onClick={handleResendCode}
+                  disabled={verifying}
+                  className="text-indigo-600 hover:text-indigo-500"
+                >
+                  Resend code
+                </button>
+                <Link to="/login" className="text-indigo-600 hover:text-indigo-500">
+                  Back to sign in
+                </Link>
+              </div>
+            </form>
           </>
         )}
 

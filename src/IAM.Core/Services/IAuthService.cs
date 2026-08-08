@@ -21,6 +21,16 @@ public interface IAuthService
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null);
     Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null);
     Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null);
+
+    /// <summary>
+    /// Completes a login for a user who has already proven an alternate primary factor
+    /// (e.g. clicking a magic link). If the account has email 2FA enabled, this suspends
+    /// the login and emails a second-factor code instead of issuing tokens immediately —
+    /// the caller must complete it via VerifyLoginTwoFactorAsync, exactly like the
+    /// password + email-2FA flow (see AuthResult.RequiresTwoFactor). This mirrors the
+    /// 2FA gate in LoginAsync so no alternate login path can bypass it.
+    /// </summary>
+    Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null);
 }
 
 public class AuthResult
