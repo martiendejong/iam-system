@@ -20,6 +20,23 @@ this task (which was carved out narrowly to magic-link only); filed as a follow-
 `PasskeyController` was left untouched — WebAuthn passkeys are a recognized standalone
 strong factor, not an "alternate primary factor" needing a second check.
 
+## 2026-08-09 — task 869eft1jr (email/SMS OTP login bypasses 2FA)
+Done: `OtpController.VerifyEmailOtp` and `VerifySmsOtp` had the identical
+`LoginBypassPasswordAsync`-skips-2FA gap as the magic-link bypass fixed in 869eft100
+(merged just as this session started). Switched both to call the now-merged
+`CompletePasswordlessLoginAsync` and handle `RequiresTwoFactor` the same way.
+Also fixed a real bug this surfaced: `LoginPage.tsx`'s SMS OTP form had no
+`!twoFactorPending` guard, so after an SMS code triggers 2FA it would have rendered
+stacked on top of the 2FA code form (unlike the password form, which already guards).
+Verified: backend `dotnet test tests/IAM.API.Tests` 92/94 pass (2 pre-existing skips,
+unchanged — `CompletePasswordlessLoginAsync` itself is already covered by
+`EmailTwoFactorLoginTests.cs` from 869eft100, the controller just delegates to it, same
+as `MagicLinkController`). Frontend `npx vitest run` 34/34 pass incl. 2 new `LoginPage`
+tests (SMS 2FA prompt shown instead of instant sign-in; correct code completes sign-in).
+`tsc -b && vite build` clean.
+Left: nothing — this PR targets `develop` directly since 869eft100 merged before this
+branch was pushed.
+
 ## 2026-07-24 — task 869e8wk2a (add deploy-time version tracking)
 Done: PR #77 — `<Version>0.1.0</Version>` baseline added to src/IAM.API/IAM.API.csproj
 (the exact PublishProjectPath JengoAGI's VersionTrackingService/IamDeployService already

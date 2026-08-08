@@ -245,6 +245,15 @@ export default function LoginPage() {
     try {
       const client = api.getClient();
       const response = await client.post('/auth/otp/sms/verify', { phoneNumber, code: otpCode });
+      // The SMS code only proves phone possession. If the account also has email 2FA
+      // enabled, that is a separate factor that still needs to be verified before
+      // completing sign-in — mirrors the password + 2FA and magic-link + 2FA flows.
+      if (response.data.requiresTwoFactor && response.data.userId) {
+        setTwoFactorUserId(response.data.userId);
+        setTwoFactorPending(true);
+        setMessage(response.data.message || 'A verification code has been sent to your email.');
+        return;
+      }
       if (response.data.accessToken) {
         localStorage.setItem('accessToken', response.data.accessToken);
       }
@@ -630,7 +639,7 @@ export default function LoginPage() {
         )}
 
         {/* SMS OTP form */}
-        {loginMethod === 'sms' && (
+        {loginMethod === 'sms' && !twoFactorPending && (
           <div className="mt-4 space-y-6">
             {!otpSent ? (
               <form onSubmit={handleSmsOtpRequest} className="space-y-4">

@@ -15,6 +15,7 @@ vi.mock('../../services/api', () => ({
     getIdentityProviders: vi.fn(),
     getClient: vi.fn(),
     resendLoginTwoFactorCode: vi.fn(),
+    verifyLoginTwoFactor: vi.fn(),
   },
 }));
 
@@ -184,5 +185,62 @@ describe('LoginPage returnUrl navigation', () => {
     await waitFor(() =>
       expect(mockedApi.resendLoginTwoFactorCode).toHaveBeenCalledWith('user-1', '/portal/profile')
     );
+  });
+
+  // Regression coverage for task 869eft1jr: an SMS OTP only proves phone possession.
+  // An account with email 2FA enabled must not be signed in until that second factor
+  // is verified too — mirrors the password + 2FA and magic-link + 2FA flows (869eft100).
+  describe('when the account has email 2FA enabled', () => {
+    it('does not sign the user in after SMS code verification and asks for the second factor instead', async () => {
+      const post = vi.fn().mockResolvedValue({
+        data: { requiresTwoFactor: true, userId: 'user-1', message: 'A verification code has been sent to your email.' },
+      });
+      mockedApi.getClient.mockReturnValue({ post } as never);
+
+      renderLoginPage('/portal/profile');
+
+      fireEvent.click(screen.getByRole('button', { name: 'SMS Code' }));
+      fireEvent.change(screen.getByLabelText('Phone number'), { target: { value: '+15551234567' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Verification Code' }));
+      await waitFor(() => expect(post).toHaveBeenCalledWith('/auth/otp/sms/request', { phoneNumber: '+15551234567' }));
+
+      fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
+
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith('/auth/otp/sms/verify', { phoneNumber: '+15551234567', code: '123456' })
+      );
+      await waitFor(() => expect(screen.getByText('A verification code has been sent to your email.')).toBeInTheDocument());
+      expect(setCurrentUser).not.toHaveBeenCalled();
+      expect(window.location.href).toBe('');
+    });
+
+    it('completes sign-in via the second factor once the correct code is submitted', async () => {
+      const post = vi.fn().mockResolvedValue({
+        data: { requiresTwoFactor: true, userId: 'user-1', message: 'A verification code has been sent to your email.' },
+      });
+      mockedApi.getClient.mockReturnValue({ post } as never);
+      mockedApi.verifyLoginTwoFactor.mockResolvedValue({
+        user: { id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' },
+      });
+
+      renderLoginPage('/portal/profile');
+
+      fireEvent.click(screen.getByRole('button', { name: 'SMS Code' }));
+      fireEvent.change(screen.getByLabelText('Phone number'), { target: { value: '+15551234567' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Verification Code' }));
+      await waitFor(() => expect(post).toHaveBeenCalledWith('/auth/otp/sms/request', { phoneNumber: '+15551234567' }));
+
+      fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify Code' }));
+      await waitFor(() => expect(screen.getByLabelText('Verification code')).toBeInTheDocument());
+
+      fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '654321' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify and Sign In' }));
+
+      await waitFor(() => expect(mockedApi.verifyLoginTwoFactor).toHaveBeenCalledWith('user-1', '654321'));
+      await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
+      await waitFor(() => expect(screen.getByText('Portal Profile Page')).toBeInTheDocument());
+    });
   });
 });
