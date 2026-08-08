@@ -126,3 +126,10 @@ render the real LoginPage and assert window.location.href / router navigation fo
 password+OIDC-returnUrl, password+plain-returnUrl, password+open-redirect-attempt,
 and SMS-OTP+OIDC-returnUrl.
 Left: magic-link + 2FA-email-link round trips still don't carry returnUrl (869ec3dn6).
+
+## 2026-08-09 — task 869ec3dn6 (magic-link login page + returnUrl threading)
+Plan: add `MagicLinkCallbackPage` mirroring `VerifyTwoFactorPage` + `/magic-link` route
+(App.tsx has none today, so clicking the emailed magic link bounces to login). Thread
+`returnUrl` through `MagicLinkRequest`, `POST /api/auth/login` (triggers the 2FA email),
+and the 2FA resend endpoint, reusing `returnUrl.ts`'s `sanitizeReturnUrl()` at both
+redirect points — no new sanitizer logic.
