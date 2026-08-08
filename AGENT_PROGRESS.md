@@ -133,3 +133,24 @@ Plan: add `MagicLinkCallbackPage` mirroring `VerifyTwoFactorPage` + `/magic-link
 `returnUrl` through `MagicLinkRequest`, `POST /api/auth/login` (triggers the 2FA email),
 and the 2FA resend endpoint, reusing `returnUrl.ts`'s `sanitizeReturnUrl()` at both
 redirect points — no new sanitizer logic.
+
+Done: PR #82 — added `MagicLinkCallbackPage.tsx` + `/magic-link` route, calling the
+already-existing `POST /api/auth/magic-link/verify`. Extracted `navigateAfterAuth()`
+into `returnUrl.ts` (OIDC full-page nav vs. in-app nav) so LoginPage, VerifyTwoFactorPage,
+and the new page all share one redirect implementation instead of duplicating it.
+Threaded `returnUrl` end-to-end: `LoginRequest`/`MagicLinkRequest` (frontend) →
+`AuthController.Login`/`MagicLinkController.RequestMagicLink` → `AuthService.LoginAsync`/
+`MagicLinkService.SendMagicLinkAsync` → `OtpService.SendLoginTwoFactorCodeAsync`, appended
+(`Uri.EscapeDataString`) onto the emailed `/verify-2fa` and `/auth/magic-link` URLs. The
+2FA resend endpoint and the magic-link "Send again" button both reuse the same in-scope
+`returnUrl` LoginPage already read from its own querystring, so a resend keeps the
+destination. Sanitization happens once per redirect point (`sanitizeReturnUrl` in
+VerifyTwoFactorPage and MagicLinkCallbackPage) regardless of what's embedded upstream —
+same open-redirect guard as the existing LoginPage/SMS path, no new logic.
+Verified: `dotnet build` 0 errors; `dotnet test` 90/90 pass (2 pre-existing skips) incl.
+7 new tests asserting the emailed URLs do/don't carry `returnUrl`; `npm run build` clean;
+`npx tsc --noEmit` clean; `npm test` 28/28 pass incl. new `MagicLinkCallbackPage.test.tsx`
+(6 tests: loading/success/error, plain returnUrl, OIDC full-page nav, open-redirect
+fallback) and `VerifyTwoFactorPage.test.tsx` (5 tests, same matrix) and 2 new LoginPage
+tests (magic-link request includes returnUrl, 2FA resend keeps it).
+Left: nothing new.
