@@ -65,13 +65,27 @@ public class OtpController : ControllerBase
             return BadRequest(new { error = "Invalid or expired verification code" });
         }
 
+        // Generate JWT tokens using the same flow as password login. If the account has
+        // email 2FA enabled, this suspends the login and emails a second-factor code
+        // instead of signing the user in immediately (see AuthResult.RequiresTwoFactor) —
+        // an email OTP only proves email possession, not the second factor.
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
-        var loginResult = await _authService.LoginBypassPasswordAsync(user, ipAddress, userAgent);
+        var loginResult = await _authService.CompletePasswordlessLoginAsync(user, ipAddress, userAgent);
 
         if (!loginResult.Success)
         {
             return BadRequest(new { error = loginResult.Error });
+        }
+
+        if (loginResult.RequiresTwoFactor)
+        {
+            return Ok(new
+            {
+                requiresTwoFactor = true,
+                userId = loginResult.User!.Id,
+                message = "A verification code has been sent to your email."
+            });
         }
 
         Response.Cookies.Append("refreshToken", loginResult.RefreshToken!, new CookieOptions
@@ -139,13 +153,27 @@ public class OtpController : ControllerBase
             return BadRequest(new { error = "Invalid or expired verification code" });
         }
 
+        // Generate JWT tokens using the same flow as password login. If the account has
+        // email 2FA enabled, this suspends the login and emails a second-factor code
+        // instead of signing the user in immediately (see AuthResult.RequiresTwoFactor) —
+        // an SMS OTP only proves phone possession, not the second factor.
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
-        var loginResult = await _authService.LoginBypassPasswordAsync(user, ipAddress, userAgent);
+        var loginResult = await _authService.CompletePasswordlessLoginAsync(user, ipAddress, userAgent);
 
         if (!loginResult.Success)
         {
             return BadRequest(new { error = loginResult.Error });
+        }
+
+        if (loginResult.RequiresTwoFactor)
+        {
+            return Ok(new
+            {
+                requiresTwoFactor = true,
+                userId = loginResult.User!.Id,
+                message = "A verification code has been sent to your email."
+            });
         }
 
         Response.Cookies.Append("refreshToken", loginResult.RefreshToken!, new CookieOptions
