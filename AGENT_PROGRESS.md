@@ -126,3 +126,50 @@ render the real LoginPage and assert window.location.href / router navigation fo
 password+OIDC-returnUrl, password+plain-returnUrl, password+open-redirect-attempt,
 and SMS-OTP+OIDC-returnUrl.
 Left: magic-link + 2FA-email-link round trips still don't carry returnUrl (869ec3dn6).
+
+## 2026-08-09 — task 869ec3dn6 (magic-link login page + returnUrl threading)
+Plan: add `MagicLinkCallbackPage` mirroring `VerifyTwoFactorPage` + `/magic-link` route
+(App.tsx has none today, so clicking the emailed magic link bounces to login). Thread
+`returnUrl` through `MagicLinkRequest`, `POST /api/auth/login` (triggers the 2FA email),
+and the 2FA resend endpoint, reusing `returnUrl.ts`'s `sanitizeReturnUrl()` at both
+redirect points — no new sanitizer logic.
+
+Done: PR #82 — added `MagicLinkCallbackPage.tsx` + `/magic-link` route, calling the
+already-existing `POST /api/auth/magic-link/verify`. Extracted `navigateAfterAuth()`
+into `returnUrl.ts` (OIDC full-page nav vs. in-app nav) so LoginPage, VerifyTwoFactorPage,
+and the new page all share one redirect implementation instead of duplicating it.
+Threaded `returnUrl` end-to-end: `LoginRequest`/`MagicLinkRequest` (frontend) →
+`AuthController.Login`/`MagicLinkController.RequestMagicLink` → `AuthService.LoginAsync`/
+`MagicLinkService.SendMagicLinkAsync` → `OtpService.SendLoginTwoFactorCodeAsync`, appended
+(`Uri.EscapeDataString`) onto the emailed `/verify-2fa` and `/auth/magic-link` URLs. The
+2FA resend endpoint and the magic-link "Send again" button both reuse the same in-scope
+`returnUrl` LoginPage already read from its own querystring, so a resend keeps the
+destination. Sanitization happens once per redirect point (`sanitizeReturnUrl` in
+VerifyTwoFactorPage and MagicLinkCallbackPage) regardless of what's embedded upstream —
+same open-redirect guard as the existing LoginPage/SMS path, no new logic.
+Verified: `dotnet build` 0 errors; `dotnet test` 90/90 pass (2 pre-existing skips) incl.
+7 new tests asserting the emailed URLs do/don't carry `returnUrl`; `npm run build` clean;
+`npx tsc --noEmit` clean; `npm test` 28/28 pass incl. new `MagicLinkCallbackPage.test.tsx`
+(6 tests: loading/success/error, plain returnUrl, OIDC full-page nav, open-redirect
+fallback) and `VerifyTwoFactorPage.test.tsx` (5 tests, same matrix) and 2 new LoginPage
+tests (magic-link request includes returnUrl, 2FA resend keeps it).
+Left: nothing new.
+
+## 2026-08-09 — task 869ec3dn6 round 2 (fix reviewer-flagged double `/auth/` prefix)
+Done: PR #82 round 2 — `MagicLinkService.cs:78` built the emailed link as
+`{baseUrl}/auth/magic-link?token=...`; the deployed `Email:BaseUrl` already ends in
+`/auth`, so the real URL became `.../auth/auth/magic-link` and the SPA router
+(basename="/auth") couldn't match it, falling through to the catch-all and bouncing to
+`/dashboard` → login — the exact bug this task exists to fix. Dropped the leading `/auth`
+so the built URL matches `OtpService.cs:236`'s `{baseUrl}/verify-2fa` shape.
+`MagicLinkServiceTests.cs`'s fixture used a fake BaseUrl without the `/auth` suffix so it
+never caught this; changed it to `https://iam.example.com/auth` (matching production
+shape) and swapped the loose `Assert.Contains("/auth/magic-link?token=")` for
+`Assert.StartsWith(...)` — `Contains` still matched the buggy double-`/auth/` URL because
+the second `/auth/magic-link?token=` occurrence is itself a valid substring match;
+`StartsWith` doesn't have that gap.
+Verified: reintroduced the old bug locally and confirmed both `MagicLinkServiceTests`
+assertions fail against it, then reverted to the fix and re-ran — `dotnet test` 90/90
+pass (2 pre-existing skips); `dotnet build` 0 errors; frontend unchanged from round 1,
+re-ran `npm run build` (clean), `npx tsc --noEmit` (clean), `npm test` 28/28 pass.
+Left: nothing.

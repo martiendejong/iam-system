@@ -5,7 +5,7 @@ namespace IAM.Core.Services;
 public interface IAuthService
 {
     Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName);
-    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null);
     Task<AuthResult> RefreshTokenAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
     Task<bool> RevokeTokenAsync(string refreshToken);
     Task<bool> VerifyEmailAsync(string token);
@@ -20,7 +20,7 @@ public interface IAuthService
     /// </summary>
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null);
     Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null);
-    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId);
+    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null);
 }
 
 public class AuthResult

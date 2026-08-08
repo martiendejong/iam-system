@@ -26,7 +26,7 @@ public class MagicLinkController : ControllerBase
         }
 
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var result = await _magicLinkService.SendMagicLinkAsync(request.Email, MagicLinkPurpose.Login, ipAddress);
+        var result = await _magicLinkService.SendMagicLinkAsync(request.Email, MagicLinkPurpose.Login, ipAddress, request.ReturnUrl);
 
         if (!result)
         {
@@ -85,5 +85,5 @@ public class MagicLinkController : ControllerBase
     }
 }
 
-public record MagicLinkRequest(string Email);
+public record MagicLinkRequest(string Email, string? ReturnUrl = null);
 public record MagicLinkVerifyRequest(string Token);

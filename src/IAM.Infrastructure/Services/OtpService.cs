@@ -203,7 +203,7 @@ public class OtpService : IOtpService
         return true;
     }
 
-    public async Task<bool> SendLoginTwoFactorCodeAsync(User user)
+    public async Task<bool> SendLoginTwoFactorCodeAsync(User user, string? returnUrl = null)
     {
         // Rate limit: max per email per hour (shared budget with other email OTP purposes)
         var oneHourAgo = DateTime.UtcNow.AddHours(-1);
@@ -234,6 +234,10 @@ public class OtpService : IOtpService
 
         var baseUrl = _emailSettings.BaseUrl?.TrimEnd('/');
         var verifyUrl = $"{baseUrl}/verify-2fa?userId={user.Id}&code={code}";
+        if (!string.IsNullOrWhiteSpace(returnUrl))
+        {
+            verifyUrl += $"&returnUrl={Uri.EscapeDataString(returnUrl)}";
+        }
 
         await _emailService.SendLoginTwoFactorCodeAsync(user.Email, user.FirstName, code, verifyUrl);
 

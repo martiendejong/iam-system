@@ -4,21 +4,20 @@ import { api } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
 
-export default function VerifyTwoFactorPage() {
+export default function MagicLinkCallbackPage() {
   const [searchParams] = useSearchParams();
-  const userId = searchParams.get('userId') ?? '';
-  const code = searchParams.get('code') ?? '';
+  const token = searchParams.get('token') ?? '';
   const returnUrl = sanitizeReturnUrl(searchParams.get('returnUrl'));
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const navigate = useNavigate();
   const { setCurrentUser } = useAuth();
 
   useEffect(() => {
-    if (!userId || !code) {
+    if (!token) {
       setStatus('error');
       return;
     }
-    api.verifyLoginTwoFactor(userId, code)
+    api.verifyMagicLink(token)
       .then((response) => {
         if (response.user) {
           setCurrentUser(response.user);
@@ -28,7 +27,7 @@ export default function VerifyTwoFactorPage() {
       })
       .catch(() => setStatus('error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, code]);
+  }, [token]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -40,7 +39,7 @@ export default function VerifyTwoFactorPage() {
             <div className="flex justify-center">
               <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
             </div>
-            <p className="text-sm text-gray-600">Verifying your sign-in…</p>
+            <p className="text-sm text-gray-600">Signing you in…</p>
           </>
         )}
 
@@ -63,9 +62,9 @@ export default function VerifyTwoFactorPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </div>
-            <h3 className="text-lg font-medium text-gray-900">Verification failed</h3>
+            <h3 className="text-lg font-medium text-gray-900">Sign-in failed</h3>
             <p className="text-sm text-gray-600">
-              This link is invalid or has expired. Please sign in again to request a new code.
+              This link is invalid or has expired. Please sign in again to request a new one.
             </p>
             <Link
               to="/login"

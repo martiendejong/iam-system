@@ -5,7 +5,7 @@ import { api } from '../../services/api';
 import { brandingApi } from '../../services/brandingApi';
 import type { PublicTenantBranding } from '../../services/brandingApi';
 import type { IdentityProvider } from '../../types';
-import { sanitizeReturnUrl } from './returnUrl';
+import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
 
 type LoginMethod = 'password' | 'magic-link' | 'sms';
 type LoginView = 'login' | 'forgot';
@@ -103,16 +103,7 @@ export default function LoginPage() {
     setTwoFactorCode('');
   };
 
-  const navigateAfterLogin = () => {
-    // If returnUrl is an OIDC authorize request, use full page navigation
-    // so the browser sends the session cookie to the backend
-    if (returnUrl.startsWith('/connect/') || returnUrl.startsWith('/auth/connect/')) {
-      const fullUrl = returnUrl.startsWith('/auth/') ? returnUrl : '/auth' + returnUrl;
-      window.location.href = fullUrl;
-    } else {
-      navigate(returnUrl);
-    }
-  };
+  const navigateAfterLogin = () => navigateAfterAuth(returnUrl, navigate);
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -141,7 +132,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await login({ email, password });
+      const response = await login({ email, password, returnUrl });
       if (response.requiresStepUp) {
         setStepUpRequired(true);
         setMessage('Additional verification required. Check your email for a code.');
@@ -201,7 +192,7 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await api.resendLoginTwoFactorCode(twoFactorUserId);
+      await api.resendLoginTwoFactorCode(twoFactorUserId, returnUrl);
       setMessage('A new verification code has been sent to your email.');
     } catch {
       setError('Failed to resend code. Please try again.');
@@ -218,7 +209,7 @@ export default function LoginPage() {
 
     try {
       const client = api.getClient();
-      await client.post('/auth/magic-link/request', { email });
+      await client.post('/auth/magic-link/request', { email, returnUrl });
       setMagicLinkSent(true);
       setMessage('Check your email for the magic link.');
     } catch (err: any) {

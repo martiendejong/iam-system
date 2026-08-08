@@ -8,5 +8,5 @@ public interface IOtpService
     Task<bool> SendSmsOtpAsync(string phoneNumber, OtpPurpose purpose);
     Task<bool> ValidateOtpAsync(string? email, string? phoneNumber, string code, OtpPurpose purpose);
     Task<int> CleanupExpiredCodesAsync();
-    Task<bool> SendLoginTwoFactorCodeAsync(User user);
+    Task<bool> SendLoginTwoFactorCodeAsync(User user, string? returnUrl = null);
 }

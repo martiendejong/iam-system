@@ -130,6 +130,49 @@ public class EmailTwoFactorLoginTests
     }
 
     [Fact]
+    public async Task LoginAsync_WithReturnUrl_IncludesItInTheEmailedVerifyLink()
+    {
+        var (authService, _, emailService, context) = CreateServices();
+        var user = CreateUser("Password123!", emailTwoFactorEnabled: true);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        await authService.LoginAsync(user.Email, "Password123!", returnUrl: "/connect/authorize?client_id=jengo-agi");
+
+        Assert.Single(emailService.SentVerifyUrls);
+        Assert.Contains("returnUrl=%2Fconnect%2Fauthorize%3Fclient_id%3Djengo-agi", emailService.SentVerifyUrls[0]);
+    }
+
+    [Fact]
+    public async Task LoginAsync_WithoutReturnUrl_OmitsItFromTheEmailedVerifyLink()
+    {
+        var (authService, _, emailService, context) = CreateServices();
+        var user = CreateUser("Password123!", emailTwoFactorEnabled: true);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        await authService.LoginAsync(user.Email, "Password123!");
+
+        Assert.Single(emailService.SentVerifyUrls);
+        Assert.DoesNotContain("returnUrl=", emailService.SentVerifyUrls[0]);
+    }
+
+    [Fact]
+    public async Task ResendLoginTwoFactorCodeAsync_WithReturnUrl_IncludesItInTheEmailedVerifyLink()
+    {
+        var (authService, _, emailService, context) = CreateServices();
+        var user = CreateUser("Password123!", emailTwoFactorEnabled: true);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+
+        await authService.LoginAsync(user.Email, "Password123!");
+        await authService.ResendLoginTwoFactorCodeAsync(user.Id, "/portal/profile");
+
+        Assert.Equal(2, emailService.SentVerifyUrls.Count);
+        Assert.Contains("returnUrl=%2Fportal%2Fprofile", emailService.SentVerifyUrls[1]);
+    }
+
+    [Fact]
     public async Task VerifyLoginTwoFactorAsync_ForUserWithoutEmailTwoFactor_Fails()
     {
         var (authService, _, _, context) = CreateServices();
@@ -163,6 +206,7 @@ public class EmailTwoFactorLoginTests
     private class FakeEmailService : IEmailService
     {
         public List<(string Email, string Code)> SentTwoFactorCodes { get; } = new();
+        public List<string> SentVerifyUrls { get; } = new();
 
         public Task SendEmailVerificationAsync(string email, string username, string verificationToken, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendPasswordResetAsync(string email, string username, string resetToken, CancellationToken ct = default) => Task.CompletedTask;
@@ -171,6 +215,7 @@ public class EmailTwoFactorLoginTests
         public Task SendLoginTwoFactorCodeAsync(string email, string username, string code, string verifyUrl, CancellationToken ct = default)
         {
             SentTwoFactorCodes.Add((email, code));
+            SentVerifyUrls.Add(verifyUrl);
             return Task.CompletedTask;
         }
 

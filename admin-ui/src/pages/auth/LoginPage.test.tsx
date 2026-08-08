@@ -14,6 +14,7 @@ vi.mock('../../services/api', () => ({
   api: {
     getIdentityProviders: vi.fn(),
     getClient: vi.fn(),
+    resendLoginTwoFactorCode: vi.fn(),
   },
 }));
 
@@ -85,7 +86,13 @@ describe('LoginPage returnUrl navigation', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    await waitFor(() => expect(login).toHaveBeenCalledWith({ email: 'a@b.com', password: 'secret' }));
+    await waitFor(() =>
+      expect(login).toHaveBeenCalledWith({
+        email: 'a@b.com',
+        password: 'secret',
+        returnUrl: '/connect/authorize?client_id=jengo-agi&redirect_uri=%2Fjengo-agi%2F',
+      })
+    );
     await waitFor(() =>
       expect(window.location.href).toBe('/auth/connect/authorize?client_id=jengo-agi&redirect_uri=%2Fjengo-agi%2F')
     );
@@ -141,5 +148,41 @@ describe('LoginPage returnUrl navigation', () => {
     );
     await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
     await waitFor(() => expect(window.location.href).toBe('/auth/connect/authorize?client_id=jengo-agi'));
+  });
+
+  it('includes the returnUrl when requesting a magic link', async () => {
+    const post = vi.fn().mockResolvedValue({ data: { message: 'sent' } });
+    mockedApi.getClient.mockReturnValue({ post } as never);
+
+    renderLoginPage('/connect/authorize?client_id=jengo-agi');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Magic Link' }));
+    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'a@b.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Magic Link' }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/auth/magic-link/request', {
+        email: 'a@b.com',
+        returnUrl: '/connect/authorize?client_id=jengo-agi',
+      })
+    );
+  });
+
+  it('keeps the returnUrl when resending a 2FA code', async () => {
+    login.mockResolvedValue({ requiresTwoFactor: true, userId: 'user-1', message: 'Code sent' });
+    mockedApi.resendLoginTwoFactorCode.mockResolvedValue(undefined);
+
+    renderLoginPage('/portal/profile');
+
+    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'a@b.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resend code' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Resend code' }));
+
+    await waitFor(() =>
+      expect(mockedApi.resendLoginTwoFactorCode).toHaveBeenCalledWith('user-1', '/portal/profile')
+    );
   });
 });
