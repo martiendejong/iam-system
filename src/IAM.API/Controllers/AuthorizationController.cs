@@ -23,6 +23,7 @@ public class AuthorizationController : ControllerBase
     private readonly IOpenIddictApplicationManager _applicationManager;
     private readonly IOpenIddictAuthorizationManager _authorizationManager;
     private readonly IOpenIddictScopeManager _scopeManager;
+    private readonly ILogger<AuthorizationController> _logger;
     private readonly string _loginBasePath;
 
     public AuthorizationController(
@@ -30,12 +31,14 @@ public class AuthorizationController : ControllerBase
         IOpenIddictApplicationManager applicationManager,
         IOpenIddictAuthorizationManager authorizationManager,
         IOpenIddictScopeManager scopeManager,
+        ILogger<AuthorizationController> logger,
         IConfiguration configuration)
     {
         _context = context;
         _applicationManager = applicationManager;
         _authorizationManager = authorizationManager;
         _scopeManager = scopeManager;
+        _logger = logger;
 
         // ARR strips the /auth/ prefix before forwarding to Kestrel, so redirect to /login
         // must include /auth prefix so the browser lands on the IAM admin-UI login page.
@@ -86,6 +89,42 @@ public class AuthorizationController : ControllerBase
         if (user == null || !user.IsActive)
         {
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
+        }
+
+        // Federated app-role gate: when an application has registered a role catalog
+        // (Roles with Category "app:{clientId}" — see AppRolesController), only users
+        // holding at least one of that app's roles may sign in to it. Applications
+        // without a catalog keep the historic everyone-active behavior. FAIL-OPEN on
+        // any error: a bug here must never lock every application out of the SSO.
+        try
+        {
+            var clientIdLower = (request.ClientId ?? string.Empty).ToLowerInvariant();
+            if (clientIdLower.Length > 0)
+            {
+                var category = $"app:{clientIdLower}";
+                var appHasCatalog = await _context.Roles.AnyAsync(r => r.Category == category);
+                if (appHasCatalog)
+                {
+                    var rolePrefix = clientIdLower + ":";
+                    var hasAppRole = user.UserRoles.Any(ur =>
+                        ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase));
+                    if (!hasAppRole)
+                    {
+                        _logger.LogWarning("App access denied: {Email} has no {ClientId} role", user.Email, clientIdLower);
+                        return Content(
+                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>No access</title>" +
+                            "<style>body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
+                            ".card{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:420px}</style></head>" +
+                            $"<body><div class=\"card\"><h2>No access to this application</h2><p>Your account ({System.Net.WebUtility.HtmlEncode(user.Email)}) is not authorized for <strong>{System.Net.WebUtility.HtmlEncode(clientIdLower)}</strong>.</p>" +
+                            "<p>Ask your administrator to assign you a role for this application in the IAM system.</p></div></body></html>",
+                            "text/html");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "App-role gate failed for client {ClientId} - failing open", request.ClientId);
         }
 
         // Retrieve the application details from the database
