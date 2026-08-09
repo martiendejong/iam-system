@@ -54,7 +54,8 @@ public class EmailTwoFactorLoginTests
         var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" });
         var otpService = new OtpService(context, emailService, smsService, emailSettings, NullLogger<OtpService>.Instance);
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
-        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService);
+        var claimsMappingService = new ClaimsMappingService(context);
+        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, claimsMappingService);
         return (authService, otpService, emailService, context);
     }
 

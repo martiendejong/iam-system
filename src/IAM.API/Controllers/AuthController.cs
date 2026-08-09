@@ -115,13 +115,15 @@ public class AuthController : ControllerBase
 
     private async Task<IActionResult> CompleteLoginAsync(AuthResult result)
     {
-        // Set refresh token in HttpOnly cookie
+        // Set refresh token in HttpOnly cookie - Expires mirrors the refresh token's own
+        // lifetime (the organization's Token Configuration when one exists, otherwise
+        // today's default) so the cookie never outlives, or expires before, the token it carries.
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Expires = DateTimeOffset.UtcNow.AddDays(7)
+            Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
         });
 
         // Establish OIDC session cookie so the authorize endpoint can identify the user
@@ -187,13 +189,14 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = result.Error });
         }
 
-        // SINGLE-USE TOKENS: Update cookie with NEW refresh token (token rotation)
+        // SINGLE-USE TOKENS: Update cookie with NEW refresh token (token rotation).
+        // Expires mirrors the resolved lifetime, same as CompleteLoginAsync.
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Expires = DateTimeOffset.UtcNow.AddDays(7)
+            Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
         });
 
         return Ok(new

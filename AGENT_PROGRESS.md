@@ -1,5 +1,25 @@
 # Agent Progress
 
+## 2026-08-09 — task 45 (session-length admin setting had no effect on login)
+Done: `AuthService`/`SocialAuthService` always issued a hardcoded 5-min access token /
+7-day refresh token+cookie, ignoring the existing, admin-editable `TokenConfiguration`
+(Claims Mapping admin UI). Added `IClaimsMappingService.ResolveTokenLifetimeForUserAsync`
+(resolves a user's tenant via their `UserRole.TenantId`, then looks up a `TokenConfiguration`
+row for that tenant, any OAuth client - login has no client context) and wired it into
+`AuthService.LoginAsync/RefreshTokenAsync/LoginBypassPasswordAsync` and
+`SocialAuthService.HandleCallbackAsync`, falling back to today's values when the user has
+no tenant or the tenant never saved a config. `AuthResult` now carries the resolved
+`AccessTokenLifetimeMinutes`/`RefreshTokenLifetimeDays` so `AuthController`/
+`SocialAuthController` set the refresh-token cookie's `Expires` from the same resolved
+value instead of a separate hardcoded `AddDays(7)`.
+Verified: `dotnet build` clean, `dotnet test` 97 passed / 2 skipped (pre-existing) / 0
+failed, including 5 new tests in `tests/IAM.API.Tests/Services/TokenLifetimeConfigurationTests.cs`
+asserting configured vs. default lifetimes via the issued JWT's `exp` and the stored
+`RefreshToken.ExpiresAt`.
+Left: other login entry points (magic-link, OTP, passkey, device-code) also hardcode a
+7-day cookie and were left untouched - out of scope per the task's technical notes, which
+named only `AuthService.cs`/`SocialAuthService.cs`/`AuthController.cs`.
+
 ## 2026-08-09 — task 869eft100 (magic-link login bypasses 2FA)
 Done: `MagicLinkController.VerifyMagicLink` called `AuthService.LoginBypassPasswordAsync`
 directly after validating the token, skipping the account's email 2FA check entirely.
@@ -191,6 +211,22 @@ Verified: `dotnet build` 0 errors; `dotnet test` 90/90 pass (2 pre-existing skip
 fallback) and `VerifyTwoFactorPage.test.tsx` (5 tests, same matrix) and 2 new LoginPage
 tests (magic-link request includes returnUrl, 2FA resend keeps it).
 Left: nothing new.
+
+## 2026-08-09 — task 45 round 2 (fix reviewer-flagged parallel-login cookie gaps)
+Done: PR #85 got CHANGES REQUESTED — 4 more login entry points
+(`MagicLinkController.cs:84`, `OtpController.cs:96`+`184`, `PasskeyController.cs:176`)
+call `AuthService.CompletePasswordlessLoginAsync`/`LoginBypassPasswordAsync`, which
+already resolve `loginResult.RefreshTokenLifetimeDays` correctly, but each still hardcoded
+the refresh-cookie `Expires` to `AddDays(7)` instead of reading it — same one-liner fix
+already applied to `AuthController`/`SocialAuthController` in round 1. Swapped all 4 to
+`AddDays(loginResult.RefreshTokenLifetimeDays)`.
+Verified: `dotnet build` clean (0 errors); `dotnet test` 97 passed / 2 skipped
+(pre-existing) / 0 failed — unchanged pass count since the fix only reads an already-
+tested resolved value (`CompletePasswordlessLoginAsync` delegates straight to
+`LoginBypassPasswordAsync`, whose `RefreshTokenLifetimeDays` resolution is covered by the
+round-1 tests); no controller-level tests exist for these 3 controllers to add to.
+Left: nothing — all 4 reviewer-cited sites fixed, no other hardcoded cookie literals
+remain (`grep -rn "AddDays(7)" src/IAM.API/Controllers/` now empty).
 
 ## 2026-08-09 — task 869ec3dn6 round 2 (fix reviewer-flagged double `/auth/` prefix)
 Done: PR #82 round 2 — `MagicLinkService.cs:78` built the emailed link as
