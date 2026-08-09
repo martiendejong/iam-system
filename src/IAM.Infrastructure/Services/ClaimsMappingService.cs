@@ -115,6 +115,35 @@ public class ClaimsMappingService : IClaimsMappingService
         return config;
     }
 
+    public async Task<OrganizationTokenLifetime?> ResolveTokenLifetimeForUserAsync(Guid userId, CancellationToken ct = default)
+    {
+        // A user's organization is the tenant scope of their role assignment(s) - login
+        // itself has no OAuth2 client context, so the lookup ignores ClientId and matches
+        // on TenantId alone (most-recently-updated row wins if more than one client has
+        // configured lifetimes for the same tenant).
+        var tenantId = await _context.UserRoles
+            .Where(ur => ur.UserId == userId && ur.TenantId != null)
+            .Select(ur => ur.TenantId)
+            .FirstOrDefaultAsync(ct);
+
+        if (tenantId == null)
+            return null;
+
+        var config = await _context.TokenConfigurations
+            .Where(c => c.TenantId == tenantId)
+            .OrderByDescending(c => c.UpdatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (config == null)
+            return null;
+
+        return new OrganizationTokenLifetime
+        {
+            AccessTokenLifetimeMinutes = config.AccessTokenLifetimeMinutes,
+            RefreshTokenLifetimeDays = config.RefreshTokenLifetimeDays
+        };
+    }
+
     // ---- Token Preview / Claim Generation ----
 
     public async Task<TokenPreviewResult> PreviewTokenAsync(string clientId, Guid userId, Guid? tenantId = null, CancellationToken ct = default)

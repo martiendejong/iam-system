@@ -49,4 +49,19 @@ public class AuthResult
     /// </summary>
     public bool RequiresStepUp { get; set; }
     public bool RequiresTwoFactor { get; set; }
+
+    /// <summary>
+    /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,
+    /// resolved from the user's organization Token Configuration when one exists,
+    /// otherwise today's default. Unset (0) when no tokens were issued.
+    /// </summary>
+    public int AccessTokenLifetimeMinutes { get; set; }
+
+    /// <summary>
+    /// Refresh token / session cookie lifetime (days) actually used to issue
+    /// <see cref="RefreshToken"/>, resolved the same way as <see cref="AccessTokenLifetimeMinutes"/>.
+    /// Callers that set a refresh-token cookie must derive its Expires from this value
+    /// rather than a hardcoded literal, so the cookie matches the token it carries.
+    /// </summary>
+    public int RefreshTokenLifetimeDays { get; set; }
 }

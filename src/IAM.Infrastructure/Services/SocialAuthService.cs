@@ -16,18 +16,40 @@ namespace IAM.Infrastructure.Services;
 
 public class SocialAuthService : ISocialAuthService
 {
+    // Today's default when an organization has never saved a Token Configuration.
+    private const int DefaultRefreshTokenLifetimeDays = 7;
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IClaimsMappingService _claimsMappingService;
 
     public SocialAuthService(
         IAMDbContext context,
         IConfiguration configuration,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        IClaimsMappingService claimsMappingService)
     {
         _context = context;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
+        _claimsMappingService = claimsMappingService;
+    }
+
+    /// <summary>
+    /// Resolves the access/refresh token lifetime for a login, from the user's
+    /// organization Token Configuration when one exists, otherwise today's defaults
+    /// (Jwt:AccessTokenExpirationMinutes config, hardcoded 7-day refresh). Mirrors
+    /// AuthService.ResolveTokenLifetimeAsync so both login paths agree.
+    /// </summary>
+    private async Task<(int AccessTokenLifetimeMinutes, int RefreshTokenLifetimeDays)> ResolveTokenLifetimeAsync(Guid userId)
+    {
+        var defaultAccessMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "5");
+        var orgLifetime = await _claimsMappingService.ResolveTokenLifetimeForUserAsync(userId);
+
+        return orgLifetime != null
+            ? (orgLifetime.AccessTokenLifetimeMinutes, orgLifetime.RefreshTokenLifetimeDays)
+            : (defaultAccessMinutes, DefaultRefreshTokenLifetimeDays);
     }
 
     public async Task<string> GetAuthorizationUrlAsync(Guid providerId, string redirectUri, string state)
@@ -183,6 +205,10 @@ public class SocialAuthService : ISocialAuthService
                 .ThenInclude(ur => ur.Role)
             .FirstAsync(u => u.Id == user.Id);
 
+        // Resolve this organization's configured token lifetime (falls back to today's
+        // defaults when the user has no tenant or the tenant has no Token Configuration)
+        var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
+
         // Generate JWT tokens
         var refreshToken = GenerateRefreshToken();
         var refreshTokenId = Guid.NewGuid();
@@ -192,20 +218,22 @@ public class SocialAuthService : ISocialAuthService
             Id = refreshTokenId,
             UserId = user.Id,
             TokenHash = HashToken(refreshToken),
-            ExpiresAt = DateTime.UtcNow.AddDays(7)
+            ExpiresAt = DateTime.UtcNow.AddDays(refreshDays)
         };
 
         _context.RefreshTokens.Add(refreshTokenEntity);
         await _context.SaveChangesAsync();
 
-        var accessToken = GenerateAccessToken(user, refreshTokenId);
+        var accessToken = GenerateAccessToken(user, accessMinutes, refreshTokenId);
 
         return new AuthResult
         {
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
-            User = user
+            User = user,
+            AccessTokenLifetimeMinutes = accessMinutes,
+            RefreshTokenLifetimeDays = refreshDays
         };
     }
 
@@ -613,7 +641,7 @@ public class SocialAuthService : ISocialAuthService
         return null;
     }
 
-    private string GenerateAccessToken(User user, Guid? refreshTokenId = null)
+    private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null)
     {
         var claims = new List<Claim>
         {
@@ -635,8 +663,6 @@ public class SocialAuthService : ISocialAuthService
         var secretKey = _configuration["Jwt:SecretKey"] ?? throw new InvalidOperationException("JWT secret key not configured");
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-        var expirationMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "5");
 
         var token = new JwtSecurityToken(
             issuer: _configuration["Jwt:Issuer"],

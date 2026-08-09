@@ -13,24 +13,45 @@ namespace IAM.Infrastructure.Services;
 
 public class AuthService : IAuthService
 {
+    // Today's default when an organization has never saved a Token Configuration.
+    private const int DefaultRefreshTokenLifetimeDays = 7;
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
     private readonly IRiskAssessmentService _riskAssessmentService;
     private readonly IOtpService _otpService;
+    private readonly IClaimsMappingService _claimsMappingService;
 
     public AuthService(
         IAMDbContext context,
         IConfiguration configuration,
         IEmailService emailService,
         IRiskAssessmentService riskAssessmentService,
-        IOtpService otpService)
+        IOtpService otpService,
+        IClaimsMappingService claimsMappingService)
     {
         _context = context;
         _configuration = configuration;
         _emailService = emailService;
         _riskAssessmentService = riskAssessmentService;
         _otpService = otpService;
+        _claimsMappingService = claimsMappingService;
+    }
+
+    /// <summary>
+    /// Resolves the access/refresh token lifetime for a login, from the user's
+    /// organization Token Configuration when one exists, otherwise today's defaults
+    /// (Jwt:AccessTokenExpirationMinutes config, hardcoded 7-day refresh).
+    /// </summary>
+    private async Task<(int AccessTokenLifetimeMinutes, int RefreshTokenLifetimeDays)> ResolveTokenLifetimeAsync(Guid userId)
+    {
+        var defaultAccessMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "5");
+        var orgLifetime = await _claimsMappingService.ResolveTokenLifetimeForUserAsync(userId);
+
+        return orgLifetime != null
+            ? (orgLifetime.AccessTokenLifetimeMinutes, orgLifetime.RefreshTokenLifetimeDays)
+            : (defaultAccessMinutes, DefaultRefreshTokenLifetimeDays);
     }
 
     public async Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName)
@@ -201,6 +222,10 @@ public class AuthService : IAuthService
             };
         }
 
+        // Resolve this organization's configured token lifetime (falls back to today's
+        // defaults when the user has no tenant or the tenant has no Token Configuration)
+        var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
+
         // Generate refresh token first (needed for token binding)
         var refreshToken = GenerateRefreshToken();
         var refreshTokenId = Guid.NewGuid();
@@ -211,7 +236,7 @@ public class AuthService : IAuthService
             Id = refreshTokenId,
             UserId = user.Id,
             TokenHash = HashToken(refreshToken),
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress,  // Device fingerprinting
             UserAgent = userAgent   // Device fingerprinting
         };
@@ -220,14 +245,16 @@ public class AuthService : IAuthService
         await _context.SaveChangesAsync();
 
         // Generate access token with token binding (binds to refresh token ID)
-        var accessToken = GenerateAccessToken(user, refreshTokenId);
+        var accessToken = GenerateAccessToken(user, accessMinutes, refreshTokenId);
 
         return new AuthResult
         {
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
-            User = user
+            User = user,
+            AccessTokenLifetimeMinutes = accessMinutes,
+            RefreshTokenLifetimeDays = refreshDays
         };
     }
 
@@ -273,6 +300,10 @@ public class AuthService : IAuthService
         // SINGLE-USE TOKENS: Revoke the old refresh token immediately
         storedToken.RevokedAt = DateTime.UtcNow;
 
+        // Resolve this organization's configured token lifetime (falls back to today's
+        // defaults when the user has no tenant or the tenant has no Token Configuration)
+        var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(storedToken.UserId);
+
         // Generate new refresh token (rotation)
         var newRefreshToken = GenerateRefreshToken();
         var newRefreshTokenId = Guid.NewGuid();
@@ -283,7 +314,7 @@ public class AuthService : IAuthService
             Id = newRefreshTokenId,
             UserId = storedToken.UserId,
             TokenHash = HashToken(newRefreshToken),
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress ?? storedToken.IpAddress,    // Use new IP or fall back to original
             UserAgent = userAgent ?? storedToken.UserAgent     // Use new UA or fall back to original
         };
@@ -292,14 +323,16 @@ public class AuthService : IAuthService
         await _context.SaveChangesAsync();
 
         // Generate new access token with token binding (binds to NEW refresh token ID)
-        var accessToken = GenerateAccessToken(storedToken.User, newRefreshTokenId);
+        var accessToken = GenerateAccessToken(storedToken.User, accessMinutes, newRefreshTokenId);
 
         return new AuthResult
         {
             Success = true,
             AccessToken = accessToken,
             RefreshToken = newRefreshToken,  // Return NEW refresh token (single-use rotation)
-            User = storedToken.User
+            User = storedToken.User,
+            AccessTokenLifetimeMinutes = accessMinutes,
+            RefreshTokenLifetimeDays = refreshDays
         };
     }
 
@@ -401,6 +434,10 @@ public class AuthService : IAuthService
         user.IsLockedOut = false;
         user.LockoutEnd = null;
 
+        // Resolve this organization's configured token lifetime (falls back to today's
+        // defaults when the user has no tenant or the tenant has no Token Configuration)
+        var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
+
         // Generate refresh token
         var refreshToken = GenerateRefreshToken();
         var refreshTokenId = Guid.NewGuid();
@@ -410,7 +447,7 @@ public class AuthService : IAuthService
             Id = refreshTokenId,
             UserId = user.Id,
             TokenHash = HashToken(refreshToken),
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress,
             UserAgent = userAgent
         };
@@ -418,14 +455,16 @@ public class AuthService : IAuthService
         _context.RefreshTokens.Add(refreshTokenEntity);
         await _context.SaveChangesAsync();
 
-        var accessToken = GenerateAccessToken(user, refreshTokenId);
+        var accessToken = GenerateAccessToken(user, accessMinutes, refreshTokenId);
 
         return new AuthResult
         {
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
-            User = user
+            User = user,
+            AccessTokenLifetimeMinutes = accessMinutes,
+            RefreshTokenLifetimeDays = refreshDays
         };
     }
 
@@ -548,7 +587,7 @@ public class AuthService : IAuthService
         return true;
     }
 
-    private string GenerateAccessToken(User user, Guid? refreshTokenId = null)
+    private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null)
     {
         var claims = new List<Claim>
         {
@@ -573,9 +612,8 @@ public class AuthService : IAuthService
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        // REDUCED TTL: Default 5 minutes (down from 15) for better security
-        var expirationMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "5");
-
+        // TTL: caller resolves this - the organization's configured Token Configuration
+        // when one exists, otherwise today's default (5 minutes, down from 15, for security)
         var token = new JwtSecurityToken(
             issuer: _configuration["Jwt:Issuer"],
             audience: _configuration["Jwt:Audience"],

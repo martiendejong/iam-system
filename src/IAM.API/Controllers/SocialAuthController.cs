@@ -57,13 +57,14 @@ public class SocialAuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
-        // Set refresh token in HttpOnly cookie (same pattern as AuthController)
+        // Set refresh token in HttpOnly cookie (same pattern as AuthController) - Expires
+        // mirrors the refresh token's own resolved lifetime, not a hardcoded default.
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Expires = DateTimeOffset.UtcNow.AddDays(7)
+            Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
         });
 
         return Ok(new
