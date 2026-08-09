@@ -81,7 +81,7 @@ public class MagicLinkController : ControllerBase
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Expires = DateTimeOffset.UtcNow.AddDays(7)
+            Expires = DateTimeOffset.UtcNow.AddDays(loginResult.RefreshTokenLifetimeDays)
         });
 
         return Ok(new
