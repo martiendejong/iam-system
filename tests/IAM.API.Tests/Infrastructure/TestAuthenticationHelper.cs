@@ -61,6 +61,39 @@ public static class TestAuthenticationHelper
         );
     }
 
+    /// <summary>
+    /// Token shaped exactly like ServiceAccountService.GenerateServiceAccountToken issues
+    /// for the client_credentials grant: NO role claims, "token_type=service_account",
+    /// a client_id, and one "permission" claim per granted permission (task 1496).
+    /// </summary>
+    public static string GenerateServiceAccountToken(string clientId, params string[] permissions)
+    {
+        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
+        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new Claim(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+            new Claim("client_id", clientId),
+            new Claim("token_type", "service_account"),
+            new Claim("service_account_type", "internal")
+        };
+        foreach (var permission in permissions)
+        {
+            claims.Add(new Claim("permission", permission));
+        }
+
+        var token = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
     public static void AddAuthorizationHeader(this HttpClient client, string token)
     {
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");

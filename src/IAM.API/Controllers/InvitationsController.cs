@@ -1,4 +1,5 @@
 using System.Globalization;
+using IAM.API.Authorization;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -28,14 +29,40 @@ public class InvitationsController : ControllerBase
     }
 
     /// <summary>
-    /// Send an invitation to a user
+    /// Send an invitation to a user. Allowed for the admin roles, and (task 1496) for
+    /// service accounts holding the exact "invitations:send" permission — TaskManager's
+    /// Add-Team-Member flow sends invites server-to-server with its own scoped credential.
     /// </summary>
     [HttpPost]
-    [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
+    [Authorize]
     public async Task<IActionResult> SendInvitation([FromBody] SendInvitationRequest request)
     {
-        var userId = GetCurrentUserId();
-        if (userId == null) return Unauthorized();
+        var isServiceAccount = ServiceAccountAuthorization.IsServiceAccount(User);
+        var allowed = isServiceAccount
+            ? ServiceAccountAuthorization.HasPermission(User, ServiceAccountAuthorization.InvitationsSendPermission)
+            : User.IsInRole("SuperAdmin") || User.IsInRole("BuildingOwner") || User.IsInRole("BuildingManager");
+        if (!allowed) return Forbid();
+
+        Guid? userId;
+        if (isServiceAccount)
+        {
+            // Invitation.InvitedByUserId is a hard FK to Users, and a service account is
+            // not a user row. The caller must name the acting human via onBehalfOfEmail
+            // (TaskManager sends the admin who clicked "Add Team Member"; that admin logs
+            // in through IAM, so their email resolves to a real user here).
+            var onBehalfOf = request.OnBehalfOfEmail?.Trim();
+            if (string.IsNullOrWhiteSpace(onBehalfOf))
+                return BadRequest(new { error = "onBehalfOfEmail is required when calling with a service-account token" });
+            var actingUser = await _context.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == onBehalfOf.ToLower());
+            if (actingUser == null)
+                return BadRequest(new { error = "onBehalfOfEmail does not match any IAM user" });
+            userId = actingUser.Id;
+        }
+        else
+        {
+            userId = GetCurrentUserId();
+            if (userId == null) return Unauthorized();
+        }
 
         if (string.IsNullOrWhiteSpace(request.Email))
             return BadRequest(new { error = "Email is required" });
@@ -297,7 +324,10 @@ public record SendInvitationRequest(
     string Email,
     Guid TenantId,
     Guid RoleId,
-    int? ExpiryDays = null
+    int? ExpiryDays = null,
+    /// <summary>Email of the acting human when the caller is a service account (task 1496);
+    /// resolved to the InvitedBy user. Ignored for normal role-based callers.</summary>
+    string? OnBehalfOfEmail = null
 );
 
 public record AcceptInvitationRequest(
