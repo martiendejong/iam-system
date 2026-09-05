@@ -106,6 +106,50 @@ public class UsersController : ControllerBase
     }
 
     /// <summary>
+    /// Create a new, already-active user with an admin-supplied password (SuperAdmin only).
+    /// No invitation email is sent; the user can log in immediately with the given password.
+    /// </summary>
+    [HttpPost]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> CreateUser([FromBody] AdminCreateUserRequest request)
+    {
+        var email = request.Email?.Trim();
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { error = "Email is required" });
+
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 8)
+            return BadRequest(new { error = "Password must be at least 8 characters" });
+
+        var emailExists = await _context.Users.AnyAsync(u => u.Email == email);
+        if (emailExists)
+            return Conflict(new { error = "A user with this email already exists" });
+
+        var user = new User
+        {
+            Email = email,
+            FirstName = request.FirstName?.Trim() ?? string.Empty,
+            LastName = request.LastName?.Trim() ?? string.Empty,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+            EmailConfirmed = true, // Admin-created accounts are pre-verified (mirrors invitation acceptance)
+            IsActive = true
+        };
+
+        _context.Users.Add(user);
+        await _context.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(GetUser), new { id = user.Id }, new
+        {
+            id = user.Id,
+            email = user.Email,
+            firstName = user.FirstName,
+            lastName = user.LastName,
+            emailConfirmed = user.EmailConfirmed,
+            isActive = user.IsActive,
+            createdAt = user.CreatedAt
+        });
+    }
+
+    /// <summary>
     /// Update any user's profile (SuperAdmin only)
     /// </summary>
     [HttpPut("{id}")]
@@ -419,4 +463,5 @@ public class UsersController : ControllerBase
 public record UpdateProfileRequest(string? FirstName, string? LastName);
 public record AssignRoleRequest(Guid RoleId, Guid? TenantId, DateTime? ExpiresAt);
 public record AdminChangePasswordRequest(string NewPassword);
+public record AdminCreateUserRequest(string? Email, string? Password, string? FirstName, string? LastName);
 public record AdminUpdateUserRequest(string? FirstName, string? LastName, string? Email, string? PhoneNumber);
