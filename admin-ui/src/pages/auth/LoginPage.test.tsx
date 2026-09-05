@@ -12,7 +12,8 @@ vi.mock('../../context/AuthContext', () => ({
 
 vi.mock('../../services/api', () => ({
   api: {
-    getIdentityProviders: vi.fn(),
+    getPublicIdentityProviders: vi.fn(),
+    socialLoginStartUrl: vi.fn(),
     getClient: vi.fn(),
     resendLoginTwoFactorCode: vi.fn(),
     verifyLoginTwoFactor: vi.fn(),
@@ -57,7 +58,7 @@ describe('LoginPage returnUrl navigation', () => {
       logout: vi.fn(),
       setCurrentUser,
     });
-    mockedApi.getIdentityProviders.mockResolvedValue([]);
+    mockedApi.getPublicIdentityProviders.mockResolvedValue([]);
     mockedBrandingApi.getBrandingByDomain.mockRejectedValue(new Error('no branding'));
     mockedBrandingApi.getPublicBranding.mockRejectedValue(new Error('no branding'));
 
@@ -241,6 +242,24 @@ describe('LoginPage returnUrl navigation', () => {
       await waitFor(() => expect(mockedApi.verifyLoginTwoFactor).toHaveBeenCalledWith('user-1', '654321'));
       await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
       await waitFor(() => expect(screen.getByText('Portal Profile Page')).toBeInTheDocument());
+    });
+  });
+
+  describe('federated (social) login', () => {
+    it('lists public providers and starts the server-driven flow with the returnUrl', async () => {
+      mockedApi.getPublicIdentityProviders.mockResolvedValue([
+        { id: 'prov-1', name: 'entra-perridon', displayName: 'Sign in with Microsoft', type: 'Microsoft' },
+      ]);
+      mockedApi.socialLoginStartUrl.mockReturnValue(
+        '/auth/api/auth/social/prov-1/start?returnUrl=%2Fconnect%2Fauthorize%3Fx%3D1');
+
+      renderLoginPage('/connect/authorize?x=1');
+
+      const button = await screen.findByRole('button', { name: 'Sign in with Microsoft' });
+      fireEvent.click(button);
+
+      expect(mockedApi.socialLoginStartUrl).toHaveBeenCalledWith('prov-1', '/connect/authorize?x=1');
+      expect(window.location.href).toBe('/auth/api/auth/social/prov-1/start?returnUrl=%2Fconnect%2Fauthorize%3Fx%3D1');
     });
   });
 });

@@ -60,7 +60,7 @@ public class SocialAuthService : ISocialAuthService
         if (!provider.IsActive)
             throw new InvalidOperationException("Identity provider is not active");
 
-        var (authorizationEndpoint, scopes) = GetProviderEndpoints(provider.Type);
+        var (authorizationEndpoint, scopes) = await ResolveAuthorizationEndpointAsync(provider);
 
         var queryParams = new Dictionary<string, string>
         {
@@ -77,7 +77,7 @@ public class SocialAuthService : ISocialAuthService
         return $"{authorizationEndpoint}?{queryString}";
     }
 
-    public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state)
+    public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state, string? redirectUri = null)
     {
         var provider = await _context.IdentityProviders
             .Include(p => p.DefaultRole)
@@ -93,7 +93,7 @@ public class SocialAuthService : ISocialAuthService
         }
 
         // Exchange code for tokens
-        var tokenResponse = await ExchangeCodeForTokensAsync(provider, code);
+        var tokenResponse = await ExchangeCodeForTokensAsync(provider, code, redirectUri);
         if (tokenResponse == null)
         {
             return new AuthResult
@@ -368,6 +368,69 @@ public class SocialAuthService : ISocialAuthService
 
     // --- Private helper methods ---
 
+    // ── OIDC discovery (taak #1482: Entra ID-federatie) ──
+    // Providers met een MetadataUrl (Entra ID per klant-tenant:
+    // https://login.microsoftonline.com/{entra-tenant-id}/v2.0/.well-known/openid-configuration,
+    // of een generieke OIDC-idp) krijgen hun endpoints via discovery in plaats van
+    // de hardcoded /common-endpoints. Zo is federatie per klant-tenant pinbaar.
+    private static readonly Dictionary<string, (OidcDiscoveryDocument Doc, DateTime FetchedAt)> _discoveryCache = new();
+    private static readonly SemaphoreSlim _discoveryLock = new(1, 1);
+    private static readonly TimeSpan DiscoveryCacheTtl = TimeSpan.FromHours(12);
+
+    private static bool UsesDiscovery(IdentityProvider provider) =>
+        !string.IsNullOrWhiteSpace(provider.MetadataUrl) &&
+        (provider.Type == IdentityProviderType.Microsoft || provider.Type == IdentityProviderType.OIDC);
+
+    private async Task<OidcDiscoveryDocument> GetDiscoveryDocumentAsync(string metadataUrl)
+    {
+        lock (((System.Collections.ICollection)_discoveryCache).SyncRoot)
+        {
+            if (_discoveryCache.TryGetValue(metadataUrl, out var hit) && DateTime.UtcNow - hit.FetchedAt < DiscoveryCacheTtl)
+                return hit.Doc;
+        }
+
+        await _discoveryLock.WaitAsync();
+        try
+        {
+            if (_discoveryCache.TryGetValue(metadataUrl, out var hit) && DateTime.UtcNow - hit.FetchedAt < DiscoveryCacheTtl)
+                return hit.Doc;
+
+            var client = _httpClientFactory.CreateClient("SocialAuth");
+            var response = await client.GetAsync(metadataUrl);
+            response.EnsureSuccessStatusCode();
+            var json = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+
+            var doc = new OidcDiscoveryDocument
+            {
+                AuthorizationEndpoint = json.GetProperty("authorization_endpoint").GetString()
+                    ?? throw new InvalidOperationException("Discovery document has no authorization_endpoint"),
+                TokenEndpoint = json.GetProperty("token_endpoint").GetString()
+                    ?? throw new InvalidOperationException("Discovery document has no token_endpoint"),
+                UserInfoEndpoint = json.TryGetProperty("userinfo_endpoint", out var ui) ? ui.GetString() : null
+            };
+            _discoveryCache[metadataUrl] = (doc, DateTime.UtcNow);
+            return doc;
+        }
+        finally { _discoveryLock.Release(); }
+    }
+
+    private async Task<(string AuthorizationEndpoint, string Scopes)> ResolveAuthorizationEndpointAsync(IdentityProvider provider)
+    {
+        if (UsesDiscovery(provider))
+        {
+            var doc = await GetDiscoveryDocumentAsync(provider.MetadataUrl!);
+            return (doc.AuthorizationEndpoint, "openid email profile");
+        }
+        return GetProviderEndpoints(provider.Type);
+    }
+
+    private async Task<string> ResolveTokenEndpointAsync(IdentityProvider provider)
+    {
+        if (UsesDiscovery(provider))
+            return (await GetDiscoveryDocumentAsync(provider.MetadataUrl!)).TokenEndpoint;
+        return GetTokenEndpoint(provider.Type);
+    }
+
     private static (string AuthorizationEndpoint, string Scopes) GetProviderEndpoints(IdentityProviderType type)
     {
         return type switch
@@ -414,7 +477,7 @@ public class SocialAuthService : ISocialAuthService
         };
     }
 
-    private async Task<OAuthTokenResponse?> ExchangeCodeForTokensAsync(IdentityProvider provider, string code)
+    private async Task<OAuthTokenResponse?> ExchangeCodeForTokensAsync(IdentityProvider provider, string code, string? redirectUri = null)
     {
         var client = _httpClientFactory.CreateClient("SocialAuth");
 
@@ -424,7 +487,7 @@ public class SocialAuthService : ISocialAuthService
             return null;
         }
 
-        var tokenEndpoint = GetTokenEndpoint(provider.Type);
+        var tokenEndpoint = await ResolveTokenEndpointAsync(provider);
 
         var requestBody = new Dictionary<string, string>
         {
@@ -432,7 +495,8 @@ public class SocialAuthService : ISocialAuthService
             ["client_secret"] = provider.ClientSecret,
             ["code"] = code,
             ["grant_type"] = "authorization_code",
-            ["redirect_uri"] = _configuration["SocialAuth:RedirectUri"] ?? ""
+            // redirect_uri MOET exact matchen met die van het authorize-request
+            ["redirect_uri"] = redirectUri ?? _configuration["SocialAuth:RedirectUri"] ?? ""
         };
 
         var request = new HttpRequestMessage(HttpMethod.Post, tokenEndpoint)
@@ -474,6 +538,15 @@ public class SocialAuthService : ISocialAuthService
         if (provider.Type == IdentityProviderType.SAML)
         {
             return null; // SAML assertions would be parsed from the callback, not here
+        }
+
+        // Discovery-providers (Entra ID per tenant / generiek OIDC): het id_token
+        // komt rechtstreeks over TLS van het token-endpoint en is daarmee net zo
+        // vertrouwd als de Apple-variant hierboven — parse de standaardclaims.
+        // (Graph /me vereist User.Read; via het id_token volstaat openid email profile.)
+        if (UsesDiscovery(provider) && !string.IsNullOrEmpty(tokenResponse.IdToken))
+        {
+            return ParseOidcIdToken(tokenResponse.IdToken, provider);
         }
 
         var client = _httpClientFactory.CreateClient("SocialAuth");
@@ -589,6 +662,46 @@ public class SocialAuthService : ISocialAuthService
         }
 
         return null;
+    }
+
+    private static ExternalUserProfile? ParseOidcIdToken(string idToken, IdentityProvider provider)
+    {
+        try
+        {
+            var handler = new JwtSecurityTokenHandler();
+            var token = handler.ReadJwtToken(idToken);
+            var mapping = GetAttributeMapping(provider);
+
+            string? Claim(string field, params string[] defaults)
+            {
+                if (mapping.TryGetValue(field, out var mapped))
+                    return token.Claims.FirstOrDefault(c => c.Type == mapped)?.Value;
+                foreach (var d in defaults)
+                {
+                    var v = token.Claims.FirstOrDefault(c => c.Type == d)?.Value;
+                    if (!string.IsNullOrEmpty(v)) return v;
+                }
+                return null;
+            }
+
+            var sub = Claim("sub", "sub");
+            if (string.IsNullOrEmpty(sub)) return null;
+
+            return new ExternalUserProfile
+            {
+                ProviderUserId = sub,
+                // Entra: email-claim vereist de optionele email-claim of het email-scope;
+                // preferred_username/upn als terugval (is bij Entra de UPN van de gebruiker)
+                Email = Claim("email", "email", "preferred_username", "upn"),
+                DisplayName = Claim("displayName", "name"),
+                FirstName = Claim("firstName", "given_name"),
+                LastName = Claim("lastName", "family_name")
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static ExternalUserProfile? ParseAppleIdToken(string idToken)
@@ -708,4 +821,11 @@ internal class ExternalUserProfile
     public string? DisplayName { get; set; }
     public string? FirstName { get; set; }
     public string? LastName { get; set; }
+}
+
+internal class OidcDiscoveryDocument
+{
+    public string AuthorizationEndpoint { get; set; } = "";
+    public string TokenEndpoint { get; set; } = "";
+    public string? UserInfoEndpoint { get; set; }
 }
