@@ -595,5 +595,47 @@ public class DatabaseSeeder : IHostedService
                 }
             }, cancellationToken);
         }
+
+        // Sinema — AI video editor (Authorization Code Flow with PKCE, public client)
+        // Prod runs behind the /sinema path base on maendeleo; local dev uses the Vite
+        // dev server (5311, /api proxied to the backend) or the backend directly (5310).
+        if (await manager.FindByClientIdAsync("sinema", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "sinema",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Sinema",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/sinema/api/auth/iam/callback"),
+                    new Uri("http://localhost:5311/api/auth/iam/callback"),
+                    new Uri("http://localhost:5310/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/sinema/"),
+                    new Uri("http://localhost:5311/"),
+                    new Uri("http://localhost:5310/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
     }
 }
