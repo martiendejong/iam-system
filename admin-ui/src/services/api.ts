@@ -308,6 +308,20 @@ class ApiService {
   }
 
   // Social Auth endpoints
+
+  // Public provider list for the (pre-auth) login page — no token required
+  async getPublicIdentityProviders(tenantId?: string): Promise<any[]> {
+    const params = tenantId ? { tenantId } : {};
+    const response = await this.client.get('/auth/social/providers', { params });
+    return response.data;
+  }
+
+  // Server-driven federated login (Entra ID etc.): full-page navigation URL that
+  // ends with the IAM.Session cookie set and a redirect back to returnUrl
+  socialLoginStartUrl(providerId: string, returnUrl: string): string {
+    return `${API_BASE_URL}/api/auth/social/${providerId}/start?returnUrl=${encodeURIComponent(returnUrl)}`;
+  }
+
   async getSocialAuthUrl(providerId: string, redirectUri: string): Promise<{ authorizationUrl: string; state: string }> {
     const response = await this.client.get(`/auth/social/${providerId}/authorize`, {
       params: { redirectUri }

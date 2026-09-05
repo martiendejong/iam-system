@@ -56,22 +56,21 @@ export default function LoginPage() {
 
   const loadSocialProviders = async () => {
     try {
-      const providers = await api.getIdentityProviders();
-      setSocialProviders(providers.filter((p: IdentityProvider) => p.isActive));
+      // Public endpoint: the login page runs pre-auth, so the [Authorize]d
+      // /identity-providers list is not reachable here (active providers only)
+      const providers = await api.getPublicIdentityProviders();
+      setSocialProviders(providers);
     } catch {
       // Social providers are optional, don't show error
     }
   };
 
-  const handleSocialLogin = async (provider: IdentityProvider) => {
-    try {
-      setError('');
-      const redirectUri = `${window.location.origin}/auth/login`;
-      const { authorizationUrl } = await api.getSocialAuthUrl(provider.id, redirectUri);
-      window.location.href = authorizationUrl;
-    } catch (err: any) {
-      setError(err.response?.data?.error || `Failed to initiate ${provider.displayName} login`);
-    }
+  const handleSocialLogin = (provider: IdentityProvider) => {
+    // Server-driven flow: /start redirects to the external provider (e.g. Entra ID),
+    // the API callback sets the IAM.Session cookie and returns to returnUrl — so a
+    // suspended /connect/authorize request (workspace portal) completes seamlessly.
+    setError('');
+    window.location.href = api.socialLoginStartUrl(provider.id, returnUrl);
   };
 
   const getSocialButtonStyle = (type: string) => {
