@@ -159,6 +159,102 @@ public class ServiceAccountProvisioningTests : IClassFixture<IAMTestWebApplicati
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    // ── Service-account MANAGEMENT must be admin-gated (SuperAdmin/SystemAdmin) ──
+    // Without this, any authenticated user could mint their own service account with
+    // "users:create"/"invitations:send" (or rotate the secret of an existing scoped one)
+    // and walk straight through the permission gates above — closing that hole is part
+    // of admitting service accounts to provisioning endpoints at all. The gate mirrors
+    // OAuthClientsController's [Authorize(Roles = "SuperAdmin,SystemAdmin")] convention.
+
+    private HttpClient OrdinaryUserClient()
+    {
+        var client = _factory.CreateClient();
+        client.AddAuthorizationHeader(TestAuthenticationHelper.GenerateJwtToken(
+            Guid.NewGuid(), "ordinary@test.com", new[] { "User" }));
+        return client;
+    }
+
+    [Fact]
+    public async Task CreateServiceAccount_OrdinaryUser_Returns403()
+    {
+        var client = OrdinaryUserClient();
+
+        var response = await client.PostAsJsonAsync("/api/service-accounts", new
+        {
+            name = "escalation-attempt",
+            permissions = new[] { "users:create", "invitations:send" }
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateServiceAccount_OrdinaryUser_Returns403()
+    {
+        var client = OrdinaryUserClient();
+
+        var response = await client.PutAsJsonAsync($"/api/service-accounts/{Guid.NewGuid()}", new
+        {
+            permissions = new[] { "users:create", "invitations:send" }
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteServiceAccount_OrdinaryUser_Returns403()
+    {
+        var client = OrdinaryUserClient();
+
+        var response = await client.DeleteAsync($"/api/service-accounts/{Guid.NewGuid()}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RotateServiceAccountSecret_OrdinaryUser_Returns403()
+    {
+        var client = OrdinaryUserClient();
+
+        var response = await client.PostAsync($"/api/service-accounts/{Guid.NewGuid()}/rotate-secret", null);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateServiceAccount_ServiceAccountToken_Returns403()
+    {
+        // A service account must not be able to mint further service accounts
+        // (chained escalation): its token carries permissions but no role claims.
+        var client = ServiceClient("users:create", "invitations:send");
+
+        var response = await client.PostAsJsonAsync("/api/service-accounts", new
+        {
+            name = "chained-escalation-attempt",
+            permissions = new[] { "users:create" }
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateServiceAccount_SuperAdmin_StillWorks()
+    {
+        var client = _factory.CreateClient();
+        client.AddAuthorizationHeader(TestAuthenticationHelper.GenerateJwtToken(
+            Guid.Parse("99999999-9999-9999-9999-999999999999"), SeededAdminEmail, new[] { "SuperAdmin" }));
+
+        var response = await client.PostAsJsonAsync("/api/service-accounts", new
+        {
+            name = "taskmanager-provisioning",
+            permissions = new[] { "users:create", "invitations:send" }
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.StartsWith("svc_", body.GetProperty("clientId").GetString());
+    }
+
     [Fact]
     public async Task SendInvitation_HumanAdminRole_StillWorksWithoutOnBehalfOf()
     {
