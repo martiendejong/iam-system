@@ -22,7 +22,7 @@ public class ServiceAccountsController : ControllerBase
     /// Create a new service account. The client secret is returned ONCE in the response.
     /// </summary>
     [HttpPost]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
     public async Task<IActionResult> Create([FromBody] CreateServiceAccountRequest request)
     {
         var (account, rawSecret) = await _serviceAccountService.CreateAsync(
@@ -55,7 +55,7 @@ public class ServiceAccountsController : ControllerBase
     /// List service accounts with optional filtering.
     /// </summary>
     [HttpGet]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
     public async Task<IActionResult> List(
         [FromQuery] Guid? tenantId = null,
         [FromQuery] ServiceAccountType? type = null,
@@ -88,7 +88,7 @@ public class ServiceAccountsController : ControllerBase
     /// Get a specific service account by ID.
     /// </summary>
     [HttpGet("{id:guid}")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
     public async Task<IActionResult> GetById(Guid id)
     {
         var account = await _serviceAccountService.GetByIdAsync(id, HttpContext.RequestAborted);
@@ -117,7 +117,7 @@ public class ServiceAccountsController : ControllerBase
     /// Update a service account's metadata.
     /// </summary>
     [HttpPut("{id:guid}")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateServiceAccountRequest request)
     {
         var account = await _serviceAccountService.UpdateAsync(
@@ -152,7 +152,7 @@ public class ServiceAccountsController : ControllerBase
     /// Delete a service account.
     /// </summary>
     [HttpDelete("{id:guid}")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
     public async Task<IActionResult> Delete(Guid id)
     {
         var success = await _serviceAccountService.DeleteAsync(id, HttpContext.RequestAborted);
@@ -166,7 +166,7 @@ public class ServiceAccountsController : ControllerBase
     /// Rotate the client secret. The new secret is returned ONCE.
     /// </summary>
     [HttpPost("{id:guid}/rotate-secret")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
     public async Task<IActionResult> RotateSecret(Guid id)
     {
         var (success, newRawSecret) = await _serviceAccountService.RotateSecretAsync(id, HttpContext.RequestAborted);

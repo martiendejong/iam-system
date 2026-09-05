@@ -1,3 +1,4 @@
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -106,13 +107,20 @@ public class UsersController : ControllerBase
     }
 
     /// <summary>
-    /// Create a new, already-active user with an admin-supplied password (SuperAdmin only).
+    /// Create a new, already-active user with an admin-supplied password. Allowed for
+    /// SuperAdmin humans and (task 1496) for service accounts holding the exact
+    /// "users:create" permission — TaskManager's Add-Team-Member flow provisions users
+    /// server-to-server with its own scoped service credential.
     /// No invitation email is sent; the user can log in immediately with the given password.
     /// </summary>
     [HttpPost]
-    [Authorize(Roles = "SuperAdmin")]
+    [Authorize]
     public async Task<IActionResult> CreateUser([FromBody] AdminCreateUserRequest request)
     {
+        if (!User.IsInRole("SuperAdmin")
+            && !ServiceAccountAuthorization.HasPermission(User, ServiceAccountAuthorization.UsersCreatePermission))
+            return Forbid();
+
         var email = request.Email?.Trim();
         if (string.IsNullOrWhiteSpace(email))
             return BadRequest(new { error = "Email is required" });
