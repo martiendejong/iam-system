@@ -10,6 +10,7 @@ import UsersPage from './pages/users/UsersPage';
 import UserEditPage from './pages/users/UserEditPage';
 import UserCreatePage from './pages/users/UserCreatePage';
 import RolesPage from './pages/roles/RolesPage';
+import AccessMatrixPage from './pages/access-matrix/AccessMatrixPage';
 import RoleFormPage from './pages/roles/RoleFormPage';
 import TenantsPage from './pages/tenants/TenantsPage';
 import TenantFormPage from './pages/tenants/TenantFormPage';
@@ -100,6 +101,16 @@ function App() {
             element={
               <ProtectedRoute>
                 <UserEditPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Access Matrix (SuperAdmin-only, enforced by the API) */}
+          <Route
+            path="/access-matrix"
+            element={
+              <ProtectedRoute>
+                <AccessMatrixPage />
               </ProtectedRoute>
             }
           />

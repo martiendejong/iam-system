@@ -35,6 +35,15 @@ const navItems = [
     ),
   },
   {
+    label: 'Access Matrix',
+    to: '/access-matrix',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M10 3v18M14 3v18M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" />
+      </svg>
+    ),
+  },
+  {
     label: 'Tenants',
     to: '/tenants',
     icon: (
