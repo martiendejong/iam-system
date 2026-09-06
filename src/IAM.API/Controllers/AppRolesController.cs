@@ -110,4 +110,47 @@ public class AppRolesController : ControllerBase
             .ToListAsync();
         return Ok(new { clientId, roles });
     }
+
+    /// <summary>
+    /// The users assigned to an application (JengoWork task 1736): everyone holding at
+    /// least one "{clientId}:*" role — the same name-prefix rule the OIDC authorize
+    /// endpoint's app-role gate applies (AuthorizationController), so this list is exactly
+    /// the set of people who can sign in to that app. Lets the application pre-provision
+    /// local user rows BEFORE a person's first login. Read-only; scoped to one client's
+    /// role holders; deliberately returns only directory basics (id/email/name/active) —
+    /// never password/MFA/lockout state and never the users' roles for OTHER applications.
+    /// Same X-API-Key gate as the register/get endpoints above: no valid key, no data.
+    /// </summary>
+    [HttpGet("{clientId}/users")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Users(string clientId)
+    {
+        if (!HttpContext.Items.ContainsKey("ApiKeyPrefix"))
+            return Unauthorized(new { error = "API key required (X-API-Key header)." });
+
+        var clientIdLower = clientId.Trim().ToLowerInvariant();
+        if (clientIdLower.Length == 0 || clientIdLower.Contains(':'))
+            return BadRequest(new { error = "A valid clientId is required." });
+
+        // Name-prefix match (not Category) to mirror the authorize gate exactly — a role
+        // named "{clientId}:x" grants sign-in whether or not it came from the registered
+        // catalog. Registered role names are stored lowercase; ToLower covers any
+        // hand-created case variants. Inactive users are INCLUDED, flagged isActive=false,
+        // so a consumer can mark its local mirror inactive instead of silently losing them.
+        var prefix = clientIdLower + ":";
+        var users = await _context.Users
+            .Where(u => u.UserRoles.Any(ur => ur.Role != null && ur.Role.Name.ToLower().StartsWith(prefix)))
+            .OrderBy(u => u.Email)
+            .Select(u => new
+            {
+                id = u.Id,
+                email = u.Email,
+                firstName = u.FirstName,
+                lastName = u.LastName,
+                isActive = u.IsActive,
+            })
+            .ToListAsync();
+
+        return Ok(new { clientId = clientIdLower, users });
+    }
 }
