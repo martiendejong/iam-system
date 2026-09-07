@@ -19,6 +19,12 @@ namespace IAM.API.Controllers;
 [Route("connect")]
 public class AuthorizationController : ControllerBase
 {
+    /// <summary>
+    /// Same claim name machine auth already issues for tenant scoping — see
+    /// ApiKeyAuthenticationMiddleware, ServiceAccountService, DeviceAuthenticationService.
+    /// </summary>
+    public const string TenantIdClaimType = "tenant_id";
+
     private readonly IAMDbContext _context;
     private readonly IOpenIddictApplicationManager _applicationManager;
     private readonly IOpenIddictAuthorizationManager _authorizationManager;
@@ -96,6 +102,13 @@ public class AuthorizationController : ControllerBase
         // holding at least one of that app's roles may sign in to it. Applications
         // without a catalog keep the historic everyone-active behavior. FAIL-OPEN on
         // any error: a bug here must never lock every application out of the SSO.
+        //
+        // When the app does have a catalog, the matching UserRole's TenantId (see
+        // UsersController.AssignRole / TenantsController.ChangeMemberRole — assignments
+        // are already tenant-scopable) becomes the token's tenant_id claim, mirroring the
+        // tenant_id claim machine auth already issues (ApiKeyAuthenticationMiddleware,
+        // ServiceAccountService, DeviceAuthenticationService) but for human logins.
+        Guid? tenantIdForToken = null;
         try
         {
             var clientIdLower = (request.ClientId ?? string.Empty).ToLowerInvariant();
@@ -106,9 +119,10 @@ public class AuthorizationController : ControllerBase
                 if (appHasCatalog)
                 {
                     var rolePrefix = clientIdLower + ":";
-                    var hasAppRole = user.UserRoles.Any(ur =>
-                        ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase));
-                    if (!hasAppRole)
+                    var appRoleAssignments = user.UserRoles
+                        .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    if (appRoleAssignments.Count == 0)
                     {
                         _logger.LogWarning("App access denied: {Email} has no {ClientId} role", user.Email, clientIdLower);
                         return Content(
@@ -119,6 +133,7 @@ public class AuthorizationController : ControllerBase
                             "<p>Ask your administrator to assign you a role for this application in the IAM system.</p></div></body></html>",
                             "text/html");
                     }
+                    tenantIdForToken = ResolveAppRoleTenantId(appRoleAssignments);
                 }
             }
         }
@@ -147,6 +162,14 @@ public class AuthorizationController : ControllerBase
         // Add role claims
         var roles = user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray();
         identity.SetClaims(Claims.Role, roles);
+
+        // Add tenant claim (only set when the app-role gate above resolved one — see
+        // ResolveAppRoleTenantId; apps without a role catalog, or a global/unscoped app
+        // role, keep issuing a token with no tenant_id, same as before this change)
+        if (tenantIdForToken.HasValue)
+        {
+            identity.SetClaim(TenantIdClaimType, tenantIdForToken.Value.ToString());
+        }
 
         // Set scopes
         identity.SetScopes(request.GetScopes());
@@ -337,10 +360,35 @@ public class AuthorizationController : ControllerBase
                 yield return Destinations.IdentityToken;
                 yield break;
 
+            // Include tenant claim in both access and identity tokens, same as Role above
+            case TenantIdClaimType:
+                yield return Destinations.AccessToken;
+                yield return Destinations.IdentityToken;
+                yield break;
+
             // For other claims, only include in access token if scope is present
             default:
                 yield return Destinations.AccessToken;
                 yield break;
         }
+    }
+
+    /// <summary>
+    /// Picks the tenant to scope a login token to, given the UserRole assignments that
+    /// matched the signed-in app's role prefix (e.g. "taskmanager:"). A role can be
+    /// assigned globally (TenantId == null, e.g. an internal/admin test account) or scoped
+    /// to one tenant; when both a scoped and an unscoped assignment exist, or the user was
+    /// granted the app role at more than one tenant, the first tenant-scoped one wins —
+    /// "one tenant" per the task's own scope, not multi-tenant token claims.
+    /// Public + static so it's unit-testable without standing up the full OIDC pipeline.
+    /// </summary>
+    public static Guid? ResolveAppRoleTenantId(IEnumerable<UserRole> appRoleAssignments)
+    {
+        foreach (var assignment in appRoleAssignments)
+        {
+            if (assignment.TenantId.HasValue)
+                return assignment.TenantId;
+        }
+        return null;
     }
 }
