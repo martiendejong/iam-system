@@ -14,22 +14,39 @@ public class RateLimitingMiddleware
     private readonly IMemoryCache _cache;
     private readonly ILogger<RateLimitingMiddleware> _logger;
 
-    private const int DefaultAuthenticatedLimit = 100; // requests per minute
-    private const int DefaultAnonymousLimit = 20;      // requests per minute
+    // The anonymous limit must accommodate a full interactive OIDC login flow
+    // (authorize redirect + login SPA API calls + retries) from a single IP.
+    // Brute-force protection lives at the service level (account lockout, OTP
+    // max-attempts, per-email magic-link limits), not in this blanket limiter.
+    private const int DefaultAuthenticatedLimit = 300; // requests per minute
+    private const int DefaultAnonymousLimit = 120;     // requests per minute
     private const int WindowSizeSeconds = 60;
+
+    private readonly int _authenticatedLimit;
+    private readonly int _anonymousLimit;
 
     public RateLimitingMiddleware(
         RequestDelegate next,
         IMemoryCache cache,
-        ILogger<RateLimitingMiddleware> logger)
+        ILogger<RateLimitingMiddleware> logger,
+        IConfiguration configuration)
     {
         _next = next;
         _cache = cache;
         _logger = logger;
+        _authenticatedLimit = configuration.GetValue("RateLimiting:AuthenticatedLimitPerMinute", DefaultAuthenticatedLimit);
+        _anonymousLimit = configuration.GetValue("RateLimiting:AnonymousLimitPerMinute", DefaultAnonymousLimit);
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Health checks must never be throttled (monitoring shares an IP with everything else on the host)
+        if (context.Request.Path.StartsWithSegments("/health"))
+        {
+            await _next(context);
+            return;
+        }
+
         var clientKey = GetClientIdentifier(context);
         var limit = GetRateLimit(context);
         var cacheKey = $"rl:{clientKey}";
@@ -83,9 +100,9 @@ public class RateLimitingMiddleware
 
     /// <summary>
     /// Determine the rate limit for this request.
-    /// API keys can have custom limits; otherwise use defaults.
+    /// API keys can have custom limits; otherwise use configured defaults.
     /// </summary>
-    private static int GetRateLimit(HttpContext context)
+    private int GetRateLimit(HttpContext context)
     {
         // Check for custom API key rate limit
         if (context.Items["ApiKeyRateLimit"] is int customLimit)
@@ -93,9 +110,9 @@ public class RateLimitingMiddleware
 
         // Authenticated users get higher limits
         if (context.User?.Identity?.IsAuthenticated == true)
-            return DefaultAuthenticatedLimit;
+            return _authenticatedLimit;
 
-        return DefaultAnonymousLimit;
+        return _anonymousLimit;
     }
 
     /// <summary>
