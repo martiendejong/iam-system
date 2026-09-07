@@ -85,7 +85,7 @@ public class AuthController : ControllerBase
             });
         }
 
-        return await CompleteLoginAsync(result);
+        return await CompleteLoginAsync(result, request.RememberMe);
     }
 
     [HttpPost("2fa/verify")]
@@ -101,7 +101,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
-        return await CompleteLoginAsync(result);
+        return await CompleteLoginAsync(result, request.RememberMe);
     }
 
     [HttpPost("2fa/resend")]
@@ -113,21 +113,35 @@ public class AuthController : ControllerBase
         return Ok(new { message = "If two-factor authentication is enabled for this account, a new code has been sent." });
     }
 
-    private async Task<IActionResult> CompleteLoginAsync(AuthResult result)
+    /// <summary>
+    /// Minimum refresh-token / session cookie lifetime, in days, when the user checked
+    /// "Remember me" - guarantees at least this long even if the organization's Token
+    /// Configuration (or today's default) is shorter, without shrinking a longer one.
+    /// </summary>
+    private const int RememberMeMinimumDays = 30;
+
+    private async Task<IActionResult> CompleteLoginAsync(AuthResult result, bool rememberMe = false)
     {
         // Set refresh token in HttpOnly cookie - Expires mirrors the refresh token's own
         // lifetime (the organization's Token Configuration when one exists, otherwise
         // today's default) so the cookie never outlives, or expires before, the token it carries.
+        // "Remember me" extends this to at least RememberMeMinimumDays.
+        var refreshDays = rememberMe
+            ? Math.Max(result.RefreshTokenLifetimeDays, RememberMeMinimumDays)
+            : result.RefreshTokenLifetimeDays;
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
-            Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
+            Expires = DateTimeOffset.UtcNow.AddDays(refreshDays)
         });
 
         // Establish OIDC session cookie so the authorize endpoint can identify the user
-        // without requiring a Bearer token in the browser request
+        // without requiring a Bearer token in the browser request. Unchecked "Remember me"
+        // keeps today's behavior: a non-persistent cookie whose ticket still expires after
+        // Program.cs's sliding ExpireTimeSpan. Checked: a persistent cookie that survives
+        // closing the browser and is valid for RememberMeMinimumDays regardless of activity.
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
@@ -135,7 +149,14 @@ public class AuthController : ControllerBase
             new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
         };
         var identity = new ClaimsIdentity(claims, "IAM.Session");
-        await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity));
+        var authProperties = rememberMe
+            ? new AuthenticationProperties
+            {
+                IsPersistent = true,
+                ExpiresUtc = DateTimeOffset.UtcNow.AddDays(RememberMeMinimumDays)
+            }
+            : new AuthenticationProperties();
+        await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity), authProperties);
 
         return Ok(new
         {
@@ -167,7 +188,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
-        return await CompleteLoginAsync(result);
+        return await CompleteLoginAsync(result, request.RememberMe);
     }
 
     [HttpPost("refresh")]
@@ -243,10 +264,10 @@ public class AuthController : ControllerBase
 }
 
 public record RegisterRequest(string Email, string Password, string FirstName, string LastName);
-public record LoginRequest(string Email, string Password, string? ReturnUrl = null);
+public record LoginRequest(string Email, string Password, string? ReturnUrl = null, bool RememberMe = false);
 public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
-public record StepUpVerifyRequest(string Email, string Code);
-public record TwoFactorVerifyRequest(Guid UserId, string Code);
+public record StepUpVerifyRequest(string Email, string Code, bool RememberMe = false);
+public record TwoFactorVerifyRequest(Guid UserId, string Code, bool RememberMe = false);
 public record ResendTwoFactorRequest(Guid UserId, string? ReturnUrl = null);

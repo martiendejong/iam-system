@@ -275,10 +275,22 @@ token lifetime, or a fresh interactive login. Pre-existing OIDC behavior, not to
 this fix — flagged in the ClickUp comment as a follow-up, not fixed here (would need to
 touch the shared token-exchange endpoint used by every relying app).
 
-## 2026-09-07 — task 1743 (plan)
-Plan: add a `RememberMe` checkbox to `LoginPage.tsx`, thread it through `LoginRequest`/
-`TwoFactorVerifyRequest`/`StepUpVerifyRequest` into `AuthController.CompleteLoginAsync`.
-When true: `IAM.Session` SignInAsync gets `IsPersistent = true` + `ExpiresUtc` ~30 days
-out; `refreshToken` cookie `Expires` extends to at least 30 days. When false: unchanged
-from today (session cookie, org-configured/default refresh lifetime from task 45's PR #85).
-ClickUp: https://tasks.prospergenics.com/board/Amf7T2YKKv/task/BUvbZzDgH6
+## 2026-09-07 — task 1743 (Remember me login checkbox)
+Done: added a "Remember me" checkbox (unchecked by default) to `LoginPage.tsx`, threaded
+`rememberMe` through `LoginRequest`/`TwoFactorVerifyRequest`/`StepUpVerifyRequest` into
+`AuthController.CompleteLoginAsync(result, rememberMe)`. Checked: `IAM.Session` SignInAsync
+gets `AuthenticationProperties { IsPersistent = true, ExpiresUtc = +30d }`; `refreshToken`
+cookie `Expires` extends to `Math.Max(resolvedRefreshDays, 30)`. Unchecked/omitted: both
+cookies are unchanged from today (session-only `IAM.Session` cookie governed by
+Program.cs's 8h sliding `ExpireTimeSpan`, `refreshToken` uses the org-configured/default
+lifetime from task 45's PR #85). Logout already unconditionally deletes the refresh
+cookie and signs out `IAM.Session` regardless of persistence, so it wasn't touched.
+Verified: `dotnet build` 0 errors; `dotnet test` 138/138 pass (2 pre-existing skips),
+including 3 new `AuthControllerRememberMeTests` integration tests asserting the
+`Set-Cookie` headers directly (refreshToken `Expires`, `IAM.Session`'s presence/absence
+of an `expires` attribute) for rememberMe true/false/omitted. Frontend: `npx tsc -b`
+clean, `npx vitest run` 36/36 pass (2 new + 2 updated in `LoginPage.test.tsx`).
+Left: nothing — 2FA/step-up flows also honor rememberMe (frontend resubmits the checked
+state on the follow-up verify call); `POST /auth/refresh` reissues using the resolved
+`RefreshTokenLifetimeDays` unchanged, since the task's own Done-when/how-to-test only
+scope `POST /auth/login`.

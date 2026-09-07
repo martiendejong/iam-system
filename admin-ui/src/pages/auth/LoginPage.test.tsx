@@ -92,11 +92,38 @@ describe('LoginPage returnUrl navigation', () => {
         email: 'a@b.com',
         password: 'secret',
         returnUrl: '/connect/authorize?client_id=jengo-agi&redirect_uri=%2Fjengo-agi%2F',
+        rememberMe: false,
       })
     );
     await waitFor(() =>
       expect(window.location.href).toBe('/auth/connect/authorize?client_id=jengo-agi&redirect_uri=%2Fjengo-agi%2F')
     );
+  });
+
+  it('passes rememberMe: true to login when the checkbox is checked', async () => {
+    login.mockResolvedValue({ user: { id: '1', email: 'a@b.com' } });
+
+    renderLoginPage('/portal/profile');
+
+    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'a@b.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByLabelText('Remember me'));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() =>
+      expect(login).toHaveBeenCalledWith({
+        email: 'a@b.com',
+        password: 'secret',
+        returnUrl: '/portal/profile',
+        rememberMe: true,
+      })
+    );
+  });
+
+  it('defaults the "Remember me" checkbox to unchecked', () => {
+    renderLoginPage('/portal/profile');
+
+    expect(screen.getByLabelText('Remember me')).not.toBeChecked();
   });
 
   it('performs an in-app navigation to a plain local returnUrl after password login', async () => {
@@ -238,7 +265,7 @@ describe('LoginPage returnUrl navigation', () => {
       fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '654321' } });
       fireEvent.click(screen.getByRole('button', { name: 'Verify and Sign In' }));
 
-      await waitFor(() => expect(mockedApi.verifyLoginTwoFactor).toHaveBeenCalledWith('user-1', '654321'));
+      await waitFor(() => expect(mockedApi.verifyLoginTwoFactor).toHaveBeenCalledWith('user-1', '654321', false));
       await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
       await waitFor(() => expect(screen.getByText('Portal Profile Page')).toBeInTheDocument());
     });
