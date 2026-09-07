@@ -246,3 +246,31 @@ assertions fail against it, then reverted to the fix and re-ran — `dotnet test
 pass (2 pre-existing skips); `dotnet build` 0 errors; frontend unchanged from round 1,
 re-ran `npm run build` (clean), `npx tsc --noEmit` (clean), `npm test` 28/28 pass.
 Left: nothing.
+
+## 2026-09-07 — task 1737 follow-up (Access Matrix manifest used wrong role names for taskmanager)
+Done: PR #96 (already merged) shipped `appsettings.json`'s `taskmanager` manifest entry
+with invented `app:jengowork*` role names. TaskManager registers its own federated role
+catalog at every boot (`POST /api/app-roles/register`, `taskmanager:admin` /
+`product-owner` / `planner` / `refiner` / `developer` / `tester` / `customer` — live on
+`main` since commit `5ac2274`), and `AuthorizationController.Authorize()`'s pre-existing
+per-app gate (merged 2026-08-09, PR #86) blocks sign-in entirely unless the user holds a
+role starting with `"{clientId}:"` once a catalog is registered. `app:jengowork*` never
+matches `"taskmanager:"`, so toggling the JengoWork column in the matrix granted a role
+the sign-in gate never checks — the checkbox did nothing for the user's actual ability to
+sign in, exactly the flagship example in the task's own "How to test". Fixed the manifest
+entry to use the real `taskmanager:*` names (base = `taskmanager:developer`, the other 6
+as permissions) and added a regression test
+(`AccessMatrixTaskmanagerRoleNames_MatchFederatedCatalogPrefix`) asserting every
+taskmanager role name starts with `taskmanager:`. Confirmed `passwordmanager`/`jengo-agi`
+don't self-register a catalog (no `app-roles/register` caller in either repo), so they
+aren't affected; couldn't check jengomail/fedha/ari-chat/jengo-workspace/intranet-portal
+(no local checkout, no repo found under martiendejong/scp-jengo orgs).
+Verified: `dotnet build` 0 errors; `dotnet test tests/IAM.API.Tests` 135/135 pass (2
+pre-existing skips), including the updated + new AccessMatrix tests (12/12).
+Left: separately, `AuthorizationController.Exchange()`'s refresh_token grant reuses the
+stored claims principal with no DB re-fetch of roles — a revoke via the matrix does not
+reliably take effect within the access token's 15-minute lifetime as the matrix's own UI
+text claims ("effective on next token refresh"); it can take up to the 7-day refresh
+token lifetime, or a fresh interactive login. Pre-existing OIDC behavior, not touched by
+this fix — flagged in the ClickUp comment as a follow-up, not fixed here (would need to
+touch the shared token-exchange endpoint used by every relying app).

@@ -41,14 +41,44 @@ public class AccessMatrixControllerTests : IClassFixture<IAMTestWebApplicationFa
         Assert.NotNull(apps);
         Assert.NotEmpty(apps);
 
-        // Manifest entry from appsettings.json: JengoWork with its permission set
-        var jengowork = apps!.FirstOrDefault(a => a.GetProperty("baseRole").GetString() == "app:jengowork");
+        // Manifest entry from appsettings.json: JengoWork with its permission set.
+        // Role names here must match TaskManager's own federated app-role catalog
+        // ("taskmanager:{role}", registered via POST /api/app-roles/register on every
+        // TaskManager boot — see AppRolesController) — NOT an invented "app:jengowork*"
+        // convention, since AuthorizationController.Authorize()'s per-app access gate
+        // matches sign-in against that exact "{clientId}:" prefix once a catalog exists
+        // for the client. See AccessMatrixTaskmanagerRoleNames_MatchFederatedCatalogPrefix
+        // below for the regression guard.
+        var jengowork = apps!.FirstOrDefault(a => a.GetProperty("clientId").GetString() == "taskmanager");
         Assert.NotEqual(JsonValueKind.Undefined, jengowork.ValueKind);
+        Assert.Equal("taskmanager:developer", jengowork.GetProperty("baseRole").GetString());
         var permissions = jengowork.GetProperty("permissions").EnumerateArray()
             .Select(p => p.GetProperty("role").GetString())
             .ToList();
-        Assert.Contains("app:jengowork:admin", permissions);
-        Assert.Contains("app:jengowork:boards:readonly", permissions);
+        Assert.Contains("taskmanager:admin", permissions);
+        Assert.Contains("taskmanager:product-owner", permissions);
+    }
+
+    [Fact]
+    public async Task AccessMatrixTaskmanagerRoleNames_MatchFederatedCatalogPrefix()
+    {
+        // Regression guard for task 1737 follow-up: the "taskmanager" (JengoWork) entry's
+        // baseRole and every permission role must start with "taskmanager:" so that granting
+        // them via the matrix actually satisfies AuthorizationController.Authorize()'s
+        // federated app-role gate (hasAppRole = user has a role starting with "{clientId}:").
+        // A manifest entry using any other naming convention (e.g. "app:jengowork*") looks
+        // fully functional in the matrix UI but grants a role the sign-in gate never checks —
+        // toggling it does nothing for the user's actual ability to sign in to the app.
+        var response = await _superAdminClient.GetAsync("/api/access-matrix/applications");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var apps = await response.Content.ReadFromJsonAsync<List<JsonElement>>();
+
+        var taskmanager = apps!.Single(a => a.GetProperty("clientId").GetString() == "taskmanager");
+        Assert.StartsWith("taskmanager:", taskmanager.GetProperty("baseRole").GetString());
+        foreach (var perm in taskmanager.GetProperty("permissions").EnumerateArray())
+        {
+            Assert.StartsWith("taskmanager:", perm.GetProperty("role").GetString());
+        }
     }
 
     [Fact]
