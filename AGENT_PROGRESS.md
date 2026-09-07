@@ -274,3 +274,11 @@ text claims ("effective on next token refresh"); it can take up to the 7-day ref
 token lifetime, or a fresh interactive login. Pre-existing OIDC behavior, not touched by
 this fix — flagged in the ClickUp comment as a follow-up, not fixed here (would need to
 touch the shared token-exchange endpoint used by every relying app).
+
+## 2026-09-07 — task 1743 (plan)
+Plan: add a `RememberMe` checkbox to `LoginPage.tsx`, thread it through `LoginRequest`/
+`TwoFactorVerifyRequest`/`StepUpVerifyRequest` into `AuthController.CompleteLoginAsync`.
+When true: `IAM.Session` SignInAsync gets `IsPersistent = true` + `ExpiresUtc` ~30 days
+out; `refreshToken` cookie `Expires` extends to at least 30 days. When false: unchanged
+from today (session cookie, org-configured/default refresh lifetime from task 45's PR #85).
+ClickUp: https://tasks.prospergenics.com/board/Amf7T2YKKv/task/BUvbZzDgH6
