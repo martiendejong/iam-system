@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [loginMethod, setLoginMethod] = useState<LoginMethod>('password');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [error, setError] = useState('');
@@ -132,7 +133,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await login({ email, password, returnUrl });
+      const response = await login({ email, password, returnUrl, rememberMe });
       if (response.requiresStepUp) {
         setStepUpRequired(true);
         setMessage('Additional verification required. Check your email for a code.');
@@ -158,7 +159,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await api.verifyStepUp(email, stepUpCode);
+      const response = await api.verifyStepUp(email, stepUpCode, rememberMe);
       if (response.user) {
         setCurrentUser(response.user);
       }
@@ -176,7 +177,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode);
+      const response = await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode, rememberMe);
       if (response.user) {
         setCurrentUser(response.user);
       }
@@ -473,6 +474,19 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                 />
+              </div>
+              <div className="flex items-center">
+                <input
+                  id="remember-me"
+                  name="remember-me"
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                />
+                <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
+                  Remember me
+                </label>
               </div>
             </div>
             <div>

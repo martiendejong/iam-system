@@ -54,6 +54,7 @@ export interface LoginRequest {
   email: string;
   password: string;
   returnUrl?: string;
+  rememberMe?: boolean;
 }
 
 export interface RegisterRequest {
