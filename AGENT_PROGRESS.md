@@ -327,3 +327,31 @@ review" section warns against). No frontend wiring added; `OnboardingController`
 API-only, ready for admin-ui or TaskManager to call. Flagged as a follow-up in the PR body
 rather than filed as a separate task, since it's optional polish on top of a working backend
 capability, not a blocking gap in this task's own Done-when list.
+
+## 2026-09-07 — task 1741 round 2 (fix reviewer-flagged privilege escalation)
+Done: PR #99 got CHANGES REQUESTED — `OnboardingController` granted every self-registering
+customer the seeded `BuildingOwner` role, which `TenantsController`/`RolesController`/
+`InvitationsController`/`PoliciesController` all gate with a bare `[Authorize(Roles =
+"...BuildingOwner...")]` and zero tenant-ownership check in the method body (confirmed:
+`UsersController.cs:257` even has a standing `// TODO: Add tenant-based authorization`
+acknowledging the exact gap platform-wide). That let any new customer list/create/update/
+delete every tenant on the platform and manage every tenant's invitations, not just their
+own. Renamed `OnboardingController.OrganizationOwnerRoleName` from `BuildingOwner` to a new,
+distinct `OrganizationOwner` — not recognized by any existing `[Authorize(Roles=...)]` gate,
+so the auto-granted role has no reach outside this controller's own direct
+`InvitationService` call. The `tenant_id` OIDC claim logic in `AuthorizationController.cs`
+was already correct per the reviewer and is unchanged. Also merged `origin/develop` (PR
+#100 "Remember me", PR #101 rate-limiter config landed after PR #99 opened) — only conflict
+was an `AGENT_PROGRESS.md` append, resolved by keeping both entries.
+Verified: `dotnet build` clean (0 errors); `dotnet test` on the full solution 149 passed /
+3 skipped (2 pre-existing + the same host-only OIDC round-trip skip from round 1) / 0
+failed — includes a new regression test asserting a token holding only `OrganizationOwner`
+gets 403 Forbidden from both `TenantsController.CreateTenant` and
+`InvitationsController.SendInvitation`.
+Left: self-service management of an Organization beyond the initial onboarding call
+(inviting more teammates later, editing org settings) still has no reachable admin
+endpoint for `OrganizationOwner` — by design, since retrofitting real per-tenant checks
+across `TenantsController`/`RolesController`/`InvitationsController`/`PoliciesController`
+is a much larger, separate effort than this task's scope. Flagged in the PR body as a
+follow-up, consistent with the task's own "replacing TaskManager's ProvisionCustomer is a
+future follow-up" framing.

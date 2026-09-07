@@ -58,7 +58,7 @@ public class OnboardingControllerTests : IClassFixture<IAMTestWebApplicationFact
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         var orgId = body.GetProperty("organizationId").GetGuid();
-        Assert.Equal("BuildingOwner", body.GetProperty("role").GetString());
+        Assert.Equal("OrganizationOwner", body.GetProperty("role").GetString());
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
@@ -72,11 +72,49 @@ public class OnboardingControllerTests : IClassFixture<IAMTestWebApplicationFact
             .Include(ur => ur.Role)
             .FirstOrDefaultAsync(ur => ur.UserId == userId && ur.TenantId == orgId);
         Assert.NotNull(ownerAssignment);
-        Assert.Equal("BuildingOwner", ownerAssignment!.Role.Name);
+        Assert.Equal("OrganizationOwner", ownerAssignment!.Role.Name);
 
         var statusResponse = await _client.GetAsync("/api/onboarding/status");
         var statusBody = await statusResponse.Content.ReadFromJsonAsync<JsonElement>();
         Assert.False(statusBody.GetProperty("needsOrganizationSetup").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CreateOrganization_GrantedRole_CannotCreateOrManageOtherTenants()
+    {
+        // Regression test for the privilege-escalation review finding on this task (1741):
+        // OnboardingController used to auto-grant the seeded "BuildingOwner" role, which
+        // every [Authorize(Roles = "...BuildingOwner...")] gate in the app recognizes with
+        // no tenant-ownership check in the method body - letting any self-registered
+        // customer manage every tenant on the platform, not just their own. The onboarding
+        // role must stay unrecognized by those gates.
+        var response = await _client.PostAsJsonAsync("/api/onboarding/organization", new
+        {
+            name = "Acme Escalation Test Org"
+        });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        using var orgOwnerClient = _factory.CreateClient();
+        orgOwnerClient.AddAuthorizationHeader(TestAuthenticationHelper.GenerateJwtToken(
+            Guid.Parse("88888888-8888-8888-8888-888888888888"), "user@test.com", new[] { "OrganizationOwner" }));
+
+        var createTenantResponse = await orgOwnerClient.PostAsJsonAsync("/api/tenants", new
+        {
+            name = "Someone Else's Tenant",
+            type = "Building",
+            parentTenantId = (Guid?)null,
+            metadata = new Dictionary<string, object>(),
+            settings = new Dictionary<string, object>()
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, createTenantResponse.StatusCode);
+
+        var sendInvitationResponse = await orgOwnerClient.PostAsJsonAsync("/api/invitations", new
+        {
+            email = "victim@example.com",
+            tenantId = Guid.NewGuid(),
+            roleId = Guid.NewGuid()
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, sendInvitationResponse.StatusCode);
     }
 
     [Fact]

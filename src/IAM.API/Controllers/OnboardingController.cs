@@ -23,12 +23,23 @@ namespace IAM.API.Controllers;
 public class OnboardingController : ControllerBase
 {
     /// <summary>
-    /// Global role name granted to the creator of a new Organization. Reuses the role
-    /// name already recognized by TenantsController/InvitationsController's own
-    /// [Authorize(Roles = "...BuildingOwner...")] gates rather than inventing a new one,
-    /// so the new owner can immediately manage their tenant through those endpoints.
+    /// Global role name granted to the creator of a new Organization. MUST NOT be a name
+    /// recognized by any existing [Authorize(Roles = "...")] gate (e.g. "BuildingOwner",
+    /// "BuildingManager") — those gates check the role name only, with no tenant
+    /// comparison against the resource being acted on (TenantsController.CreateTenant/
+    /// UpdateTenant/GetMembers/ChangeMemberRole/RemoveMember, RolesController.CreateRole,
+    /// InvitationsController.SendInvitation/GetInvitations/RevokeInvitation,
+    /// PoliciesController — see UsersController.cs:257's own "TODO: Add tenant-based
+    /// authorization" acknowledging the gap). Auto-granting "BuildingOwner" here would let
+    /// any self-registering customer immediately list/create/update/delete every tenant on
+    /// the platform and manage every tenant's invitations, not just their own new one — a
+    /// live privilege-escalation bug caught in review on this task (1741). Self-service
+    /// management of an Organization beyond this onboarding call (inviting more teammates
+    /// later, updating org settings) needs those endpoints retrofitted with real per-tenant
+    /// checks first; until then this role intentionally has no reach outside this
+    /// controller's own direct service calls.
     /// </summary>
-    public const string OrganizationOwnerRoleName = "BuildingOwner";
+    public const string OrganizationOwnerRoleName = "OrganizationOwner";
 
     private readonly IAMDbContext _context;
     private readonly IInvitationService _invitationService;
@@ -63,9 +74,11 @@ public class OnboardingController : ControllerBase
 
     /// <summary>
     /// Guided step: create the caller's Organization and, optionally, invite the first
-    /// teammate to it in the same call. The caller becomes that org's owner (BuildingOwner,
-    /// scoped to the new tenant) so they can immediately manage it through the existing
-    /// Tenants/Invitations admin endpoints - no separate approval step needed.
+    /// teammate to it in the same call. The caller becomes that org's owner
+    /// (OrganizationOwnerRoleName, scoped to the new tenant) - no separate approval step
+    /// needed. The invite (if requested) is sent here via a direct InvitationService call,
+    /// not through InvitationsController's HTTP endpoint, so it works regardless of which
+    /// admin endpoints the new role name happens to be recognized by.
     /// </summary>
     [HttpPost("organization")]
     public async Task<IActionResult> CreateOrganization([FromBody] CreateOrganizationRequest request)
@@ -94,8 +107,9 @@ public class OnboardingController : ControllerBase
             ownerRole = new Role
             {
                 Name = OrganizationOwnerRoleName,
-                Description = "Owns and administers an Organization tenant",
+                Description = "Owns a self-service Organization tenant created via onboarding",
                 IsSystemRole = true,
+                Permissions = @"[""Organization.ManageOwn"",""User.InviteOwn""]",
                 TenantId = null
             };
             _context.Roles.Add(ownerRole);
