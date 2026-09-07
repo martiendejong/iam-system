@@ -276,10 +276,34 @@ this fix — flagged in the ClickUp comment as a follow-up, not fixed here (woul
 touch the shared token-exchange endpoint used by every relying app).
 
 ## 2026-09-07 — task 1741 (tenant-scoped OIDC login claims for external customer apps)
-Started: plan is (1) AuthorizationController.Authorize() adds a tenant_id claim to the
-login token when the user's app-scoped role (e.g. taskmanager:customer) is tenant-scoped,
-mirroring ApiKeyAuthenticationMiddleware/ServiceAccountService/DeviceAuthenticationService's
-existing tenant_id claim; (2) new OnboardingController reusing InvitationService so a
-freshly self-registered user (no tenant, no admin role — CreateTenant/SendInvitation both
-require SuperAdmin/BuildingOwner today) can create their own Organization tenant and invite
-a teammate. In progress.
+Done: `AuthorizationController.Authorize()` resolves a `tenant_id` claim from the
+UserRole matching the signed-in app's role prefix (e.g. `taskmanager:`) and adds it to
+both the access and identity token when that assignment is tenant-scoped — mirroring the
+`tenant_id` claim `ApiKeyAuthenticationMiddleware`/`ServiceAccountService`/
+`DeviceAuthenticationService` already issue for machine auth, extended to human logins.
+Extracted the resolution into `AuthorizationController.ResolveAppRoleTenantId` (public
+static) for unit testing. New `OnboardingController` (`POST /api/onboarding/organization`,
+`GET /api/onboarding/status`) reuses `InvitationService` end to end so a freshly
+self-registered user — who holds no roles at all, so `TenantsController.CreateTenant` /
+`InvitationsController.SendInvitation` are both unreachable (SuperAdmin/BuildingOwner only)
+— can create their own Organization (grants themselves `BuildingOwner` scoped to the new
+tenant) and invite a teammate in one call.
+Verified: `dotnet build` clean, `dotnet test` 144 passed / 3 skipped (2 pre-existing +
+1 new) / 0 failed. New coverage: 5 unit tests on `ResolveAppRoleTenantId`, 4 integration
+tests on the onboarding endpoints, plus a real `/api/auth/login` → `/connect/authorize` →
+`/connect/token` round-trip test that decodes the issued `id_token` and asserts both the
+`role` and `tenant_id` claims — this one is `[Fact(Skip=...)]` on this host only: it hit
+`CryptographicException: Keyset does not exist` deep inside OpenIddict's own
+`AddDevelopmentSigningCertificate` signing path (a pre-existing Windows CNG limitation —
+no other test in the suite drives real OIDC token issuance either; the sibling
+`ServiceAccountProvisioningTests` uses hand-built HMAC JWTs that bypass OpenIddict signing
+entirely). The failure occurs strictly after this change's own code (the app-role gate +
+tenant claim resolution) already ran without error, so it doesn't cast doubt on the change
+itself, just proves this host can't execute a real in-process OIDC token issuance right now.
+Left: self-registration's "AI-guided" framing is interpreted narrowly here — a concrete,
+working create-org-and-invite sequence, not a chat/wizard UI (none exists in this repo to
+extend, and building one felt like exactly the "speculative product" the task's own "How to
+review" section warns against). No frontend wiring added; `OnboardingController` is
+API-only, ready for admin-ui or TaskManager to call. Flagged as a follow-up in the PR body
+rather than filed as a separate task, since it's optional polish on top of a working backend
+capability, not a blocking gap in this task's own Done-when list.
