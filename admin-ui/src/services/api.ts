@@ -79,8 +79,8 @@ class ApiService {
     return response.data;
   }
 
-  async verifyStepUp(email: string, code: string): Promise<LoginResponse> {
-    const response = await this.client.post<LoginResponse>('/auth/step-up/verify', { email, code });
+  async verifyStepUp(email: string, code: string, rememberMe = false): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/step-up/verify', { email, code, rememberMe });
     if (response.data.accessToken) {
       localStorage.setItem('accessToken', response.data.accessToken);
     }
@@ -91,8 +91,8 @@ class ApiService {
     await this.client.post('/auth/register', data);
   }
 
-  async verifyLoginTwoFactor(userId: string, code: string): Promise<LoginResponse> {
-    const response = await this.client.post<LoginResponse>('/auth/2fa/verify', { userId, code });
+  async verifyLoginTwoFactor(userId: string, code: string, rememberMe = false): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/2fa/verify', { userId, code, rememberMe });
     if (response.data.accessToken) {
       localStorage.setItem('accessToken', response.data.accessToken);
     }
