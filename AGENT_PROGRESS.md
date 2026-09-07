@@ -274,3 +274,12 @@ text claims ("effective on next token refresh"); it can take up to the 7-day ref
 token lifetime, or a fresh interactive login. Pre-existing OIDC behavior, not touched by
 this fix — flagged in the ClickUp comment as a follow-up, not fixed here (would need to
 touch the shared token-exchange endpoint used by every relying app).
+
+## 2026-09-07 — task 1741 (tenant-scoped OIDC login claims for external customer apps)
+Started: plan is (1) AuthorizationController.Authorize() adds a tenant_id claim to the
+login token when the user's app-scoped role (e.g. taskmanager:customer) is tenant-scoped,
+mirroring ApiKeyAuthenticationMiddleware/ServiceAccountService/DeviceAuthenticationService's
+existing tenant_id claim; (2) new OnboardingController reusing InvitationService so a
+freshly self-registered user (no tenant, no admin role — CreateTenant/SendInvitation both
+require SuperAdmin/BuildingOwner today) can create their own Organization tenant and invite
+a teammate. In progress.
