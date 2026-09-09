@@ -227,6 +227,14 @@ public class AuthService : IAuthService
         // defaults when the user has no tenant or the tenant has no Token Configuration)
         var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
 
+        // Apply the "Remember me" floor at issuance too, not just on the cookie -
+        // otherwise a remembered session that never triggers a refresh before the
+        // org's shorter default lifetime elapses gets rejected early.
+        if (rememberMe)
+        {
+            refreshDays = Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays);
+        }
+
         // Generate refresh token first (needed for token binding)
         var refreshToken = GenerateRefreshToken();
         var refreshTokenId = Guid.NewGuid();
@@ -449,6 +457,14 @@ public class AuthService : IAuthService
         // Resolve this organization's configured token lifetime (falls back to today's
         // defaults when the user has no tenant or the tenant has no Token Configuration)
         var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
+
+        // Apply the "Remember me" floor at issuance too, not just on the cookie -
+        // otherwise a remembered session that never triggers a refresh before the
+        // org's shorter default lifetime elapses gets rejected early.
+        if (rememberMe)
+        {
+            refreshDays = Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays);
+        }
 
         // Generate refresh token
         var refreshToken = GenerateRefreshToken();

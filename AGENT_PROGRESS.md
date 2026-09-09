@@ -327,3 +327,25 @@ ran the migration's `ADD COLUMN` inside an explicit `BEGIN`/`ROLLBACK` against `
 directly — all 239 existing rows defaulted to `false` correctly, then rolled back with
 zero persisted change.
 Left: nothing for this task's scope.
+
+## 2026-09-09 — task 2977 round 2 (review fix: floor the very first login-issued token too)
+
+Done: PR #102 review found the rotation fix (round 1, above) never floored the *first*
+token issued at login — only the `Set-Cookie` header said 30 days, while the stored
+`RefreshToken` row got the org's shorter default (7 days), so a remember-me user who
+never triggers a single `/auth/refresh` before that default elapses gets rejected anyway
+(`Invalid or expired refresh token`) — the exact bug this task exists to close, reached
+without a prior rotation instead of after several. Applied the reviewer's exact fix,
+mirroring `RefreshTokenAsync`'s existing floor pattern: `LoginAsync` and
+`LoginBypassPasswordAsync` (covers `CompletePasswordlessLoginAsync`, `VerifyStepUpAsync`,
+`VerifyLoginTwoFactorAsync` — all three route through it) now apply
+`Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays)` when `rememberMe` before
+building the `RefreshToken` entity, so the DB row and the cookie never disagree again.
+Added a regression test reading the stored entity directly (not just the cookie) so this
+exact class of bug — cookie right, DB row wrong — fails loudly if it recurs.
+Verified: `dotnet build` clean (0 errors). `dotnet test`: `AuthControllerRememberMeTests`
+6/6 pass (1 new: `Login_WithRememberMeTrue_StoresRefreshTokenRowExpiringAtLeast30DaysOut`).
+Full `IAM.API.Tests` suite: 141 passed / 2 skipped (pre-existing) / 0 failed. No schema
+change this round — the `RememberMe` column and its additive migration from round 1 are
+unchanged and were already verified against the real dev `iam_db`.
+Left: nothing for this task's scope.

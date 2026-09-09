@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using IAM.API.Tests.Infrastructure;
+using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace IAM.API.Tests.Controllers;
@@ -154,6 +157,41 @@ public class AuthControllerRememberMeTests : IClassFixture<IAMTestWebApplication
 
         var sessionCookie = GetCookie(response, "IAM.Session");
         Assert.DoesNotContain("expires=", sessionCookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Task 2977 review follow-up: the very first token issued at login must be floored
+    /// server-side in the database, not just reflected in the Set-Cookie header - a
+    /// remembered session that never triggers a refresh before the org's shorter default
+    /// lifetime elapses must still survive, since /auth/refresh validates against the
+    /// stored RefreshToken row's own ExpiresAt, not the cookie's claimed expiry.
+    /// </summary>
+    [Fact]
+    public async Task Login_WithRememberMeTrue_StoresRefreshTokenRowExpiringAtLeast30DaysOut()
+    {
+        var email = "remember.me.dbrow@test.com";
+        await CreateActiveUserAsync(email, "DbRow!RememberMe1");
+        var client = CreateRawCookieClient();
+
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            email,
+            password = "DbRow!RememberMe1",
+            rememberMe = true
+        });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+        var storedToken = await db.RefreshTokens
+            .Where(t => t.User!.Email == email)
+            .OrderByDescending(t => t.ExpiresAt)
+            .FirstOrDefaultAsync();
+
+        Assert.NotNull(storedToken);
+        Assert.True((storedToken!.ExpiresAt - DateTime.UtcNow).TotalDays >= 29.5,
+            $"Expected the stored RefreshToken row to expire >= ~30 days out when rememberMe=true, got {storedToken.ExpiresAt}");
+        Assert.True(storedToken.RememberMe);
     }
 
     /// <summary>
