@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using IAM.Core;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -114,7 +115,7 @@ public class AuthService : IAuthService
         };
     }
 
-    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null)
+    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
         var user = await _context.Users
             .Include(u => u.UserRoles)
@@ -226,6 +227,14 @@ public class AuthService : IAuthService
         // defaults when the user has no tenant or the tenant has no Token Configuration)
         var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
 
+        // Apply the "Remember me" floor at issuance too, not just on the cookie -
+        // otherwise a remembered session that never triggers a refresh before the
+        // org's shorter default lifetime elapses gets rejected early.
+        if (rememberMe)
+        {
+            refreshDays = Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays);
+        }
+
         // Generate refresh token first (needed for token binding)
         var refreshToken = GenerateRefreshToken();
         var refreshTokenId = Guid.NewGuid();
@@ -238,7 +247,8 @@ public class AuthService : IAuthService
             TokenHash = HashToken(refreshToken),
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress,  // Device fingerprinting
-            UserAgent = userAgent   // Device fingerprinting
+            UserAgent = userAgent,  // Device fingerprinting
+            RememberMe = rememberMe
         };
 
         _context.RefreshTokens.Add(refreshTokenEntity);
@@ -304,6 +314,15 @@ public class AuthService : IAuthService
         // defaults when the user has no tenant or the tenant has no Token Configuration)
         var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(storedToken.UserId);
 
+        // Preserve the "Remember me" floor across rotation: read the flag off the token
+        // being rotated FROM (never a client-supplied value - it isn't spoofable this way),
+        // and re-apply the minimum on every rotation so a remembered session never drops
+        // below it just because it keeps refreshing.
+        if (storedToken.RememberMe)
+        {
+            refreshDays = Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays);
+        }
+
         // Generate new refresh token (rotation)
         var newRefreshToken = GenerateRefreshToken();
         var newRefreshTokenId = Guid.NewGuid();
@@ -316,7 +335,8 @@ public class AuthService : IAuthService
             TokenHash = HashToken(newRefreshToken),
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress ?? storedToken.IpAddress,    // Use new IP or fall back to original
-            UserAgent = userAgent ?? storedToken.UserAgent     // Use new UA or fall back to original
+            UserAgent = userAgent ?? storedToken.UserAgent,    // Use new UA or fall back to original
+            RememberMe = storedToken.RememberMe                // Carry the choice forward through rotation
         };
 
         _context.RefreshTokens.Add(newRefreshTokenEntity);
@@ -417,7 +437,7 @@ public class AuthService : IAuthService
         return true;
     }
 
-    public async Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null)
+    public async Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
     {
         if (!user.IsActive)
         {
@@ -438,6 +458,14 @@ public class AuthService : IAuthService
         // defaults when the user has no tenant or the tenant has no Token Configuration)
         var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
 
+        // Apply the "Remember me" floor at issuance too, not just on the cookie -
+        // otherwise a remembered session that never triggers a refresh before the
+        // org's shorter default lifetime elapses gets rejected early.
+        if (rememberMe)
+        {
+            refreshDays = Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays);
+        }
+
         // Generate refresh token
         var refreshToken = GenerateRefreshToken();
         var refreshTokenId = Guid.NewGuid();
@@ -449,7 +477,8 @@ public class AuthService : IAuthService
             TokenHash = HashToken(refreshToken),
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress,
-            UserAgent = userAgent
+            UserAgent = userAgent,
+            RememberMe = rememberMe
         };
 
         _context.RefreshTokens.Add(refreshTokenEntity);
@@ -468,7 +497,7 @@ public class AuthService : IAuthService
         };
     }
 
-    public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null)
+    public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
@@ -482,10 +511,10 @@ public class AuthService : IAuthService
             };
         }
 
-        return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
-    public async Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null)
+    public async Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
     {
         var valid = await _otpService.ValidateOtpAsync(email, null, code, OtpPurpose.MfaVerification);
 
@@ -512,10 +541,10 @@ public class AuthService : IAuthService
             };
         }
 
-        return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
-    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null)
+    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
     {
         var user = await _context.Users
             .Include(u => u.UserRoles)
@@ -542,7 +571,7 @@ public class AuthService : IAuthService
             };
         }
 
-        return await LoginBypassPasswordAsync(user, ipAddress, userAgent);
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
     public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null)

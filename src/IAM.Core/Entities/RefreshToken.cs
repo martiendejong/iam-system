@@ -1,5 +1,7 @@
 namespace IAM.Core.Entities;
 
+using IAM.Core;
+
 public class RefreshToken
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -25,6 +27,14 @@ public class RefreshToken
     /// User agent where token was created
     /// </summary>
     public string? UserAgent { get; set; }
+
+    /// <summary>
+    /// True when the session this token belongs to was created (or last rotated) with
+    /// "Remember me" checked. Carried forward onto each newly-issued token on rotation
+    /// so <see cref="AuthConstants.RememberMeMinimumDays"/> keeps applying for as long as
+    /// the user keeps refreshing, not just at the original login.
+    /// </summary>
+    public bool RememberMe { get; set; }
 
     public bool IsExpired => DateTime.UtcNow >= ExpiresAt;
     public bool IsRevoked => RevokedAt.HasValue;

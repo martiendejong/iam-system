@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.Core;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
@@ -58,7 +59,7 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.LoginAsync(request.Email, request.Password, ipAddress, userAgent, request.ReturnUrl);
+        var result = await _authService.LoginAsync(request.Email, request.Password, ipAddress, userAgent, request.ReturnUrl, request.RememberMe);
 
         if (!result.Success)
         {
@@ -94,7 +95,7 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.VerifyLoginTwoFactorAsync(request.UserId, request.Code, ipAddress, userAgent);
+        var result = await _authService.VerifyLoginTwoFactorAsync(request.UserId, request.Code, ipAddress, userAgent, request.RememberMe);
 
         if (!result.Success)
         {
@@ -113,21 +114,14 @@ public class AuthController : ControllerBase
         return Ok(new { message = "If two-factor authentication is enabled for this account, a new code has been sent." });
     }
 
-    /// <summary>
-    /// Minimum refresh-token / session cookie lifetime, in days, when the user checked
-    /// "Remember me" - guarantees at least this long even if the organization's Token
-    /// Configuration (or today's default) is shorter, without shrinking a longer one.
-    /// </summary>
-    private const int RememberMeMinimumDays = 30;
-
     private async Task<IActionResult> CompleteLoginAsync(AuthResult result, bool rememberMe = false)
     {
         // Set refresh token in HttpOnly cookie - Expires mirrors the refresh token's own
         // lifetime (the organization's Token Configuration when one exists, otherwise
         // today's default) so the cookie never outlives, or expires before, the token it carries.
-        // "Remember me" extends this to at least RememberMeMinimumDays.
+        // "Remember me" extends this to at least AuthConstants.RememberMeMinimumDays.
         var refreshDays = rememberMe
-            ? Math.Max(result.RefreshTokenLifetimeDays, RememberMeMinimumDays)
+            ? Math.Max(result.RefreshTokenLifetimeDays, AuthConstants.RememberMeMinimumDays)
             : result.RefreshTokenLifetimeDays;
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
         {
@@ -141,7 +135,8 @@ public class AuthController : ControllerBase
         // without requiring a Bearer token in the browser request. Unchecked "Remember me"
         // keeps today's behavior: a non-persistent cookie whose ticket still expires after
         // Program.cs's sliding ExpireTimeSpan. Checked: a persistent cookie that survives
-        // closing the browser and is valid for RememberMeMinimumDays regardless of activity.
+        // closing the browser and is valid for AuthConstants.RememberMeMinimumDays regardless
+        // of activity.
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
@@ -153,7 +148,7 @@ public class AuthController : ControllerBase
             ? new AuthenticationProperties
             {
                 IsPersistent = true,
-                ExpiresUtc = DateTimeOffset.UtcNow.AddDays(RememberMeMinimumDays)
+                ExpiresUtc = DateTimeOffset.UtcNow.AddDays(AuthConstants.RememberMeMinimumDays)
             }
             : new AuthenticationProperties();
         await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity), authProperties);
@@ -181,7 +176,7 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.VerifyStepUpAsync(request.Email, request.Code, ipAddress, userAgent);
+        var result = await _authService.VerifyStepUpAsync(request.Email, request.Code, ipAddress, userAgent, request.RememberMe);
 
         if (!result.Success)
         {
