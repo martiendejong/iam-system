@@ -295,6 +295,67 @@ state on the follow-up verify call); `POST /auth/refresh` reissues using the res
 `RefreshTokenLifetimeDays` unchanged, since the task's own Done-when/how-to-test only
 scope `POST /auth/login`.
 
+## 2026-09-07 — task 1741 (tenant-scoped OIDC login claims for external customer apps)
+Done: `AuthorizationController.Authorize()` resolves a `tenant_id` claim from the
+UserRole matching the signed-in app's role prefix (e.g. `taskmanager:`) and adds it to
+both the access and identity token when that assignment is tenant-scoped — mirroring the
+`tenant_id` claim `ApiKeyAuthenticationMiddleware`/`ServiceAccountService`/
+`DeviceAuthenticationService` already issue for machine auth, extended to human logins.
+Extracted the resolution into `AuthorizationController.ResolveAppRoleTenantId` (public
+static) for unit testing. New `OnboardingController` (`POST /api/onboarding/organization`,
+`GET /api/onboarding/status`) reuses `InvitationService` end to end so a freshly
+self-registered user — who holds no roles at all, so `TenantsController.CreateTenant` /
+`InvitationsController.SendInvitation` are both unreachable (SuperAdmin/BuildingOwner only)
+— can create their own Organization (grants themselves `BuildingOwner` scoped to the new
+tenant) and invite a teammate in one call.
+Verified: `dotnet build` clean, `dotnet test` 144 passed / 3 skipped (2 pre-existing +
+1 new) / 0 failed. New coverage: 5 unit tests on `ResolveAppRoleTenantId`, 4 integration
+tests on the onboarding endpoints, plus a real `/api/auth/login` → `/connect/authorize` →
+`/connect/token` round-trip test that decodes the issued `id_token` and asserts both the
+`role` and `tenant_id` claims — this one is `[Fact(Skip=...)]` on this host only: it hit
+`CryptographicException: Keyset does not exist` deep inside OpenIddict's own
+`AddDevelopmentSigningCertificate` signing path (a pre-existing Windows CNG limitation —
+no other test in the suite drives real OIDC token issuance either; the sibling
+`ServiceAccountProvisioningTests` uses hand-built HMAC JWTs that bypass OpenIddict signing
+entirely). The failure occurs strictly after this change's own code (the app-role gate +
+tenant claim resolution) already ran without error, so it doesn't cast doubt on the change
+itself, just proves this host can't execute a real in-process OIDC token issuance right now.
+Left: self-registration's "AI-guided" framing is interpreted narrowly here — a concrete,
+working create-org-and-invite sequence, not a chat/wizard UI (none exists in this repo to
+extend, and building one felt like exactly the "speculative product" the task's own "How to
+review" section warns against). No frontend wiring added; `OnboardingController` is
+API-only, ready for admin-ui or TaskManager to call. Flagged as a follow-up in the PR body
+rather than filed as a separate task, since it's optional polish on top of a working backend
+capability, not a blocking gap in this task's own Done-when list.
+
+## 2026-09-07 — task 1741 round 2 (fix reviewer-flagged privilege escalation)
+Done: PR #99 got CHANGES REQUESTED — `OnboardingController` granted every self-registering
+customer the seeded `BuildingOwner` role, which `TenantsController`/`RolesController`/
+`InvitationsController`/`PoliciesController` all gate with a bare `[Authorize(Roles =
+"...BuildingOwner...")]` and zero tenant-ownership check in the method body (confirmed:
+`UsersController.cs:257` even has a standing `// TODO: Add tenant-based authorization`
+acknowledging the exact gap platform-wide). That let any new customer list/create/update/
+delete every tenant on the platform and manage every tenant's invitations, not just their
+own. Renamed `OnboardingController.OrganizationOwnerRoleName` from `BuildingOwner` to a new,
+distinct `OrganizationOwner` — not recognized by any existing `[Authorize(Roles=...)]` gate,
+so the auto-granted role has no reach outside this controller's own direct
+`InvitationService` call. The `tenant_id` OIDC claim logic in `AuthorizationController.cs`
+was already correct per the reviewer and is unchanged. Also merged `origin/develop` (PR
+#100 "Remember me", PR #101 rate-limiter config landed after PR #99 opened) — only conflict
+was an `AGENT_PROGRESS.md` append, resolved by keeping both entries.
+Verified: `dotnet build` clean (0 errors); `dotnet test` on the full solution 149 passed /
+3 skipped (2 pre-existing + the same host-only OIDC round-trip skip from round 1) / 0
+failed — includes a new regression test asserting a token holding only `OrganizationOwner`
+gets 403 Forbidden from both `TenantsController.CreateTenant` and
+`InvitationsController.SendInvitation`.
+Left: self-service management of an Organization beyond the initial onboarding call
+(inviting more teammates later, editing org settings) still has no reachable admin
+endpoint for `OrganizationOwner` — by design, since retrofitting real per-tenant checks
+across `TenantsController`/`RolesController`/`InvitationsController`/`PoliciesController`
+is a much larger, separate effort than this task's scope. Flagged in the PR body as a
+follow-up, consistent with the task's own "replacing TaskManager's ProvisionCustomer is a
+future follow-up" framing.
+
 ## 2026-09-09 — task 2977 (remember-me floor lost on refresh rotation)
 Done: added `RefreshToken.RememberMe` (additive migration
 `20260909070000_AddRememberMeToRefreshTokens`), set from `AuthService.LoginAsync`. Moved
