@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using IAM.API.Tests.Infrastructure;
+using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace IAM.API.Tests.Controllers;
@@ -71,6 +74,12 @@ public class AuthControllerRememberMeTests : IClassFixture<IAMTestWebApplication
             .FirstOrDefault(p => p.StartsWith("expires=", StringComparison.OrdinalIgnoreCase));
         Assert.True(part != null, $"Expected an 'expires' attribute on cookie: {setCookieHeader}");
         return DateTimeOffset.Parse(part!.Substring("expires=".Length));
+    }
+
+    private static string ParseCookieNameValue(string setCookieHeader)
+    {
+        // The "name=value" pair is always the first ';'-delimited segment of a Set-Cookie header.
+        return setCookieHeader.Split(';')[0].Trim();
     }
 
     [Fact]
@@ -148,5 +157,108 @@ public class AuthControllerRememberMeTests : IClassFixture<IAMTestWebApplication
 
         var sessionCookie = GetCookie(response, "IAM.Session");
         Assert.DoesNotContain("expires=", sessionCookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Task 2977 review follow-up: the very first token issued at login must be floored
+    /// server-side in the database, not just reflected in the Set-Cookie header - a
+    /// remembered session that never triggers a refresh before the org's shorter default
+    /// lifetime elapses must still survive, since /auth/refresh validates against the
+    /// stored RefreshToken row's own ExpiresAt, not the cookie's claimed expiry.
+    /// </summary>
+    [Fact]
+    public async Task Login_WithRememberMeTrue_StoresRefreshTokenRowExpiringAtLeast30DaysOut()
+    {
+        var email = "remember.me.dbrow@test.com";
+        await CreateActiveUserAsync(email, "DbRow!RememberMe1");
+        var client = CreateRawCookieClient();
+
+        var response = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            email,
+            password = "DbRow!RememberMe1",
+            rememberMe = true
+        });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+        var storedToken = await db.RefreshTokens
+            .Where(t => t.User!.Email == email)
+            .OrderByDescending(t => t.ExpiresAt)
+            .FirstOrDefaultAsync();
+
+        Assert.NotNull(storedToken);
+        Assert.True((storedToken!.ExpiresAt - DateTime.UtcNow).TotalDays >= 29.5,
+            $"Expected the stored RefreshToken row to expire >= ~30 days out when rememberMe=true, got {storedToken.ExpiresAt}");
+        Assert.True(storedToken.RememberMe);
+    }
+
+    /// <summary>
+    /// Task 2977: the remember-me floor must survive POST /auth/refresh's token rotation,
+    /// not just the original login - a remembered session that keeps refreshing should
+    /// never drop back to the org-configured/default lifetime.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_AfterRememberMeLogin_KeepsRefreshCookieExpiryAtLeast30DaysOut()
+    {
+        var email = "remember.me.refresh@test.com";
+        await CreateActiveUserAsync(email, "R3fresh!RememberMe1");
+        var client = CreateRawCookieClient();
+
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            email,
+            password = "R3fresh!RememberMe1",
+            rememberMe = true
+        });
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+
+        var loginRefreshCookie = ParseCookieNameValue(GetCookie(loginResponse, "refreshToken"));
+
+        var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh");
+        refreshRequest.Headers.Add("Cookie", loginRefreshCookie);
+        var refreshResponse = await client.SendAsync(refreshRequest);
+        Assert.Equal(HttpStatusCode.OK, refreshResponse.StatusCode);
+
+        var rotatedRefreshCookie = GetCookie(refreshResponse, "refreshToken");
+        var rotatedExpires = ParseExpiresAttribute(rotatedRefreshCookie);
+        Assert.True((rotatedExpires - DateTimeOffset.UtcNow).TotalDays >= 29.5,
+            $"Expected the rotated refreshToken to still expire >= ~30 days out after a remember-me login, got {rotatedExpires}");
+    }
+
+    /// <summary>
+    /// Task 2977 regression check: a refresh chained from a non-remember-me login must
+    /// keep using the org-configured/default lifetime - the floor must not leak in.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_AfterNonRememberMeLogin_KeepsTodaysDefaultRefreshLifetime()
+    {
+        var email = "remember.me.refresh.unchecked@test.com";
+        await CreateActiveUserAsync(email, "N0Refresh!RememberMe1");
+        var client = CreateRawCookieClient();
+
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            email,
+            password = "N0Refresh!RememberMe1",
+            rememberMe = false
+        });
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+
+        var loginRefreshCookie = ParseCookieNameValue(GetCookie(loginResponse, "refreshToken"));
+
+        var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh");
+        refreshRequest.Headers.Add("Cookie", loginRefreshCookie);
+        var refreshResponse = await client.SendAsync(refreshRequest);
+        Assert.Equal(HttpStatusCode.OK, refreshResponse.StatusCode);
+
+        var rotatedRefreshCookie = GetCookie(refreshResponse, "refreshToken");
+        var rotatedExpires = ParseExpiresAttribute(rotatedRefreshCookie);
+        // No TokenConfiguration exists for this fresh user/tenant, so today's 7-day
+        // default applies, same as at login - proving the 30-day floor did not leak
+        // into a session that never checked "Remember me".
+        Assert.True((rotatedExpires - DateTimeOffset.UtcNow).TotalDays < 29.5,
+            $"Expected the rotated refreshToken to keep today's short default when the original login had rememberMe=false, got {rotatedExpires}");
     }
 }

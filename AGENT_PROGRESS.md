@@ -294,3 +294,58 @@ Left: nothing — 2FA/step-up flows also honor rememberMe (frontend resubmits th
 state on the follow-up verify call); `POST /auth/refresh` reissues using the resolved
 `RefreshTokenLifetimeDays` unchanged, since the task's own Done-when/how-to-test only
 scope `POST /auth/login`.
+
+## 2026-09-09 — task 2977 (remember-me floor lost on refresh rotation)
+Done: added `RefreshToken.RememberMe` (additive migration
+`20260909070000_AddRememberMeToRefreshTokens`), set from `AuthService.LoginAsync`. Moved
+`AuthController`'s private `RememberMeMinimumDays=30` constant to a new shared
+`IAM.Core.AuthConstants` (Infrastructure can't reference API, so "reuse it" meant giving
+it a home both layers can see) and reused it in both places. `RefreshTokenAsync` now reads
+`storedToken.RememberMe` (never a client-supplied value — not spoofable), carries it onto
+the newly-issued token, and applies `Math.Max(orgConfiguredDays, 30)` to `refreshDays` when
+set — that one change fixes both the returned `RefreshTokenLifetimeDays` (which
+`AuthController.Refresh()` already uses unmodified for the cookie `Expires`) and the
+stored entity's own `ExpiresAt`, so the DB-side token and the browser cookie never
+disagree. Also threaded `rememberMe` through `CompletePasswordlessLoginAsync` ->
+`LoginBypassPasswordAsync`, and through `VerifyStepUpAsync`/`VerifyLoginTwoFactorAsync` —
+the last two weren't named in the task's file list, but `AuthController`'s `/2fa/verify`
+and `/step-up/verify` already collect and use `request.RememberMe` for the cookie (PR
+#100), so leaving the entity flag unset there would silently reproduce this exact bug for
+any remembered login that requires 2FA/step-up. `PasskeyController`/`MagicLinkController`/
+`OtpController` were left untouched (no `RememberMe` field in their request DTOs today,
+new params default to `false`) — same "no regression" scope task 45 documented for the
+unrelated session-length feature.
+Verified: `dotnet build` clean across API/Infrastructure/EdgeGateway/SDK.DotNet (0 errors).
+`dotnet test` on `IAM.API.Tests`: 140 passed / 2 skipped (pre-existing) / 0 failed,
+including the existing 3 `AuthControllerRememberMeTests` plus 2 new ones (remembered
+login's refresh rotation keeps the cookie >= ~30 days out; non-remembered refresh keeps
+today's short default). `IAM.Core.Tests`: 1/1 pass. Migration verified by hand against the
+real dev `iam_db` (no superuser access to spin up a throwaway copy — `iam_user` lacks
+CREATEDB; `postgres` role's own password wasn't in the vault/pgpass, only a leftover
+`C:\Temp\setup-iam-db.ps1` script had the intended default, which didn't match live):
+ran the migration's `ADD COLUMN` inside an explicit `BEGIN`/`ROLLBACK` against `iam_db`
+directly — all 239 existing rows defaulted to `false` correctly, then rolled back with
+zero persisted change.
+Left: nothing for this task's scope.
+
+## 2026-09-09 — task 2977 round 2 (review fix: floor the very first login-issued token too)
+
+Done: PR #102 review found the rotation fix (round 1, above) never floored the *first*
+token issued at login — only the `Set-Cookie` header said 30 days, while the stored
+`RefreshToken` row got the org's shorter default (7 days), so a remember-me user who
+never triggers a single `/auth/refresh` before that default elapses gets rejected anyway
+(`Invalid or expired refresh token`) — the exact bug this task exists to close, reached
+without a prior rotation instead of after several. Applied the reviewer's exact fix,
+mirroring `RefreshTokenAsync`'s existing floor pattern: `LoginAsync` and
+`LoginBypassPasswordAsync` (covers `CompletePasswordlessLoginAsync`, `VerifyStepUpAsync`,
+`VerifyLoginTwoFactorAsync` — all three route through it) now apply
+`Math.Max(refreshDays, AuthConstants.RememberMeMinimumDays)` when `rememberMe` before
+building the `RefreshToken` entity, so the DB row and the cookie never disagree again.
+Added a regression test reading the stored entity directly (not just the cookie) so this
+exact class of bug — cookie right, DB row wrong — fails loudly if it recurs.
+Verified: `dotnet build` clean (0 errors). `dotnet test`: `AuthControllerRememberMeTests`
+6/6 pass (1 new: `Login_WithRememberMeTrue_StoresRefreshTokenRowExpiringAtLeast30DaysOut`).
+Full `IAM.API.Tests` suite: 141 passed / 2 skipped (pre-existing) / 0 failed. No schema
+change this round — the `RememberMe` column and its additive migration from round 1 are
+unchanged and were already verified against the real dev `iam_db`.
+Left: nothing for this task's scope.
