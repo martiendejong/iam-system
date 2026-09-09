@@ -5,21 +5,21 @@ namespace IAM.Core.Services;
 public interface IAuthService
 {
     Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName);
-    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null);
+    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false);
     Task<AuthResult> RefreshTokenAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
     Task<bool> RevokeTokenAsync(string refreshToken);
     Task<bool> VerifyEmailAsync(string token);
     Task<bool> SendPasswordResetAsync(string email);
     Task<bool> ResetPasswordAsync(string token, string newPassword);
-    Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<bool> ResendVerificationEmailAsync(Guid userId);
 
     /// <summary>
     /// Completes a login that was suspended for adaptive-MFA step-up verification
     /// (see AuthResult.RequiresStepUp), by validating the emailed OTP and issuing tokens.
     /// </summary>
-    Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null);
-    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
+    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null);
 
     /// <summary>
@@ -30,7 +30,7 @@ public interface IAuthService
     /// password + email-2FA flow (see AuthResult.RequiresTwoFactor). This mirrors the
     /// 2FA gate in LoginAsync so no alternate login path can bypass it.
     /// </summary>
-    Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null);
+    Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false);
 }
 
 public class AuthResult

@@ -295,9 +295,35 @@ state on the follow-up verify call); `POST /auth/refresh` reissues using the res
 `RefreshTokenLifetimeDays` unchanged, since the task's own Done-when/how-to-test only
 scope `POST /auth/login`.
 
-## 2026-09-09 — task 2977 (plan)
-Plan: add `RememberMe` bool to `RefreshToken` (additive migration), set it in
-`AuthService.LoginAsync`/`CompletePasswordlessLoginAsync` (via `LoginBypassPasswordAsync`),
-and in `RefreshTokenAsync` carry it forward + apply `Math.Max(orgDays, 30)` when the
-rotated token has it set. Reuse `AuthController`'s `RememberMeMinimumDays` constant by
-moving it to a shared `IAM.Core` location.
+## 2026-09-09 — task 2977 (remember-me floor lost on refresh rotation)
+Done: added `RefreshToken.RememberMe` (additive migration
+`20260909070000_AddRememberMeToRefreshTokens`), set from `AuthService.LoginAsync`. Moved
+`AuthController`'s private `RememberMeMinimumDays=30` constant to a new shared
+`IAM.Core.AuthConstants` (Infrastructure can't reference API, so "reuse it" meant giving
+it a home both layers can see) and reused it in both places. `RefreshTokenAsync` now reads
+`storedToken.RememberMe` (never a client-supplied value — not spoofable), carries it onto
+the newly-issued token, and applies `Math.Max(orgConfiguredDays, 30)` to `refreshDays` when
+set — that one change fixes both the returned `RefreshTokenLifetimeDays` (which
+`AuthController.Refresh()` already uses unmodified for the cookie `Expires`) and the
+stored entity's own `ExpiresAt`, so the DB-side token and the browser cookie never
+disagree. Also threaded `rememberMe` through `CompletePasswordlessLoginAsync` ->
+`LoginBypassPasswordAsync`, and through `VerifyStepUpAsync`/`VerifyLoginTwoFactorAsync` —
+the last two weren't named in the task's file list, but `AuthController`'s `/2fa/verify`
+and `/step-up/verify` already collect and use `request.RememberMe` for the cookie (PR
+#100), so leaving the entity flag unset there would silently reproduce this exact bug for
+any remembered login that requires 2FA/step-up. `PasskeyController`/`MagicLinkController`/
+`OtpController` were left untouched (no `RememberMe` field in their request DTOs today,
+new params default to `false`) — same "no regression" scope task 45 documented for the
+unrelated session-length feature.
+Verified: `dotnet build` clean across API/Infrastructure/EdgeGateway/SDK.DotNet (0 errors).
+`dotnet test` on `IAM.API.Tests`: 140 passed / 2 skipped (pre-existing) / 0 failed,
+including the existing 3 `AuthControllerRememberMeTests` plus 2 new ones (remembered
+login's refresh rotation keeps the cookie >= ~30 days out; non-remembered refresh keeps
+today's short default). `IAM.Core.Tests`: 1/1 pass. Migration verified by hand against the
+real dev `iam_db` (no superuser access to spin up a throwaway copy — `iam_user` lacks
+CREATEDB; `postgres` role's own password wasn't in the vault/pgpass, only a leftover
+`C:\Temp\setup-iam-db.ps1` script had the intended default, which didn't match live):
+ran the migration's `ADD COLUMN` inside an explicit `BEGIN`/`ROLLBACK` against `iam_db`
+directly — all 239 existing rows defaulted to `false` correctly, then rolled back with
+zero persisted change.
+Left: nothing for this task's scope.
