@@ -294,3 +294,10 @@ Left: nothing — 2FA/step-up flows also honor rememberMe (frontend resubmits th
 state on the follow-up verify call); `POST /auth/refresh` reissues using the resolved
 `RefreshTokenLifetimeDays` unchanged, since the task's own Done-when/how-to-test only
 scope `POST /auth/login`.
+
+## 2026-09-09 — task 2977 (plan)
+Plan: add `RememberMe` bool to `RefreshToken` (additive migration), set it in
+`AuthService.LoginAsync`/`CompletePasswordlessLoginAsync` (via `LoginBypassPasswordAsync`),
+and in `RefreshTokenAsync` carry it forward + apply `Math.Max(orgDays, 30)` when the
+rotated token has it set. Reuse `AuthController`'s `RememberMeMinimumDays` constant by
+moving it to a shared `IAM.Core` location.
