@@ -137,7 +137,7 @@ public class UsersController : ControllerBase
             Email = email,
             FirstName = request.FirstName?.Trim() ?? string.Empty,
             LastName = request.LastName?.Trim() ?? string.Empty,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, workFactor: 12),
             EmailConfirmed = true, // Admin-created accounts are pre-verified (mirrors invitation acceptance)
             IsActive = true
         };
@@ -457,7 +457,7 @@ public class UsersController : ControllerBase
         if (user == null)
             return NotFound(new { error = "User not found" });
 
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
         user.FailedLoginAttempts = 0;
         user.IsLockedOut = false;
         user.UpdatedAt = DateTime.UtcNow;

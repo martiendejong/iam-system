@@ -259,22 +259,77 @@ public class SecretsVaultService : ISecretsVaultService
 
     #region Encryption Helpers
 
+    // Version byte prefixes stored as the first byte of the base64-decoded blob.
+    // 0x01 = legacy AES-CBC (IV stored separately in the IV column)
+    // 0x02 = AES-GCM authenticated encryption (nonce+tag+ciphertext, no separate IV column)
+    private const byte VersionCbc = 0x01;
+    private const byte VersionGcm = 0x02;
+    private const int GcmNonceSize = 12; // 96-bit nonce per NIST SP 800-38D
+    private const int GcmTagSize = 16;   // 128-bit authentication tag
+
+    /// <summary>
+    /// Encrypts plaintext using AES-256-GCM (authenticated encryption).
+    /// Returns (EncryptedBase64, IvBase64) where IvBase64 is empty — the nonce is
+    /// embedded in the blob so the column is kept for schema compatibility.
+    /// </summary>
     private (string EncryptedBase64, string IvBase64) Encrypt(string plainText)
     {
-        using var aes = Aes.Create();
-        aes.Key = _masterKey;
-        aes.GenerateIV();
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
-
-        using var encryptor = aes.CreateEncryptor();
         var plainBytes = Encoding.UTF8.GetBytes(plainText);
-        var cipherBytes = encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length);
+        var nonce = new byte[GcmNonceSize];
+        RandomNumberGenerator.Fill(nonce);
+        var ciphertext = new byte[plainBytes.Length];
+        var tag = new byte[GcmTagSize];
 
-        return (Convert.ToBase64String(cipherBytes), Convert.ToBase64String(aes.IV));
+        using var aesGcm = new AesGcm(_masterKey, GcmTagSize);
+        aesGcm.Encrypt(nonce, plainBytes, ciphertext, tag);
+
+        // Layout: version(1) + nonce(12) + tag(16) + ciphertext
+        var blob = new byte[1 + GcmNonceSize + GcmTagSize + ciphertext.Length];
+        blob[0] = VersionGcm;
+        nonce.CopyTo(blob, 1);
+        tag.CopyTo(blob, 1 + GcmNonceSize);
+        ciphertext.CopyTo(blob, 1 + GcmNonceSize + GcmTagSize);
+
+        // IV column is unused for GCM (nonce is in the blob); store empty string.
+        return (Convert.ToBase64String(blob), string.Empty);
     }
 
+    /// <summary>
+    /// Decrypts a secret value. Supports both legacy AES-CBC (version 0x01, uses
+    /// the ivBase64 column) and new AES-GCM (version 0x02, nonce embedded in blob).
+    /// </summary>
     private string Decrypt(string encryptedBase64, string ivBase64)
+    {
+        var blob = Convert.FromBase64String(encryptedBase64);
+
+        // Detect version: if the first byte is 0x02 use GCM, otherwise treat as legacy CBC.
+        // Legacy blobs don't start with 0x01 explicitly — any non-0x02 byte falls through to CBC.
+        if (blob.Length > 0 && blob[0] == VersionGcm)
+        {
+            return DecryptGcm(blob);
+        }
+
+        // Legacy path: AES-CBC with PKCS7 padding, IV from the separate column.
+        return DecryptCbc(blob, ivBase64);
+    }
+
+    private string DecryptGcm(byte[] blob)
+    {
+        // blob layout: version(1) + nonce(12) + tag(16) + ciphertext
+        if (blob.Length < 1 + GcmNonceSize + GcmTagSize)
+            throw new CryptographicException("GCM blob is too short to be valid.");
+
+        var nonce = blob[1..(1 + GcmNonceSize)];
+        var tag = blob[(1 + GcmNonceSize)..(1 + GcmNonceSize + GcmTagSize)];
+        var ciphertext = blob[(1 + GcmNonceSize + GcmTagSize)..];
+        var plaintext = new byte[ciphertext.Length];
+
+        using var aesGcm = new AesGcm(_masterKey, GcmTagSize);
+        aesGcm.Decrypt(nonce, ciphertext, tag, plaintext);
+        return Encoding.UTF8.GetString(plaintext);
+    }
+
+    private string DecryptCbc(byte[] cipherBytes, string ivBase64)
     {
         using var aes = Aes.Create();
         aes.Key = _masterKey;
@@ -283,9 +338,7 @@ public class SecretsVaultService : ISecretsVaultService
         aes.Padding = PaddingMode.PKCS7;
 
         using var decryptor = aes.CreateDecryptor();
-        var cipherBytes = Convert.FromBase64String(encryptedBase64);
         var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
-
         return Encoding.UTF8.GetString(plainBytes);
     }
 

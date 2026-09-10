@@ -120,7 +120,7 @@ public class PortalController : ControllerBase
             return BadRequest(new { error = "Current password is incorrect" });
 
         // Update password
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
         user.UpdatedAt = DateTime.UtcNow;
 
         // Log password change in audit log

@@ -139,7 +139,7 @@ public class DatabaseSeeder : IHostedService
         {
             Id = Guid.NewGuid(),
             Email = email,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12),
             FirstName = firstName,
             LastName = lastName,
             EmailConfirmed = true,
@@ -631,13 +631,11 @@ public class DatabaseSeeder : IHostedService
                 DisplayName = "Jengo Workspace (artrevisionist)",
                 RedirectUris =
                 {
-                    new Uri("https://workspace.artrevisionist.com/api/auth/iam/callback"),
-                    new Uri("http://workspace.artrevisionist.com/api/auth/iam/callback")
+                    new Uri("https://workspace.artrevisionist.com/api/auth/iam/callback")
                 },
                 PostLogoutRedirectUris =
                 {
-                    new Uri("https://workspace.artrevisionist.com/"),
-                    new Uri("http://workspace.artrevisionist.com/")
+                    new Uri("https://workspace.artrevisionist.com/")
                 },
                 Permissions =
                 {

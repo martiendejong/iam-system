@@ -19,21 +19,58 @@ public class SocialAuthService : ISocialAuthService
     // Today's default when an organization has never saved a Token Configuration.
     private const int DefaultRefreshTokenLifetimeDays = 7;
 
+    // Prefix used to detect an encrypted client secret stored in the DB.
+    // Non-prefixed values are treated as plaintext (migration compatibility).
+    private const string EncryptedPrefix = "enc:";
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IClaimsMappingService _claimsMappingService;
+    private readonly ISecretsVaultService _secretsVault;
 
     public SocialAuthService(
         IAMDbContext context,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
-        IClaimsMappingService claimsMappingService)
+        IClaimsMappingService claimsMappingService,
+        ISecretsVaultService secretsVault)
     {
         _context = context;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
         _claimsMappingService = claimsMappingService;
+        _secretsVault = secretsVault;
+    }
+
+    /// <summary>
+    /// Encrypts a client secret for storage.  The result is prefixed with "enc:" so
+    /// Decrypt can distinguish new entries from pre-existing plaintext ones.
+    /// </summary>
+    private async Task<string> EncryptClientSecretAsync(string plainSecret)
+    {
+        var entry = await _secretsVault.CreateSecretAsync(
+            name: $"idp-client-secret-{Guid.NewGuid():N}",
+            plainTextValue: plainSecret,
+            secretType: "IdentityProviderClientSecret");
+        // Store the SecretEntry ID so we can retrieve the value later.
+        return EncryptedPrefix + entry.Id.ToString();
+    }
+
+    /// <summary>
+    /// Decrypts a stored client secret.  If the value is not prefixed with "enc:",
+    /// it is an unencrypted legacy value and is returned as-is (migration compatibility).
+    /// </summary>
+    private async Task<string> DecryptClientSecretAsync(string storedValue)
+    {
+        if (!storedValue.StartsWith(EncryptedPrefix, StringComparison.Ordinal))
+            return storedValue; // Legacy plaintext — pass through until re-saved.
+
+        var idStr = storedValue[EncryptedPrefix.Length..];
+        if (!Guid.TryParse(idStr, out var secretId))
+            return storedValue;
+
+        return await _secretsVault.GetSecretValueAsync(secretId) ?? storedValue;
     }
 
     /// <summary>
@@ -156,7 +193,7 @@ public class SocialAuthService : ISocialAuthService
                 user = new User
                 {
                     Email = externalUser.Email ?? $"{externalUser.ProviderUserId}@{provider.Type.ToString().ToLower()}.external",
-                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString()),
+                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString(), workFactor: 12),
                     FirstName = externalUser.FirstName ?? "",
                     LastName = externalUser.LastName ?? "",
                     EmailConfirmed = true, // Trust the email from the provider
@@ -325,6 +362,10 @@ public class SocialAuthService : ISocialAuthService
         provider.CreatedAt = DateTime.UtcNow;
         provider.UpdatedAt = DateTime.UtcNow;
 
+        // Encrypt client secret at rest before persisting.
+        if (!string.IsNullOrEmpty(provider.ClientSecret))
+            provider.ClientSecret = await EncryptClientSecretAsync(provider.ClientSecret);
+
         _context.IdentityProviders.Add(provider);
         await _context.SaveChangesAsync();
 
@@ -341,7 +382,18 @@ public class SocialAuthService : ISocialAuthService
         existing.Type = provider.Type;
         existing.TenantId = provider.TenantId;
         existing.ClientId = provider.ClientId;
-        existing.ClientSecret = provider.ClientSecret;
+
+        // Only re-encrypt if the caller sent a new plaintext secret (not an already-stored enc: value).
+        if (!string.IsNullOrEmpty(provider.ClientSecret) &&
+            !provider.ClientSecret.StartsWith(EncryptedPrefix, StringComparison.Ordinal))
+        {
+            existing.ClientSecret = await EncryptClientSecretAsync(provider.ClientSecret);
+        }
+        else if (!string.IsNullOrEmpty(provider.ClientSecret))
+        {
+            existing.ClientSecret = provider.ClientSecret;
+        }
+
         existing.MetadataUrl = provider.MetadataUrl;
         existing.AttributeMapping = provider.AttributeMapping;
         existing.IsActive = provider.IsActive;
@@ -426,10 +478,11 @@ public class SocialAuthService : ISocialAuthService
 
         var tokenEndpoint = GetTokenEndpoint(provider.Type);
 
+        var plainClientSecret = await DecryptClientSecretAsync(provider.ClientSecret ?? "");
         var requestBody = new Dictionary<string, string>
         {
             ["client_id"] = provider.ClientId,
-            ["client_secret"] = provider.ClientSecret,
+            ["client_secret"] = plainClientSecret,
             ["code"] = code,
             ["grant_type"] = "authorization_code",
             ["redirect_uri"] = _configuration["SocialAuth:RedirectUri"] ?? ""
@@ -464,10 +517,10 @@ public class SocialAuthService : ISocialAuthService
 
     private async Task<ExternalUserProfile?> GetExternalUserProfileAsync(IdentityProvider provider, OAuthTokenResponse tokenResponse)
     {
-        // For Apple, parse the ID token since there's no userinfo endpoint
+        // For Apple, validate and parse the ID token (signature-verified via JWKS).
         if (provider.Type == IdentityProviderType.Apple && !string.IsNullOrEmpty(tokenResponse.IdToken))
         {
-            return ParseAppleIdToken(tokenResponse.IdToken);
+            return await ParseAppleIdTokenAsync(tokenResponse.IdToken);
         }
 
         // For SAML, parse the assertion
@@ -591,21 +644,69 @@ public class SocialAuthService : ISocialAuthService
         return null;
     }
 
-    private static ExternalUserProfile? ParseAppleIdToken(string idToken)
+    // Apple JWKS key cache (static so it survives across DI-scoped instances).
+    private static IList<SecurityKey>? _appleSigningKeys;
+    private static DateTime _appleKeysFetchedAt = DateTime.MinValue;
+    private static readonly SemaphoreSlim _appleKeyLock = new(1, 1);
+
+    private async Task<IList<SecurityKey>> GetAppleSigningKeysAsync()
+    {
+        // Return cached keys if still fresh (< 1 hour old).
+        if (_appleSigningKeys != null && _appleKeysFetchedAt > DateTime.UtcNow.AddHours(-1))
+            return _appleSigningKeys;
+
+        await _appleKeyLock.WaitAsync();
+        try
+        {
+            // Double-checked locking: another thread may have refreshed while we waited.
+            if (_appleSigningKeys != null && _appleKeysFetchedAt > DateTime.UtcNow.AddHours(-1))
+                return _appleSigningKeys;
+
+            using var http = _httpClientFactory.CreateClient();
+            var jwks = await http.GetStringAsync("https://appleid.apple.com/auth/keys");
+            var keySet = new JsonWebKeySet(jwks);
+            _appleSigningKeys = keySet.GetSigningKeys();
+            _appleKeysFetchedAt = DateTime.UtcNow;
+            return _appleSigningKeys;
+        }
+        finally
+        {
+            _appleKeyLock.Release();
+        }
+    }
+
+    private async Task<ExternalUserProfile?> ParseAppleIdTokenAsync(string idToken)
     {
         try
         {
-            var handler = new JwtSecurityTokenHandler();
-            var token = handler.ReadJwtToken(idToken);
+            var signingKeys = await GetAppleSigningKeysAsync();
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var validationParams = new TokenValidationParameters
+            {
+                ValidIssuer = "https://appleid.apple.com",
+                ValidAudience = _configuration["Apple:ClientId"],
+                IssuerSigningKeys = signingKeys,
+                ValidateLifetime = true,
+                ValidateIssuer = true,
+                ValidateAudience = _configuration["Apple:ClientId"] != null,
+            };
+
+            var principal = tokenHandler.ValidateToken(idToken, validationParams, out _);
 
             return new ExternalUserProfile
             {
-                ProviderUserId = token.Claims.FirstOrDefault(c => c.Type == "sub")?.Value ?? "",
-                Email = token.Claims.FirstOrDefault(c => c.Type == "email")?.Value,
+                ProviderUserId = principal.Claims.FirstOrDefault(c => c.Type == "sub")?.Value ?? "",
+                Email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value,
                 DisplayName = null,
                 FirstName = null,
                 LastName = null
             };
+        }
+        catch (SecurityTokenException ex)
+        {
+            // Log at Warning — invalid tokens are expected (attacks, clock skew, revoked keys).
+            // Do not swallow as a silent null; let the caller decide.
+            throw new UnauthorizedAccessException("Apple ID token validation failed.", ex);
         }
         catch
         {

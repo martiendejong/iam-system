@@ -8,6 +8,7 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IAM.Infrastructure.Services;
@@ -23,6 +24,7 @@ public class AuthService : IAuthService
     private readonly IRiskAssessmentService _riskAssessmentService;
     private readonly IOtpService _otpService;
     private readonly IClaimsMappingService _claimsMappingService;
+    private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         IAMDbContext context,
@@ -30,7 +32,8 @@ public class AuthService : IAuthService
         IEmailService emailService,
         IRiskAssessmentService riskAssessmentService,
         IOtpService otpService,
-        IClaimsMappingService claimsMappingService)
+        IClaimsMappingService claimsMappingService,
+        ILogger<AuthService> logger)
     {
         _context = context;
         _configuration = configuration;
@@ -38,6 +41,7 @@ public class AuthService : IAuthService
         _riskAssessmentService = riskAssessmentService;
         _otpService = otpService;
         _claimsMappingService = claimsMappingService;
+        _logger = logger;
     }
 
     /// <summary>
@@ -86,15 +90,16 @@ public class AuthService : IAuthService
             };
         }
 
-        // Create user
+        // Create user — store the SHA-256 hash of the token; send the raw token in the email.
+        var rawEmailToken = GenerateToken();
         var user = new User
         {
             Email = email,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12),
             FirstName = firstName,
             LastName = lastName,
             EmailConfirmed = false,
-            EmailVerificationToken = GenerateToken(),
+            EmailVerificationToken = HashVerificationToken(rawEmailToken),
             EmailVerificationTokenExpiry = DateTime.UtcNow.AddHours(24),
             IsActive = true
         };
@@ -105,7 +110,7 @@ public class AuthService : IAuthService
         await _emailService.SendEmailVerificationAsync(
             user.Email,
             $"{user.FirstName} {user.LastName}".Trim(),
-            user.EmailVerificationToken!
+            rawEmailToken
         );
 
         return new AuthResult
@@ -288,24 +293,23 @@ public class AuthService : IAuthService
         }
 
         // ANOMALY DETECTION: Check if device fingerprint changed
-        if (!string.IsNullOrEmpty(storedToken.IpAddress) && !string.IsNullOrEmpty(ipAddress))
-        {
-            if (storedToken.IpAddress != ipAddress)
-            {
-                // IP address changed - potential token theft
-                // Log this as suspicious activity (TODO: Add logging)
-                // For now, we'll allow it but could add stricter policies
-            }
-        }
+        var ipChanged = !string.IsNullOrEmpty(storedToken.IpAddress) &&
+                        !string.IsNullOrEmpty(ipAddress) &&
+                        storedToken.IpAddress != ipAddress;
+        var uaChanged = !string.IsNullOrEmpty(storedToken.UserAgent) &&
+                        !string.IsNullOrEmpty(userAgent) &&
+                        storedToken.UserAgent != userAgent;
 
-        if (!string.IsNullOrEmpty(storedToken.UserAgent) && !string.IsNullOrEmpty(userAgent))
+        if (ipChanged || uaChanged)
         {
-            if (storedToken.UserAgent != userAgent)
-            {
-                // User agent changed - potential token theft
-                // This is more suspicious than IP change (VPN, mobile network switching)
-                // Log this as suspicious activity (TODO: Add logging)
-            }
+            _logger.LogWarning(
+                "Refresh token used from different {Changed}. UserId: {UserId}, " +
+                "OriginalIP: {OriginalIp}, NewIP: {NewIp}, " +
+                "OriginalUA: {OriginalUA}, NewUA: {NewUA}",
+                ipChanged && uaChanged ? "IP and UserAgent" : ipChanged ? "IP" : "UserAgent",
+                storedToken.UserId,
+                storedToken.IpAddress, ipAddress,
+                storedToken.UserAgent, userAgent);
         }
 
         // SINGLE-USE TOKENS: Revoke the old refresh token immediately
@@ -376,8 +380,9 @@ public class AuthService : IAuthService
 
     public async Task<bool> VerifyEmailAsync(string token)
     {
+        var tokenHash = HashVerificationToken(token);
         var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.EmailVerificationToken == token
+            .FirstOrDefaultAsync(u => u.EmailVerificationToken == tokenHash
                                    && u.EmailVerificationTokenExpiry > DateTime.UtcNow);
 
         if (user == null)
@@ -403,7 +408,8 @@ public class AuthService : IAuthService
             return true;
         }
 
-        user.PasswordResetToken = GenerateToken();
+        var rawResetToken = GenerateToken();
+        user.PasswordResetToken = HashVerificationToken(rawResetToken);
         user.PasswordResetTokenExpiry = DateTime.UtcNow.AddHours(1);
 
         await _context.SaveChangesAsync();
@@ -411,7 +417,7 @@ public class AuthService : IAuthService
         await _emailService.SendPasswordResetAsync(
             user.Email,
             $"{user.FirstName} {user.LastName}".Trim(),
-            user.PasswordResetToken!
+            rawResetToken
         );
 
         return true;
@@ -424,7 +430,8 @@ public class AuthService : IAuthService
         if (user == null || user.EmailConfirmed)
             return false;
 
-        user.EmailVerificationToken = GenerateToken();
+        var rawToken = GenerateToken();
+        user.EmailVerificationToken = HashVerificationToken(rawToken);
         user.EmailVerificationTokenExpiry = DateTime.UtcNow.AddHours(24);
 
         await _context.SaveChangesAsync();
@@ -432,7 +439,7 @@ public class AuthService : IAuthService
         await _emailService.SendEmailVerificationAsync(
             user.Email,
             $"{user.FirstName} {user.LastName}".Trim(),
-            user.EmailVerificationToken!
+            rawToken
         );
 
         return true;
@@ -614,8 +621,9 @@ public class AuthService : IAuthService
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)
     {
+        var tokenHash = HashVerificationToken(token);
         var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.PasswordResetToken == token
+            .FirstOrDefaultAsync(u => u.PasswordResetToken == tokenHash
                                    && u.PasswordResetTokenExpiry > DateTime.UtcNow);
 
         if (user == null)
@@ -623,7 +631,7 @@ public class AuthService : IAuthService
             return false;
         }
 
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword, workFactor: 12);
         user.PasswordResetToken = null;
         user.PasswordResetTokenExpiry = null;
 
@@ -687,9 +695,19 @@ public class AuthService : IAuthService
         return Convert.ToBase64String(randomBytes);
     }
 
-    private string GenerateToken()
+    /// <summary>
+    /// Generates a cryptographically random 256-bit token (returned as hex).
+    /// The raw token is sent to the user; a SHA-256 hash is stored in the DB
+    /// so a stolen DB dump cannot be used to activate/reset accounts.
+    /// </summary>
+    private static string GenerateToken()
     {
-        return Guid.NewGuid().ToString("N");
+        return Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+    }
+
+    private static string HashVerificationToken(string rawToken)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
     }
 
     private string HashToken(string token)
