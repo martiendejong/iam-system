@@ -84,23 +84,17 @@ public class DatabaseSeeder : IHostedService
             foreach (var admin in adminUsers)
             {
                 if (!allowedAdmins.Contains(admin.Email ?? ""))
-                {
                     _logger.LogWarning(
                         "AdminRoleAudit: User {Email} (Id: {Id}) has role '{Role}' but is NOT in the approved admin allowlist. " +
                         "Review and revoke if not authorized.",
                         admin.Email, admin.Id, admin.RoleName);
-                }
                 else
-                {
                     _logger.LogInformation(
                         "AdminRoleAudit: Approved admin {Email} (Id: {Id}) has role '{Role}'.",
                         admin.Email, admin.Id, admin.RoleName);
-                }
             }
 
-            _logger.LogInformation(
-                "AdminRoleAudit: Complete. Found {Count} admin user(s) in total.",
-                adminUsers.Count);
+            _logger.LogInformation("AdminRoleAudit: Complete. Found {Count} admin user(s) in total.", adminUsers.Count);
         }
         catch (Exception ex)
         {
