@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -61,10 +62,13 @@ public class MagicLinkService : IMagicLinkService
         // Generate cryptographically random token
         var token = GenerateSecureToken();
 
+        // Store only the SHA-256 hash; send the plaintext token in the email
+        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLower();
+
         var magicLinkToken = new MagicLinkToken
         {
             UserId = user.Id,
-            Token = token,
+            Token = tokenHash,  // store hash, send plaintext in email
             Purpose = purpose,
             ExpiresAt = DateTime.UtcNow.AddMinutes(ExpiryMinutes),
             IpAddress = ipAddress
@@ -73,12 +77,13 @@ public class MagicLinkService : IMagicLinkService
         _context.MagicLinkTokens.Add(magicLinkToken);
         await _context.SaveChangesAsync();
 
-        // Build magic link URL and send email
+        // Build magic link URL and send email (with plaintext token)
         var baseUrl = _emailSettings.BaseUrl?.TrimEnd('/');
         var magicLinkUrl = $"{baseUrl}/magic-link?token={token}";
-        if (!string.IsNullOrWhiteSpace(returnUrl))
+        var safeReturnUrl = SanitizeReturnUrl(returnUrl);
+        if (!string.IsNullOrWhiteSpace(safeReturnUrl))
         {
-            magicLinkUrl += $"&returnUrl={Uri.EscapeDataString(returnUrl)}";
+            magicLinkUrl += $"&returnUrl={Uri.EscapeDataString(safeReturnUrl)}";
         }
 
         await _emailService.SendMfaCodeAsync(email, user.FirstName, magicLinkUrl);
@@ -89,11 +94,14 @@ public class MagicLinkService : IMagicLinkService
 
     public async Task<User?> ValidateMagicLinkAsync(string token)
     {
+        // Hash the submitted plaintext token before looking it up in the database
+        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLower();
+
         var magicLinkToken = await _context.MagicLinkTokens
             .Include(t => t.User)
                 .ThenInclude(u => u.UserRoles)
                     .ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(t => t.Token == token);
+            .FirstOrDefaultAsync(t => t.Token == tokenHash);
 
         if (magicLinkToken == null)
         {
@@ -149,5 +157,18 @@ public class MagicLinkService : IMagicLinkService
         using var rng = RandomNumberGenerator.Create();
         rng.GetBytes(randomBytes);
         return Convert.ToHexString(randomBytes).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Validates a returnUrl to prevent open redirect attacks.
+    /// Only allows relative URLs starting with / (not protocol-relative or absolute).
+    /// </summary>
+    private static string? SanitizeReturnUrl(string? returnUrl)
+    {
+        if (string.IsNullOrWhiteSpace(returnUrl)) return null;
+        // Only allow relative URLs starting with /
+        if (!returnUrl.StartsWith("/") || returnUrl.StartsWith("//") || returnUrl.Contains("://"))
+            return null;
+        return returnUrl;
     }
 }

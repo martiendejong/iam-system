@@ -8,6 +8,18 @@ var iamSection = builder.Configuration.GetSection("IAM");
 var gatewayOptions = new EdgeGatewayOptions();
 iamSection.Bind(gatewayOptions);
 
+// Validate SharedSecret at startup — fail fast in production if not properly configured
+var sharedSecret = gatewayOptions.SharedSecret;
+if (sharedSecret == "configure-in-production" || sharedSecret.Length < 32)
+{
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException(
+            "Gateway SharedSecret is not configured or is too short. " +
+            "Set a random string of at least 32 characters in configuration.");
+    else
+        Console.Error.WriteLine("WARNING: EdgeGateway SharedSecret is using development default or is too short.");
+}
+
 // Register the IamDeviceClient from the SDK for gateway authentication
 builder.Services.AddIamDeviceClient(options =>
 {

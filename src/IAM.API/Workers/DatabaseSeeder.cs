@@ -15,12 +15,14 @@ public class DatabaseSeeder : IHostedService
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DatabaseSeeder> _logger;
+    private readonly IWebHostEnvironment _env;
 
-    public DatabaseSeeder(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSeeder> logger)
+    public DatabaseSeeder(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSeeder> logger, IWebHostEnvironment env)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
         _logger = logger;
+        _env = env;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -35,11 +37,21 @@ public class DatabaseSeeder : IHostedService
         using var scope = _serviceProvider.CreateScope();
 
         var context = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<DatabaseSeeder>>();
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
-        await SeedClientsAsync(scope.ServiceProvider, _configuration, cancellationToken);
+        await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
+
+        // Security check: alert if test accounts exist in non-development environment
+        if (!_env.IsDevelopment())
+        {
+            var testUsers = await context.Users.Where(u => u.Email.EndsWith("@test.com")).AnyAsync(cancellationToken);
+            if (testUsers)
+                _logger.LogCritical("SECURITY ALERT: Test accounts (@test.com) found in non-development environment!");
+        }
+
         await AuditAdminRolesAsync(context, cancellationToken);
     }
 
@@ -60,33 +72,29 @@ public class DatabaseSeeder : IHostedService
                 .Select(ur => new { ur.User.Email, ur.User.Id, RoleName = ur.Role.Name })
                 .ToListAsync(cancellationToken);
 
-            // Approved admin accounts — update this list when new admins are legitimately added
+            // Approved admin accounts — only these may hold SuperAdmin/Admin roles
             var allowedAdmins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "info@martiendejong.nl",   // Martien de Jong (owner)
-                // Add further approved admin emails here when known (e.g. Frank Lessy, Sandra)
+                "info@martiendejong.nl",      // Martien de Jong (owner)
+                "frankobaai@gmail.com",        // Frank
+                "mpoelesiamon@gmail.com",      // Lessy
+                "mpoesimitia@gmail.com",       // Sandra
             };
 
             foreach (var admin in adminUsers)
             {
                 if (!allowedAdmins.Contains(admin.Email ?? ""))
-                {
                     _logger.LogWarning(
                         "AdminRoleAudit: User {Email} (Id: {Id}) has role '{Role}' but is NOT in the approved admin allowlist. " +
                         "Review and revoke if not authorized.",
                         admin.Email, admin.Id, admin.RoleName);
-                }
                 else
-                {
                     _logger.LogInformation(
                         "AdminRoleAudit: Approved admin {Email} (Id: {Id}) has role '{Role}'.",
                         admin.Email, admin.Id, admin.RoleName);
-                }
             }
 
-            _logger.LogInformation(
-                "AdminRoleAudit: Complete. Found {Count} admin user(s) in total.",
-                adminUsers.Count);
+            _logger.LogInformation("AdminRoleAudit: Complete. Found {Count} admin user(s) in total.", adminUsers.Count);
         }
         catch (Exception ex)
         {
@@ -212,7 +220,7 @@ public class DatabaseSeeder : IHostedService
         }
     }
 
-    private static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, CancellationToken cancellationToken)
+    private static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, IWebHostEnvironment env, CancellationToken cancellationToken)
     {
         var manager = provider.GetRequiredService<IOpenIddictApplicationManager>();
 
@@ -257,8 +265,8 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
-        // Test Client #2: Postman/Testing (Authorization Code Flow)
-        if (await manager.FindByClientIdAsync("postman_client", cancellationToken) == null)
+        // Test Client #2: Postman/Testing (Authorization Code Flow) — development only
+        if (env.IsDevelopment() && await manager.FindByClientIdAsync("postman_client", cancellationToken) == null)
         {
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
             {
@@ -444,8 +452,8 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
-        // Test Client #4: Backend Service (Client Credentials Flow)
-        if (await manager.FindByClientIdAsync("backend_service", cancellationToken) == null)
+        // Test Client #4: Backend Service (Client Credentials Flow) — development only
+        if (env.IsDevelopment() && await manager.FindByClientIdAsync("backend_service", cancellationToken) == null)
         {
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
             {
@@ -471,7 +479,7 @@ public class DatabaseSeeder : IHostedService
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = "open-webui",
-                ClientSecret = "Ow9kP2mXqR5vN8dL3jT7",
+                ClientSecret = configuration["Clients:OpenWebUi:Secret"] ?? throw new InvalidOperationException("Clients:OpenWebUi:Secret not configured"),
                 ClientType = OpenIddictConstants.ClientTypes.Confidential,
                 ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
                 DisplayName = "Open WebUI",
@@ -656,7 +664,10 @@ public class DatabaseSeeder : IHostedService
         // IamOidc:ClientSecret in the MCP server's appsettings on each host.
         if (await manager.FindByClientIdAsync("jengo-vps-mcp", cancellationToken) == null)
         {
-            var iamClientSecret = configuration["JengoVpsMcp:ClientSecret"] ?? "jengo-mcp-iam-secret-dev";
+            var iamClientSecret = configuration["JengoVpsMcp:ClientSecret"]
+                ?? (env.IsDevelopment()
+                    ? "jengo-mcp-iam-secret-dev"
+                    : throw new InvalidOperationException("JengoVpsMcp:ClientSecret not configured in production"));
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = "jengo-vps-mcp",
