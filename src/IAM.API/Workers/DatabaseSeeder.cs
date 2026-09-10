@@ -2,6 +2,7 @@ using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using OpenIddict.Abstractions;
 
 namespace IAM.API.Workers;
@@ -13,11 +14,13 @@ public class DatabaseSeeder : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<DatabaseSeeder> _logger;
 
-    public DatabaseSeeder(IServiceProvider serviceProvider, IConfiguration configuration)
+    public DatabaseSeeder(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<DatabaseSeeder> logger)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
+        _logger = logger;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -37,9 +40,60 @@ public class DatabaseSeeder : IHostedService
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
+        await AuditAdminRolesAsync(context, cancellationToken);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// Startup audit: logs all users with SuperAdmin or Admin role and warns about any
+    /// that are not in the approved admin allowlist. Does NOT remove or change any roles.
+    /// </summary>
+    private async Task AuditAdminRolesAsync(IAMDbContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var adminUsers = await context.UserRoles
+                .Include(ur => ur.Role)
+                .Include(ur => ur.User)
+                .Where(ur => ur.Role.Name == "SuperAdmin" || ur.Role.Name == "Admin" || ur.Role.Name == "admin")
+                .Select(ur => new { ur.User.Email, ur.User.Id, RoleName = ur.Role.Name })
+                .ToListAsync(cancellationToken);
+
+            // Approved admin accounts — update this list when new admins are legitimately added
+            var allowedAdmins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "info@martiendejong.nl",   // Martien de Jong (owner)
+                // Add further approved admin emails here when known (e.g. Frank Lessy, Sandra)
+            };
+
+            foreach (var admin in adminUsers)
+            {
+                if (!allowedAdmins.Contains(admin.Email ?? ""))
+                {
+                    _logger.LogWarning(
+                        "AdminRoleAudit: User {Email} (Id: {Id}) has role '{Role}' but is NOT in the approved admin allowlist. " +
+                        "Review and revoke if not authorized.",
+                        admin.Email, admin.Id, admin.RoleName);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "AdminRoleAudit: Approved admin {Email} (Id: {Id}) has role '{Role}'.",
+                        admin.Email, admin.Id, admin.RoleName);
+                }
+            }
+
+            _logger.LogInformation(
+                "AdminRoleAudit: Complete. Found {Count} admin user(s) in total.",
+                adminUsers.Count);
+        }
+        catch (Exception ex)
+        {
+            // Audit failure must never crash startup
+            _logger.LogError(ex, "AdminRoleAudit: Failed to complete admin role audit.");
+        }
+    }
 
     private async Task SeedAdminUserAsync(IAMDbContext context, CancellationToken cancellationToken)
     {
