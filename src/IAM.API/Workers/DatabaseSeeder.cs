@@ -35,7 +35,7 @@ public class DatabaseSeeder : IHostedService
         await context.Database.EnsureCreatedAsync(cancellationToken);
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
-        await SeedClientsAsync(scope.ServiceProvider, cancellationToken);
+        await SeedClientsAsync(scope.ServiceProvider, _configuration, cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
     }
 
@@ -158,7 +158,7 @@ public class DatabaseSeeder : IHostedService
         }
     }
 
-    private static async Task SeedClientsAsync(IServiceProvider provider, CancellationToken cancellationToken)
+    private static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, CancellationToken cancellationToken)
     {
         var manager = provider.GetRequiredService<IOpenIddictApplicationManager>();
 
@@ -602,7 +602,7 @@ public class DatabaseSeeder : IHostedService
         // IamOidc:ClientSecret in the MCP server's appsettings on each host.
         if (await manager.FindByClientIdAsync("jengo-vps-mcp", cancellationToken) == null)
         {
-            var iamClientSecret = _configuration["JengoVpsMcp:ClientSecret"] ?? "jengo-mcp-iam-secret-dev";
+            var iamClientSecret = configuration["JengoVpsMcp:ClientSecret"] ?? "jengo-mcp-iam-secret-dev";
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
             {
                 ClientId = "jengo-vps-mcp",
