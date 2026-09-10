@@ -10,10 +10,12 @@ namespace IAM.Infrastructure.Data;
 public class DevelopmentDataSeeder
 {
     private readonly IAMDbContext _context;
+    private readonly bool _isDevelopment;
 
-    public DevelopmentDataSeeder(IAMDbContext context)
+    public DevelopmentDataSeeder(IAMDbContext context, bool isDevelopment = false)
     {
         _context = context;
+        _isDevelopment = isDevelopment;
     }
 
     /// <summary>
@@ -22,6 +24,20 @@ public class DevelopmentDataSeeder
     /// </summary>
     public async Task SeedAsync()
     {
+        // Primary guard: must be Development environment
+        if (!_isDevelopment)
+        {
+            // Silently skip — caller should not invoke this in production
+            return;
+        }
+
+        // Double-check: if we somehow got here in production, abort
+        if (!_isDevelopment)
+        {
+            // This branch is theoretically unreachable but kept as a defense-in-depth guard
+            return;
+        }
+
         // Don't seed if we already have users
         if (await _context.Users.AnyAsync())
         {

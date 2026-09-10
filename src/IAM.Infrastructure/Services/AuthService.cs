@@ -131,6 +131,16 @@ public class AuthService : IAuthService
             };
         }
 
+        // Check lockout BEFORE any expensive operations (prevents BCrypt timing oracle on locked accounts)
+        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = $"Account locked. Try again after {user.LockoutEnd:yyyy-MM-dd HH:mm:ss} UTC"
+            };
+        }
+
         if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
         {
             // Increment failed login attempts
@@ -149,14 +159,10 @@ public class AuthService : IAuthService
             };
         }
 
-        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
-        {
-            return new AuthResult
-            {
-                Success = false,
-                Error = $"Account locked. Try again after {user.LockoutEnd:yyyy-MM-dd HH:mm:ss} UTC"
-            };
-        }
+        // Reset failed attempts on successful password verification
+        user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.LockoutEnd = null;
 
         if (!user.EmailConfirmed)
         {
@@ -175,11 +181,6 @@ public class AuthService : IAuthService
                 Error = "Account is inactive"
             };
         }
-
-        // Reset failed attempts (password + account checks passed)
-        user.FailedLoginAttempts = 0;
-        user.IsLockedOut = false;
-        user.LockoutEnd = null;
 
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
@@ -560,10 +561,34 @@ public class AuthService : IAuthService
             };
         }
 
+        // Check lockout before attempting OTP verification
+        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Account is temporarily locked. Try again later."
+            };
+        }
+
         var valid = await _otpService.ValidateOtpAsync(user.Email, null, code, OtpPurpose.LoginTwoFactor);
 
         if (!valid)
         {
+            // Track 2FA failures against the same lockout counter
+            user.FailedLoginAttempts++;
+            if (user.FailedLoginAttempts >= 5)
+            {
+                user.IsLockedOut = true;
+                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
+                await _context.SaveChangesAsync();
+                return new AuthResult
+                {
+                    Success = false,
+                    Error = "Too many failed attempts. Account temporarily locked."
+                };
+            }
+            await _context.SaveChangesAsync();
             return new AuthResult
             {
                 Success = false,

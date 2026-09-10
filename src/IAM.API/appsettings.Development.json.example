@@ -7,13 +7,13 @@
     }
   },
   "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5432;Database=iamdb;Username=iamuser;Password=iampassword"
+    "DefaultConnection": "Host=localhost;Port=5432;Database=iamdb;Username=iamuser;Password=<YOUR_DB_PASSWORD>"
   },
   "Redis": {
     "ConnectionString": "localhost:6379"
   },
   "Jwt": {
-    "SecretKey": "DEVELOPMENT_SECRET_KEY_CHANGE_IN_PRODUCTION_32_CHARS_MIN",
+    "SecretKey": "<REPLACE_WITH_32_CHAR_MIN_RANDOM_SECRET>",
     "Issuer": "https://localhost:5001",
     "Audience": "iam-api",
     "AccessTokenExpirationMinutes": 15,
@@ -27,5 +27,13 @@
       "http://localhost:5173"
     ],
     "TimestampDriftTolerance": 300000
+  },
+  "Clients": {
+    "OpenWebUi": {
+      "Secret": "<REPLACE_WITH_OPEN_WEBUI_CLIENT_SECRET>"
+    }
+  },
+  "JengoVpsMcp": {
+    "ClientSecret": "jengo-mcp-iam-secret-dev"
   }
 }

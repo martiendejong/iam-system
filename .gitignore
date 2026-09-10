@@ -43,7 +43,7 @@ TestResults/
 # Environment files
 appsettings.*.json
 !appsettings.json
-!appsettings.Development.json
+# appsettings.Development.json intentionally excluded — use appsettings.Development.json.example as template
 .env
 .env.local
 

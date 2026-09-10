@@ -1,4 +1,6 @@
+using System.Net;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using IAM.API.Auth;
 using IAM.API.Middleware;
@@ -27,8 +29,16 @@ builder.Host.UseWindowsService();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownProxies.Clear();
+    // Trust only loopback (IIS/ARR running on same machine)
     options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+    options.KnownProxies.Add(IPAddress.Loopback);      // 127.0.0.1
+    options.KnownProxies.Add(IPAddress.IPv6Loopback);  // ::1
+    // If there are known external proxy IPs, add them here from config:
+    var proxyIps = builder.Configuration.GetSection("ForwardedHeaders:TrustedProxies").Get<string[]>() ?? [];
+    foreach (var ip in proxyIps)
+        if (IPAddress.TryParse(ip, out var addr))
+            options.KnownProxies.Add(addr);
 });
 
 // Add services to the container
@@ -94,12 +104,17 @@ builder.Services.AddScoped<IRegionService, RegionService>();
 builder.Services.AddScoped<IDelegationService, DelegationService>();
 
 // HttpClient for webhook delivery
-builder.Services.AddHttpClient("WebhookDelivery")
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    {
+builder.Services.AddHttpClient("WebhookDelivery", client => {
+    client.Timeout = TimeSpan.FromSeconds(30);
+})
+.ConfigurePrimaryHttpMessageHandler(() =>
+{
+    var handler = new HttpClientHandler();
+    if (builder.Environment.IsDevelopment())
         // Allow self-signed certificates in development for webhook endpoints
-        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-    });
+        handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+    return handler;
+});
 
 // HttpClient for social/enterprise SSO provider calls
 builder.Services.AddHttpClient("SocialAuth");
@@ -109,9 +124,12 @@ builder.Services.AddHttpClient("TwilioSms");
 
 // HttpClient for region health checks
 builder.Services.AddHttpClient("RegionHealth")
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    .ConfigurePrimaryHttpMessageHandler(() =>
     {
-        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        var handler = new HttpClientHandler();
+        if (builder.Environment.IsDevelopment())
+            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+        return handler;
     });
 
 // Building Management System services
@@ -190,9 +208,30 @@ builder.Services.AddOpenIddict()
             "tenants"
         );
 
-        // Register signing and encryption credentials (development only)
-        options.AddDevelopmentEncryptionCertificate()
-               .AddDevelopmentSigningCertificate();
+        // Register signing and encryption credentials
+        if (builder.Environment.IsDevelopment())
+        {
+            options.AddDevelopmentEncryptionCertificate()
+                   .AddDevelopmentSigningCertificate();
+        }
+        else
+        {
+            // Production: load from config
+            var certPath = builder.Configuration["OpenIddict:SigningCertificatePath"];
+            var certPass = builder.Configuration["OpenIddict:SigningCertificatePassword"];
+            if (!string.IsNullOrEmpty(certPath) && File.Exists(certPath))
+            {
+                var cert = X509CertificateLoader.LoadPkcs12FromFile(certPath, certPass);
+                options.AddSigningCertificate(cert).AddEncryptionCertificate(cert);
+            }
+            else
+            {
+                // Fail fast — no production certificate configured
+                throw new InvalidOperationException(
+                    "Production OpenIddict signing certificate not configured. " +
+                    "Set OpenIddict:SigningCertificatePath and OpenIddict:SigningCertificatePassword in configuration.");
+            }
+        }
 
         // Register ASP.NET Core host and enable endpoint passthrough
         options.UseAspNetCore()
@@ -245,7 +284,8 @@ builder.Services.AddAuthentication(options =>
 {
     options.Cookie.Name = "IAM.Session";
     options.Cookie.HttpOnly = true;
-    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
 });
@@ -360,7 +400,7 @@ if (app.Environment.IsDevelopment())
 {
     using var scope = app.Services.CreateScope();
     var context = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
-    var seeder = new DevelopmentDataSeeder(context);
+    var seeder = new DevelopmentDataSeeder(context, isDevelopment: true);
     await seeder.SeedAsync();
 }
 

@@ -234,9 +234,10 @@ public class OtpService : IOtpService
 
         var baseUrl = _emailSettings.BaseUrl?.TrimEnd('/');
         var verifyUrl = $"{baseUrl}/verify-2fa?userId={user.Id}&code={code}";
-        if (!string.IsNullOrWhiteSpace(returnUrl))
+        var safeReturnUrl = SanitizeReturnUrl(returnUrl);
+        if (!string.IsNullOrWhiteSpace(safeReturnUrl))
         {
-            verifyUrl += $"&returnUrl={Uri.EscapeDataString(returnUrl)}";
+            verifyUrl += $"&returnUrl={Uri.EscapeDataString(safeReturnUrl)}";
         }
 
         await _emailService.SendLoginTwoFactorCodeAsync(user.Email, user.FirstName, code, verifyUrl);
@@ -277,5 +278,18 @@ public class OtpService : IOtpService
     {
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(code));
         return Convert.ToBase64String(hashBytes);
+    }
+
+    /// <summary>
+    /// Validates a returnUrl to prevent open redirect attacks.
+    /// Only allows relative URLs starting with / (not protocol-relative or absolute).
+    /// </summary>
+    private static string? SanitizeReturnUrl(string? returnUrl)
+    {
+        if (string.IsNullOrWhiteSpace(returnUrl)) return null;
+        // Only allow relative URLs starting with /
+        if (!returnUrl.StartsWith("/") || returnUrl.StartsWith("//") || returnUrl.Contains("://"))
+            return null;
+        return returnUrl;
     }
 }
