@@ -77,7 +77,7 @@ public class DatabaseSeeder : IHostedService
             {
                 "info@martiendejong.nl",      // Martien de Jong (owner)
                 "frankobaai@gmail.com",        // Frank
-                "mpoelesiamon@gmail.com",      // Lessy
+                "mpoelessy839@gmail.com",      // Lessy (Lesiamon, Sofy's son)
                 "mpoesimitia@gmail.com",       // Sandra
             };
 
