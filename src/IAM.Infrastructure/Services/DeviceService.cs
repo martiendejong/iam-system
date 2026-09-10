@@ -224,6 +224,6 @@ public class DeviceService : IDeviceService
 
     private static string HashSecret(string secret)
     {
-        return BCrypt.Net.BCrypt.HashPassword(secret);
+        return BCrypt.Net.BCrypt.HashPassword(secret, workFactor: 12);
     }
 }

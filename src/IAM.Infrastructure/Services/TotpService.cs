@@ -38,7 +38,8 @@ public class TotpService : ITotpService
         // https://github.com/google/google-authenticator/wiki/Key-Uri-Format
         var encodedIssuer = Uri.EscapeDataString(issuer);
         var encodedEmail = Uri.EscapeDataString(email);
-        var qrCodeUri = $"otpauth://totp/{encodedIssuer}:{encodedEmail}?secret={base32Secret}&issuer={encodedIssuer}&algorithm=SHA1&digits={CodeDigits}&period={TimeStepSeconds}";
+        // Note: existing users must re-enroll after this change (SHA-1 → SHA-256 is a breaking change for authenticator apps).
+        var qrCodeUri = $"otpauth://totp/{encodedIssuer}:{encodedEmail}?secret={base32Secret}&issuer={encodedIssuer}&algorithm=SHA256&digits={CodeDigits}&period={TimeStepSeconds}";
 
         return new TotpSetupResult
         {
@@ -204,7 +205,7 @@ public class TotpService : ITotpService
             {
                 Id = Guid.NewGuid(),
                 UserId = userId,
-                CodeHash = BCrypt.Net.BCrypt.HashPassword(plaintextCode),
+                CodeHash = BCrypt.Net.BCrypt.HashPassword(plaintextCode, workFactor: 12),
                 IsUsed = false,
                 CreatedAt = DateTime.UtcNow
             });
@@ -258,8 +259,8 @@ public class TotpService : ITotpService
             timeStep >>= 8;
         }
 
-        // HMAC-SHA1 per RFC 4226 Section 5.3
-        using var hmac = new HMACSHA1(secret);
+        // HMAC-SHA256 (upgraded from SHA-1; existing enrollments must re-enroll).
+        using var hmac = new HMACSHA256(secret);
         var hash = hmac.ComputeHash(timeStepBytes);
 
         // Dynamic truncation per RFC 4226 Section 5.4

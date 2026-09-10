@@ -81,7 +81,7 @@ public class BulkOperationService : IBulkOperationService
                         FirstName = row.FirstName!.Trim(),
                         LastName = row.LastName!.Trim(),
                         PhoneNumber = row.PhoneNumber?.Trim(),
-                        PasswordHash = BCrypt.Net.BCrypt.HashPassword(GenerateTemporaryPassword()),
+                        PasswordHash = BCrypt.Net.BCrypt.HashPassword(GenerateTemporaryPassword(), workFactor: 12),
                         IsActive = true,
                         EmailConfirmed = false,
                         CreatedAt = DateTime.UtcNow,

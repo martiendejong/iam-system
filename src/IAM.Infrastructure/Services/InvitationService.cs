@@ -309,7 +309,7 @@ public class InvitationService : IInvitationService
                 Email = invitation.Email,
                 FirstName = firstName ?? string.Empty,
                 LastName = lastName ?? string.Empty,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12),
                 EmailConfirmed = true, // Email is verified via invitation
                 IsActive = true
             };

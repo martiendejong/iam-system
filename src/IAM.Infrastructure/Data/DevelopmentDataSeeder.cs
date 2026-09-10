@@ -85,7 +85,7 @@ public class DevelopmentDataSeeder
         {
             Id = Guid.NewGuid(),
             Email = "admin@test.com",
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123!"),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin123!", workFactor: 12),
             FirstName = "Admin",
             LastName = "User",
             EmailConfirmed = true, // ← Already verified for testing
@@ -101,7 +101,7 @@ public class DevelopmentDataSeeder
         {
             Id = Guid.NewGuid(),
             Email = "user@test.com",
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword("User123!"),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("User123!", workFactor: 12),
             FirstName = "Test",
             LastName = "User",
             EmailConfirmed = true, // ← Already verified for testing
@@ -117,7 +117,7 @@ public class DevelopmentDataSeeder
         {
             Id = Guid.NewGuid(),
             Email = "dev@test.com",
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Dev123!"),
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Dev123!", workFactor: 12),
             FirstName = "Developer",
             LastName = "User",
             EmailConfirmed = true, // ← Already verified for testing
