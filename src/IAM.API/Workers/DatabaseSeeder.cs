@@ -596,6 +596,41 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Jengo VPS MCP Server — confidential server-to-server OAuth client.
+        // The MCP server uses this to exchange IAM auth codes for ID tokens
+        // (server-side, no browser involvement). ClientSecret must match
+        // IamOidc:ClientSecret in the MCP server's appsettings on each host.
+        if (await manager.FindByClientIdAsync("jengo-vps-mcp", cancellationToken) == null)
+        {
+            var iamClientSecret = _configuration["JengoVpsMcp:ClientSecret"] ?? "jengo-mcp-iam-secret-dev";
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-vps-mcp",
+                ClientSecret = iamClientSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo VPS MCP Server",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/oauth/iam-callback"),
+                    new Uri("https://therealm.martiendejong.nl/oauth/iam-callback"),
+                    new Uri("http://localhost:5100/oauth/iam-callback")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                }
+            }, cancellationToken);
+        }
+
         // Sinema — AI video editor (Authorization Code Flow with PKCE, public client)
         // Prod runs behind the /sinema path base on maendeleo; local dev uses the Vite
         // dev server (5311, /api proxied to the backend) or the backend directly (5310).
