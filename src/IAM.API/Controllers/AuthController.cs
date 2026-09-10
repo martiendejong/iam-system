@@ -11,15 +11,27 @@ namespace IAM.API.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly IConfiguration _configuration;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, IConfiguration configuration)
     {
         _authService = authService;
+        _configuration = configuration;
     }
 
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
+        // Public self-registration is closed by default; accounts are created via
+        // invitations (POST /api/invitations/{token}/accept) or by an admin.
+        if (!_configuration.GetValue("Registration:PublicRegistrationEnabled", false))
+        {
+            return StatusCode(403, new
+            {
+                error = "Public registration is disabled. Access is by invitation - contact the administrator."
+            });
+        }
+
         var result = await _authService.RegisterAsync(
             request.Email,
             request.Password,
