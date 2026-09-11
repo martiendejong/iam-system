@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -222,7 +222,7 @@ builder.Services.AddOpenIddict()
             if (!string.IsNullOrEmpty(certPath) && File.Exists(certPath))
             {
                 var cert = X509CertificateLoader.LoadPkcs12FromFile(certPath, certPass);
-                options.AddSigningCertificate(cert).AddEncryptionCertificate(cert);
+                options.AddSigningCertificate(cert).AddEphemeralEncryptionKey();
             }
             else
             {
