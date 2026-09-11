@@ -735,5 +735,37 @@ public class DatabaseSeeder : IHostedService
                 }
             }, cancellationToken);
         }
+
+        // Jengo AGI Service Account — machine-to-machine auth (Client Credentials Flow).
+        // JengoAGI uses this to obtain access tokens autonomously (no user interaction).
+        // ClientSecret is configurable via JengoAgiSvc:ClientSecret in appsettings;
+        // falls back to a dev placeholder so local runs require no extra config.
+        // Scopes: openid (identity), roles (agent role claims), tenants (tenant context).
+        // This is intentionally separate from the "jengo-agi" dashboard PKCE client —
+        // the dashboard client handles interactive admin-user logins; this client handles
+        // background agent automation.
+        if (await manager.FindByClientIdAsync("jengo-agi-svc", cancellationToken) == null)
+        {
+            var jengoAgiSecret = configuration["JengoAgiSvc:ClientSecret"]
+                ?? (env.IsDevelopment()
+                    ? "jengo-agi-svc-secret-dev"
+                    : throw new InvalidOperationException("JengoAgiSvc:ClientSecret not configured in production"));
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-agi-svc",
+                ClientSecret = jengoAgiSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo AGI Service Account",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}tenants"
+                }
+            }, cancellationToken);
+        }
     }
 }
