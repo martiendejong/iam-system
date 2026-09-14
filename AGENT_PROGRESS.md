@@ -412,10 +412,31 @@ unchanged and were already verified against the real dev `iam_db`.
 Left: nothing for this task's scope.
 
 ## 2026-09-14 — task 3314
-Started: provisioning a dedicated OpenIddict RSA encryption cert (KeyEncipherment) to
-replace `AddEphemeralEncryptionKey()` (PR #110's stopgap), so refresh tokens survive an
-app-pool recycle/restart instead of becoming permanently undecryptable. Plan: generate
-the cert, wire `OpenIddict:EncryptionCertificatePath`/`Password` into `Program.cs`
-mirroring the existing signing-cert pattern (incl. fail-fast in Production), store the
-password in vault, add a regression test proving a refresh token issued by one process
-is still valid after a simulated restart (fresh process reloading the same on-disk cert).
+Done: PR #114. Generated a dedicated RSA (2048-bit, KeyEncipherment) encryption cert,
+wired `OpenIddict:EncryptionCertificatePath`/`Password` into `Program.cs` (mirrors the
+signing-cert pattern incl. fail-fast), removed `AddEphemeralEncryptionKey()`. Cert placed
+at `C:/Services/IAM/encryption.pfx`, password in vault (project 6, cred 218), deployed
+`appsettings.Production.json` updated with the new keys — inert until the new binary is
+built+deployed+the service restarted (deliberately not done this session, per the
+never-redeploy-without-explicit-permission rule).
+Verified: `dotnet build` clean (0 errors) on `src/IAM.API` and `tests/IAM.API.Tests`.
+4 new tests (`OpenIddictEncryptionCertificateTests`) all pass, proving directly against
+the real OpenIddict `AddEncryptionCertificate` API and RSA-OAEP/JWE mechanism: (1) a
+DigitalSignature-only cert is rejected (PR #110's crash, regression guard), (2) the new
+KeyEncipherment cert is accepted, (3) a token encrypted by one process instance decrypts
+with an independently-loaded instance of the SAME on-disk cert (the actual restart-
+survival property this task requires), (4) the same does NOT hold for two independently
+generated ephemeral keys (proves the bug being fixed, and that the test methodology is
+sound). Also fixed the two pre-existing compile errors in
+`TokenLifetimeConfigurationTests.cs`/`EmailTwoFactorLoginTests.cs` (missing
+`ILogger<AuthService>` ctor arg) that were blocking the whole test project from building
+at all.
+Found and did NOT fix (out of scope, filed separately): `IAMTestWebApplicationFactory`
+(`WebApplicationFactory<Program>`/`HostFactoryResolver`) currently fails ~119 of 160
+tests in this suite with `JWT secret key not configured` even on an unmodified `develop`
+checkout (`git diff origin/develop` on `Program.cs`/the factory = empty) — a pre-existing,
+repo-wide, unrelated environment regression that blocks every controller/integration test,
+not just this task's own. Worked around it for this task's own verification by testing
+the OpenIddict API and crypto mechanism directly, without going through that factory.
+Left: build+deploy the new binary and restart the IAM service (human/deploy decision);
+separately, the WebApplicationFactory regression above needs its own investigation.
