@@ -217,20 +217,35 @@ builder.Services.AddOpenIddict()
         else
         {
             // Production: load from config
-            var certPath = builder.Configuration["OpenIddict:SigningCertificatePath"];
-            var certPass = builder.Configuration["OpenIddict:SigningCertificatePassword"];
-            if (!string.IsNullOrEmpty(certPath) && File.Exists(certPath))
-            {
-                var cert = X509CertificateLoader.LoadPkcs12FromFile(certPath, certPass);
-                options.AddSigningCertificate(cert).AddEphemeralEncryptionKey();
-            }
-            else
+            var signingCertPath = builder.Configuration["OpenIddict:SigningCertificatePath"];
+            var signingCertPass = builder.Configuration["OpenIddict:SigningCertificatePassword"];
+            if (string.IsNullOrEmpty(signingCertPath) || !File.Exists(signingCertPath))
             {
                 // Fail fast — no production certificate configured
                 throw new InvalidOperationException(
                     "Production OpenIddict signing certificate not configured. " +
                     "Set OpenIddict:SigningCertificatePath and OpenIddict:SigningCertificatePassword in configuration.");
             }
+
+            // Dedicated encryption certificate (task 3314, follow-up to #110): AddEphemeralEncryptionKey()
+            // regenerates its RSA key in memory on every process start, so every refresh token issued
+            // before a restart (deploy, crash, IIS app pool recycle) becomes permanently undecryptable
+            // on the next one, regardless of the 7-day refresh token lifetime. A persisted certificate
+            // (KeyEncipherment usage — a signing-only cert like signing.pfx is rejected by OpenIddict)
+            // fixes that by keeping the same encryption key across restarts.
+            var encryptionCertPath = builder.Configuration["OpenIddict:EncryptionCertificatePath"];
+            var encryptionCertPass = builder.Configuration["OpenIddict:EncryptionCertificatePassword"];
+            if (string.IsNullOrEmpty(encryptionCertPath) || !File.Exists(encryptionCertPath))
+            {
+                // Fail fast — same pattern as the signing certificate above
+                throw new InvalidOperationException(
+                    "Production OpenIddict encryption certificate not configured. " +
+                    "Set OpenIddict:EncryptionCertificatePath and OpenIddict:EncryptionCertificatePassword in configuration.");
+            }
+
+            var signingCert = X509CertificateLoader.LoadPkcs12FromFile(signingCertPath, signingCertPass);
+            var encryptionCert = X509CertificateLoader.LoadPkcs12FromFile(encryptionCertPath, encryptionCertPass);
+            options.AddSigningCertificate(signingCert).AddEncryptionCertificate(encryptionCert);
         }
 
         // Register ASP.NET Core host and enable endpoint passthrough
