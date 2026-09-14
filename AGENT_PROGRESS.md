@@ -410,3 +410,12 @@ Full `IAM.API.Tests` suite: 141 passed / 2 skipped (pre-existing) / 0 failed. No
 change this round — the `RememberMe` column and its additive migration from round 1 are
 unchanged and were already verified against the real dev `iam_db`.
 Left: nothing for this task's scope.
+
+## 2026-09-14 — task 3314
+Started: provisioning a dedicated OpenIddict RSA encryption cert (KeyEncipherment) to
+replace `AddEphemeralEncryptionKey()` (PR #110's stopgap), so refresh tokens survive an
+app-pool recycle/restart instead of becoming permanently undecryptable. Plan: generate
+the cert, wire `OpenIddict:EncryptionCertificatePath`/`Password` into `Program.cs`
+mirroring the existing signing-cert pattern (incl. fail-fast in Production), store the
+password in vault, add a regression test proving a refresh token issued by one process
+is still valid after a simulated restart (fresh process reloading the same on-disk cert).
