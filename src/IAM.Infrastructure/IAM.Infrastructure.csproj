@@ -14,7 +14,8 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.*" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.*" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.*" />
-    <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="5.9.0" />
+    <!-- 5.9.0 was never a published version; pinned exactly to the resolved 6.0.0 (see IAM.API.csproj). -->
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="[6.0.0]" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
     <PackageReference Include="System.DirectoryServices.Protocols" Version="9.0.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.16.0" />

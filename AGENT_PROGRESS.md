@@ -440,3 +440,25 @@ not just this task's own. Worked around it for this task's own verification by t
 the OpenIddict API and crypto mechanism directly, without going through that factory.
 Left: build+deploy the new binary and restart the IAM service (human/deploy decision);
 separately, the WebApplicationFactory regression above needs its own investigation.
+
+## 2026-09-15 — task 3419
+Done: fixed the `WebApplicationFactory` regression flagged above (PR pending). Test
+project already compiled clean on this develop HEAD (someone else's fix had already
+landed the `ILogger<AuthService>` ctor arg). Root cause was `Program.cs:273` reading
+`Jwt:SecretKey` as a bare top-level statement, before `builder.Build()` — moved that read
+(and the `AddJwtBearer` key construction) inside the `.AddJwtBearer(options => {...})`
+delegate, which only runs lazily post-`Build()`, after `IAMTestWebApplicationFactory`'s
+config override is visible. Also pinned `OpenIddict.AspNetCore`/`OpenIddict.EntityFrameworkCore`
+to `[6.0.0]` (exact) — `5.9.0` was never a published version, so NuGet was silently
+floating to whatever the newest resolvable version was.
+Verified: `dotnet test tests/IAM.API.Tests` now 157 passed / 3 skipped (all pre-existing,
+documented, unrelated to this fix: a CNG-keyset host limitation and a pre-existing
+Policy Testing Sandbox 404-vs-500 bug) / 0 failed — down from 119/160 failing. Also fixed
+one newly-surfaced failure: `MagicLinkServiceTests.ValidateMagicLinkAsync_WithValidToken_*`
+was validating against the DB's already-hashed token value instead of the plaintext token
+from the emailed link, double-hashing it — a pre-existing test bug that never got to run
+before this fix.
+Left: nothing for this task. `Program.cs:185`'s `Jwt:Issuer` read (inside the OpenIddict
+`AddServer` builder) has the same before-Build() timing shape but doesn't throw and no
+OpenIddict-flow test broke because of it — left as-is per the task's own scope (real
+non-test startup unchanged).
