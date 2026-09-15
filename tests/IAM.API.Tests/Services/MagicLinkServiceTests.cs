@@ -75,16 +75,20 @@ public class MagicLinkServiceTests
     [Fact]
     public async Task ValidateMagicLinkAsync_WithValidToken_ReturnsUserAndMarksTokenUsed()
     {
-        var (service, _, context) = CreateService();
+        var (service, emailService, context) = CreateService();
         var user = CreateUser();
         context.Users.Add(user);
         await context.SaveChangesAsync();
 
         await service.SendMagicLinkAsync(user.Email, MagicLinkPurpose.Login);
-        var token = await context.MagicLinkTokens.SingleAsync();
+        // The service stores only the SHA-256 hash of the token (MagicLinkService.cs:71); the
+        // plaintext token is sent in the email, not persisted anywhere. Pull it from the emailed
+        // URL rather than the DB row - validating against the DB's own hash double-hashes it and
+        // never matches.
+        var plaintextToken = ExtractToken(emailService.SentMagicLinkUrls[0]);
 
-        var validated = await service.ValidateMagicLinkAsync(token.Token);
-        var reusedResult = await service.ValidateMagicLinkAsync(token.Token);
+        var validated = await service.ValidateMagicLinkAsync(plaintextToken);
+        var reusedResult = await service.ValidateMagicLinkAsync(plaintextToken);
 
         Assert.NotNull(validated);
         Assert.Equal(user.Id, validated!.Id);
@@ -99,6 +103,13 @@ public class MagicLinkServiceTests
         var result = await service.ValidateMagicLinkAsync("does-not-exist");
 
         Assert.Null(result);
+    }
+
+    private static string ExtractToken(string magicLinkUrl)
+    {
+        var query = new Uri(magicLinkUrl).Query;
+        return System.Web.HttpUtility.ParseQueryString(query)["token"]
+            ?? throw new InvalidOperationException($"No token query parameter in {magicLinkUrl}");
     }
 
     private class FakeEmailService : IEmailService

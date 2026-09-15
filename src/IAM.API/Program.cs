@@ -270,9 +270,11 @@ builder.Services.AddOpenIddict()
     });
 
 // JWT Authentication
-var jwtSecretKey = builder.Configuration["Jwt:SecretKey"] ?? throw new InvalidOperationException("JWT secret key not configured");
-var key = Encoding.UTF8.GetBytes(jwtSecretKey);
-
+// The secret key is read lazily inside the AddJwtBearer options delegate (invoked by the DI
+// container on first options resolution, after builder.Build()) rather than as a bare top-level
+// statement here — a bare read at this point runs before WebApplicationFactory's test config
+// override (ConfigureAppConfiguration, applied during the intercepted Build() call) is visible
+// on builder.Configuration, which throws "JWT secret key not configured" for every integration test.
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -280,6 +282,9 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
+    var jwtSecretKey = builder.Configuration["Jwt:SecretKey"] ?? throw new InvalidOperationException("JWT secret key not configured");
+    var key = Encoding.UTF8.GetBytes(jwtSecretKey);
+
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
