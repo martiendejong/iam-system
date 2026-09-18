@@ -767,5 +767,47 @@ public class DatabaseSeeder : IHostedService
                 }
             }, cancellationToken);
         }
+
+        // Jengo Cloud Plane — commercial control plane for Jengo Cloud Workspace
+        // (registration/plans/tenancy/usage; JengoWork epic 3629, task 3632).
+        // Public client + PKCE, same recipe as taskmanager/sinema: cookie session in the
+        // app, claims from the id_token. Runs behind the /plane path on maendeleo;
+        // localhost URIs cover local development.
+        if (await manager.FindByClientIdAsync("jengo-cloud-plane", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-cloud-plane",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Cloud Plane",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/plane/signin-oidc"),
+                    new Uri("http://localhost:5210/signin-oidc")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/plane/"),
+                    new Uri("http://localhost:5210/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
     }
 }
