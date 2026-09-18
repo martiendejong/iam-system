@@ -134,6 +134,10 @@ public class InvitationService : IInvitationService
                 ["{{TenantName}}"] = tenant.Name,
                 ["{{RoleName}}"] = role.Name,
                 ["{{InviteUrl}}"] = inviteUrl,
+                // Raw token so app-branded templates can point the accept link at their
+                // own accept page (e.g. Jengo Cloud Workspace /plane/accept?token=...)
+                // instead of the IAM's generic accept-invite UI (JengoWork 3632).
+                ["{{Token}}"] = token,
                 ["{{Email}}"] = email
             };
 
