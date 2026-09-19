@@ -462,3 +462,19 @@ Left: nothing for this task. `Program.cs:185`'s `Jwt:Issuer` read (inside the Op
 `AddServer` builder) has the same before-Build() timing shape but doesn't throw and no
 OpenIddict-flow test broke because of it — left as-is per the task's own scope (real
 non-test startup unchanged).
+
+## 2026-09-20 — task 3670
+Done: Access Matrix table now scrolls in its own bounded region (`overflow-auto
+max-h-[70vh]`) instead of the whole page. Header row and first (username) column are
+both `sticky` (top-0 / left-0), the corner `th` combines both with `z-30` (above the
+column-only `z-20` and header-only `z-10` cells) so nothing bleeds through on diagonal
+scroll. Bumped the per-cell permissions dropdown's backdrop/menu to `z-40`/`z-50` so it
+still renders above the new sticky layers.
+Verified: build clean (`tsc -b && vite build`), existing suite 36/36 passed (no prior
+test covered this page). Live Playwright check against the dev server (mocked
+`/access-matrix` + `/users/me` API responses, 60 users x 12 apps) confirmed: header row
+stays at the container's top y-offset after scrolling down 800px, username column stays
+at the container's left x-offset after scrolling right 600px, the corner cell renders
+cleanly with no overlapping text, `main`'s own `scrollTop` stayed 0 (only the table's
+container scrolled), and the permissions dropdown still opens above the sticky layers.
+Left: nothing for this task.
