@@ -736,6 +736,45 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Debat Thermometer — YouTube debate analysis (Authorization Code Flow with PKCE, public client).
+        // Prod runs behind the /debat path base on maendeleo (Flask, port 5320); local dev on 5177.
+        if (await manager.FindByClientIdAsync("debate-thermometer", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "debate-thermometer",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Debat Thermometer",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/debat/callback"),
+                    new Uri("http://localhost:5177/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/debat/"),
+                    new Uri("http://localhost:5177/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         // Jengo AGI Service Account — machine-to-machine auth (Client Credentials Flow).
         // JengoAGI uses this to obtain access tokens autonomously (no user interaction).
         // ClientSecret is configurable via JengoAgiSvc:ClientSecret in appsettings;
