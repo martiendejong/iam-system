@@ -353,7 +353,8 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(
                   "http://localhost:5173",
                   "https://localhost:5173",
-                  "https://maendeleo.martiendejong.nl")
+                  "https://maendeleo.martiendejong.nl",
+                  "https://knowledge.prospergenics.com")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
