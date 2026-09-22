@@ -809,5 +809,44 @@ public class DatabaseSeeder : IHostedService
                 }
             }, cancellationToken);
         }
+
+        if (await manager.FindByClientIdAsync("jengo-knowledge", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-knowledge",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Knowledge",
+                RedirectUris =
+                {
+                    new Uri("https://knowledge.prospergenics.com/callback"),
+                    new Uri("http://localhost:5173/callback"),
+                    new Uri("http://localhost:5280/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://knowledge.prospergenics.com/login"),
+                    new Uri("http://localhost:5173/login"),
+                    new Uri("http://localhost:5280/login")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
     }
 }
