@@ -736,6 +736,49 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Wave — autonomous trading dashboard (Authorization Code Flow with PKCE, public
+        // client). Prod runs standalone on trading.prospergenics.com (Fastify backend
+        // handles the callback); local dev uses the Vite dev server (8080, /api proxied)
+        // or the backend directly (3001).
+        if (await manager.FindByClientIdAsync("wave", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "wave",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Wave Trading",
+                RedirectUris =
+                {
+                    new Uri("https://trading.prospergenics.com/api/v1/auth/callback"),
+                    new Uri("http://localhost:8080/api/v1/auth/callback"),
+                    new Uri("http://localhost:3001/api/v1/auth/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://trading.prospergenics.com/"),
+                    new Uri("http://localhost:8080/"),
+                    new Uri("http://localhost:3001/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         // Jengo AGI Service Account — machine-to-machine auth (Client Credentials Flow).
         // JengoAGI uses this to obtain access tokens autonomously (no user interaction).
         // ClientSecret is configurable via JengoAgiSvc:ClientSecret in appsettings;
