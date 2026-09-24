@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,7 +20,8 @@ public class ApiKeysController : ControllerBase
     }
 
     /// <summary>
-    /// Create a new API key. The raw key is returned ONCE in the response and never stored.
+    /// Create a new API key. The raw key is returned ONCE in the response; the database keeps only its hash
+    /// (the raw key is archived in Vault). <c>scope</c> is read (default) | write | admin.
     /// </summary>
     [HttpPost]
     public async Task<IActionResult> CreateApiKey([FromBody] CreateApiKeyRequest request)
@@ -28,14 +30,23 @@ public class ApiKeysController : ControllerBase
         if (userId == null)
             return Unauthorized(new { error = "User identity not found" });
 
+        if (!ApiKeyScopes.TryParse(request.Scope ?? ApiKeyScopes.Read, out var scope))
+            return BadRequest(new { error = "scope must be one of: read, write, admin." });
+
+        var tenantId = request.TenantId;
+        var denied = CheckMayIssue(scope, ref tenantId);
+        if (denied != null)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = denied });
+
         var (apiKey, rawKey) = await _apiKeyService.CreateApiKeyAsync(
             name: request.Name,
             userId: userId,
-            tenantId: request.TenantId,
+            tenantId: tenantId,
             permissions: request.Permissions,
             expiresAt: request.ExpiresAt,
             rateLimitPerMinute: request.RateLimitPerMinute,
             description: request.Description,
+            scope: scope.ToClaimValue(),
             ct: HttpContext.RequestAborted
         );
 
@@ -44,6 +55,7 @@ public class ApiKeysController : ControllerBase
             id = apiKey.Id,
             name = apiKey.Name,
             keyPrefix = apiKey.KeyPrefix,
+            scope = apiKey.Scope,
             key = rawKey, // Returned ONCE - user must save this
             permissions = JsonSerializer.Deserialize<List<string>>(apiKey.Permissions),
             tenantId = apiKey.TenantId,
@@ -73,6 +85,7 @@ public class ApiKeysController : ControllerBase
             name = k.Name,
             keyPrefix = k.KeyPrefix,
             keyHint = $"{k.KeyPrefix}****", // Masked display
+            scope = k.Scope,
             permissions = JsonSerializer.Deserialize<List<string>>(k.Permissions),
             tenantId = k.TenantId,
             rateLimitPerMinute = k.RateLimitPerMinute,
@@ -179,6 +192,41 @@ public class ApiKeysController : ControllerBase
     }
 
     /// <summary>
+    /// A key can never be minted with more power than the caller has:
+    /// an API-key caller may only issue keys up to its own scope, inside its own tenant; an admin-scope key
+    /// needs an admin user. Returns null when allowed.
+    /// </summary>
+    private string? CheckMayIssue(ApiKeyScope scope, ref Guid? tenantId)
+    {
+        if (User.IsApiKey())
+        {
+            if (User.GetApiKeyScope() is not { } callerScope || !callerScope.Satisfies(scope))
+                return "An API key cannot issue a key with a higher scope than its own.";
+
+            var ownTenant = User.GetApiKeyTenantId();
+            if (!string.IsNullOrEmpty(ownTenant))
+            {
+                // A tenant key stays in its tenant: an omitted tenant means "mine", never "platform-wide".
+                tenantId ??= Guid.TryParse(ownTenant, out var own) ? own : null;
+                if (tenantId is null || !User.CanAccessTenant(tenantId.Value.ToString("D")))
+                    return "An API key can only issue keys for its own tenant.";
+            }
+            else if (tenantId is { } requested && !User.CanAccessTenant(requested.ToString("D")))
+            {
+                return "This API key has no access to the requested tenant.";
+            }
+
+            return null;
+        }
+
+        // Admin scope is the one power that did not exist before scopes: it takes an admin user to hand it out.
+        if (scope == ApiKeyScope.Admin && !User.IsInRole("SuperAdmin") && !User.IsInRole("SystemAdmin"))
+            return "Only SuperAdmin/SystemAdmin users can issue admin-scope API keys.";
+
+        return null;
+    }
+
+    /// <summary>
     /// Extract the current user's ID from the JWT or API key claims.
     /// </summary>
     private Guid? GetCurrentUserId()
@@ -199,5 +247,6 @@ public record CreateApiKeyRequest(
     List<string>? Permissions = null,
     DateTime? ExpiresAt = null,
     int? RateLimitPerMinute = null,
-    string? Description = null
+    string? Description = null,
+    string? Scope = null
 );

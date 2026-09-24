@@ -1,3 +1,4 @@
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -29,21 +30,29 @@ public class AppRolesController : ControllerBase
     }
 
     public record AppRoleDefinition(string Name, string? Description);
+
+    /// <summary>
+    /// The app-role catalog is global (roles have no tenant) and the user listing spans every tenant, so a
+    /// tenant-scoped API key must not reach them: tenant isolation fails closed here. These endpoints take a
+    /// platform-wide key (issued without a tenant).
+    /// </summary>
+    private ObjectResult? DenyTenantScopedKey() =>
+        User.IsApiKey() && !User.IsPlatformKey()
+            ? StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "This endpoint needs a platform-wide API key; tenant-scoped keys cannot use it." })
+            : null;
     public record RegisterAppRolesRequest(string ClientId, List<AppRoleDefinition> Roles);
 
     /// <summary>
     /// Idempotent catalog upsert, called by the application at startup with an IAM API key
-    /// (X-API-Key header). Roles no longer in the catalog are never deleted (assignments
+    /// (X-Api-Key header, write scope). Roles no longer in the catalog are never deleted (assignments
     /// would silently vanish) — they are reported back as stale for an admin to clean up.
     /// </summary>
     [HttpPost("register")]
-    [AllowAnonymous]
+    [Authorize(Policy = HazinaApiKeyPolicies.Write)]
     public async Task<IActionResult> Register([FromBody] RegisterAppRolesRequest request)
     {
-        // The API-key middleware validates X-API-Key when present and stamps this marker;
-        // no marker means no (valid) key was supplied — JWT users should not call this.
-        if (!HttpContext.Items.ContainsKey("ApiKeyPrefix"))
-            return Unauthorized(new { error = "API key required (X-API-Key header)." });
+        if (DenyTenantScopedKey() is { } denied) return denied;
 
         if (string.IsNullOrWhiteSpace(request.ClientId) || request.Roles == null || request.Roles.Count == 0)
             return BadRequest(new { error = "clientId and a non-empty roles list are required." });
@@ -98,11 +107,10 @@ public class AppRolesController : ControllerBase
 
     /// <summary>The registered catalog for an application (admin/debug convenience).</summary>
     [HttpGet("{clientId}")]
-    [AllowAnonymous]
+    [Authorize(Policy = HazinaApiKeyPolicies.Read)]
     public async Task<IActionResult> Get(string clientId)
     {
-        if (!HttpContext.Items.ContainsKey("ApiKeyPrefix"))
-            return Unauthorized(new { error = "API key required (X-API-Key header)." });
+        if (DenyTenantScopedKey() is { } denied) return denied;
 
         var category = $"app:{clientId.Trim().ToLowerInvariant()}";
         var roles = await _context.Roles.Where(r => r.Category == category)
@@ -119,14 +127,13 @@ public class AppRolesController : ControllerBase
     /// local user rows BEFORE a person's first login. Read-only; scoped to one client's
     /// role holders; deliberately returns only directory basics (id/email/name/active) —
     /// never password/MFA/lockout state and never the users' roles for OTHER applications.
-    /// Same X-API-Key gate as the register/get endpoints above: no valid key, no data.
+    /// Same API-key gate as the register/get endpoints above (read scope): no valid key, no data.
     /// </summary>
     [HttpGet("{clientId}/users")]
-    [AllowAnonymous]
+    [Authorize(Policy = HazinaApiKeyPolicies.Read)]
     public async Task<IActionResult> Users(string clientId)
     {
-        if (!HttpContext.Items.ContainsKey("ApiKeyPrefix"))
-            return Unauthorized(new { error = "API key required (X-API-Key header)." });
+        if (DenyTenantScopedKey() is { } denied) return denied;
 
         var clientIdLower = clientId.Trim().ToLowerInvariant();
         if (clientIdLower.Length == 0 || clientIdLower.Contains(':'))

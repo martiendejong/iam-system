@@ -659,6 +659,8 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
             entity.Property(e => e.KeyHash).IsRequired().HasMaxLength(128);
             entity.Property(e => e.KeyPrefix).HasMaxLength(16);
+            entity.Property(e => e.Scope).IsRequired().HasMaxLength(16);
+            entity.Property(e => e.VaultReference).HasMaxLength(64);
             entity.Property(e => e.Permissions).HasColumnType("jsonb");
             entity.Property(e => e.AllowedIps).HasColumnType("jsonb");
             entity.Property(e => e.Description).HasMaxLength(500);

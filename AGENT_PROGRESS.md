@@ -478,3 +478,13 @@ at the container's left x-offset after scrolling right 600px, the corner cell re
 cleanly with no overlapping text, `main`'s own `scrollTop` stayed 0 (only the table's
 container scrolled), and the permissions dropdown still opens above the sticky layers.
 Left: nothing for this task.
+
+## 2026-09-24 - task 3911
+Done: IAM now authenticates X-Api-Key through the shared Hazina.Security.ApiKeys middleware (Hazina PR #318); its own
+ApiKeyAuthenticationMiddleware is deleted. EfApiKeyStore = IAM's table behind the module, hash-only, raw key archived in
+Vault. New: key scope (read/write/admin, migration AddApiKeyScopeAndVaultReference), POST /api/api-keys/introspect for the
+other apps, no-escalation guard on POST /api/api-keys, tenant-scoped keys 403 on the global app-role endpoints. See docs/API-KEYS.md.
+Verified: IAM.API.Tests 179 passed / 3 skipped (pre-existing) / 0 failed, IAM.Core.Tests 1/1; 22 new tests (HTTP-level scope,
+tenant, revoked/expired, rate limit, audit, introspection + issue guard); mutation-checked the tenant guard.
+Left: not deployed. Before starting the new build apply the two ALTER TABLE statements in docs/API-KEYS.md to iam_db and set
+ApiKeys__Vault__*; merge Hazina PR #318 first (IAM references it by project). Owner: Martien / whoever deploys IAM.
