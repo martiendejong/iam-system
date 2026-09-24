@@ -2,6 +2,7 @@
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Hazina.Security.ApiKeys;
 using IAM.API.Auth;
 using IAM.API.Middleware;
 using IAM.API.Workers;
@@ -72,6 +73,7 @@ builder.Services.AddScoped<IGroupService, GroupService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
+builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
 builder.Services.AddScoped<ICertificateAuthorityService, CertificateAuthorityService>();
 builder.Services.AddScoped<IEventBus, EventBusService>();
 builder.Services.AddScoped<IWebhookService, WebhookService>();
@@ -396,7 +398,7 @@ app.UseStaticFiles(new StaticFileOptions
             ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
     }
 });
-app.UseApiKeyAuthentication(); // API key auth before JWT (sets HttpContext.User if X-API-Key header present)
+app.UseHazinaApiKeyAuth(); // API key auth + per-key rate limiting before JWT (sets HttpContext.User if the X-Api-Key header is present)
 app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
 app.UseAuthorization();

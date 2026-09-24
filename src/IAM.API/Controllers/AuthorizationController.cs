@@ -21,7 +21,7 @@ public class AuthorizationController : ControllerBase
 {
     /// <summary>
     /// Same claim name machine auth already issues for tenant scoping — see
-    /// ApiKeyAuthenticationMiddleware, ServiceAccountService, DeviceAuthenticationService.
+    /// Hazina.Security.ApiKeys, ServiceAccountService, DeviceAuthenticationService.
     /// </summary>
     public const string TenantIdClaimType = "tenant_id";
 
@@ -106,7 +106,7 @@ public class AuthorizationController : ControllerBase
         // When the app does have a catalog, the matching UserRole's TenantId (see
         // UsersController.AssignRole / TenantsController.ChangeMemberRole — assignments
         // are already tenant-scopable) becomes the token's tenant_id claim, mirroring the
-        // tenant_id claim machine auth already issues (ApiKeyAuthenticationMiddleware,
+        // tenant_id claim machine auth already issues (Hazina.Security.ApiKeys,
         // ServiceAccountService, DeviceAuthenticationService) but for human logins.
         Guid? tenantIdForToken = null;
         try

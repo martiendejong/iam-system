@@ -15,6 +15,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # The shared X-Api-Key middleware (Hazina.Security.ApiKeys) is referenced by project, see Directory.Build.props.
+    - name: Check out Hazina
+      uses: actions/checkout@v4
+      with:
+        repository: martiendejong/Hazina
+        ref: develop
+        path: hazina-src
+
+    - name: Point the build at the Hazina checkout
+      run: echo "HAZINA_ROOT=${{ github.workspace }}/hazina-src/" >> "$GITHUB_ENV"
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:

@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\IAM.Core\IAM.Core.csproj" />
+    <!-- Shared X-Api-Key middleware / key lifecycle (see Directory.Build.props for HazinaRoot). -->
+    <ProjectReference Include="$(HazinaRoot)src\Core\Security\Hazina.Security.ApiKeys\Hazina.Security.ApiKeys.csproj" />
   </ItemGroup>
 
   <ItemGroup>
