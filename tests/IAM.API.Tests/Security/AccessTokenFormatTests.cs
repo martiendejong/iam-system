@@ -43,6 +43,28 @@ public class AccessTokenFormatTests
     private static readonly Guid TenantId = Guid.Parse("33333333-3481-3481-3481-333333333333");
     private static readonly Guid UserId = Guid.Parse("44444444-3481-3481-3481-444444444444");
 
+    /// <summary>
+    /// Every claim an access token may carry. The token is readable by whoever holds it, so this list is
+    /// deliberately closed: adding a claim to the access token must be a conscious edit here AND to
+    /// AuthorizationController.GetDestinations, never a side effect. Registered/OpenIddict housekeeping
+    /// claims (iss, exp, iat, nbf, jti, client_id, oi_*) plus the three identity claims a resource server
+    /// needs: sub, role, tenant_id (and the granted scope).
+    /// </summary>
+    private static readonly HashSet<string> AllowedAccessTokenClaims = new(StringComparer.Ordinal)
+    {
+        "iss", "exp", "iat", "nbf", "jti", "aud", "client_id", "scope",
+        "sub", "role", "tenant_id",
+        "oi_prst", "oi_au_id", "oi_tkn_id"
+    };
+
+    private static void AssertOnlyAllowedClaims(string accessToken)
+    {
+        var unexpected = DecodeSegment(accessToken, 1).EnumerateObject()
+            .Select(p => p.Name).Where(n => !AllowedAccessTokenClaims.Contains(n)).ToList();
+        Assert.True(unexpected.Count == 0,
+            $"access token carries claims outside the allow-list (readable by every holder): {string.Join(", ", unexpected)}");
+    }
+
     // Shared by every factory in this class so a token issued by one host is verifiable by another
     // (that is exactly the situation right after a deploy: same keys, new token format).
     private static readonly RsaSecurityKey SigningKey = new(RSA.Create(2048)) { KeyId = "test-signing-key" };
@@ -280,7 +302,9 @@ public class AccessTokenFormatTests
         Assert.True(result.IsValid, result.Exception?.Message);
         Assert.Equal("jengo-agi-svc-test", result.ClaimsIdentity.FindFirst("sub")?.Value);
 
+        AssertOnlyAllowedClaims(token);
         var payload = DecodeSegment(token, 1);
+        Assert.Equal("openid", payload.GetProperty("scope").GetString());
         Assert.Equal(TimeSpan.FromMinutes(15),
             TimeSpan.FromSeconds(payload.GetProperty("exp").GetInt64() - payload.GetProperty("iat").GetInt64()));
     }
@@ -365,10 +389,11 @@ public class AccessTokenFormatTests
         Assert.Equal(UserId.ToString(), result.ClaimsIdentity.FindFirst("sub")?.Value);
 
         // Readable, so it must not carry personal data: name and email stay id_token-only.
+        AssertOnlyAllowedClaims(accessToken);
         var claims = DecodeSegment(accessToken, 1);
-        foreach (var pii in new[] { "email", "email_verified", "name", "given_name", "family_name" })
-            Assert.False(claims.TryGetProperty(pii, out _), $"access token must not carry '{pii}'");
-        Assert.True(claims.TryGetProperty("role", out _));
+        Assert.Equal("taskmanager:customer", claims.GetProperty("role").GetString());
+        Assert.Contains("openid", claims.GetProperty("scope").GetString()!.Split(' '));
+        Assert.True(DecodeSegment(idToken, 1).TryGetProperty("email", out _)); // ... it is in the id_token
         Assert.Equal(TenantId.ToString(), claims.GetProperty("tenant_id").GetString());
 
         // Token confusion guard: the id_token is signed by the same key but must not pass as an access token.
@@ -400,6 +425,49 @@ public class AccessTokenFormatTests
         var newAccess = JsonSerializer.Deserialize<JsonElement>(body).GetProperty("access_token").GetString()!;
         Assert.Equal(3, newAccess.Split('.').Length);
         Assert.True((await ValidateAsResourceServerAsync(NewClient(factory), newAccess)).IsValid);
+    }
+
+    [Fact]
+    public async Task RefreshGrant_ForUserDeactivatedAfterLogin_IsRejected()
+    {
+        // Access tokens are now readable and verifiable offline by any resource server, so a deactivated
+        // account must not be able to keep minting fresh ones from a refresh token issued before it was
+        // deactivated (refresh tokens live 7 days).
+        using var factory = new TokenFormatFactory();
+        await SeedInteractiveClientAndUserAsync(factory);
+        var tokens = await LoginAndGetTokensAsync(factory);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+            var user = await db.Users.FindAsync(UserId);
+            user!.IsActive = false;
+            await db.SaveChangesAsync();
+        }
+
+        var refreshed = await NewClient(factory).PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = tokens.GetProperty("refresh_token").GetString()!,
+            ["client_id"] = ClientId
+        }));
+        Assert.True(refreshed.StatusCode == HttpStatusCode.BadRequest || refreshed.StatusCode == HttpStatusCode.Forbidden,
+            $"a deactivated user's refresh token was honoured: {refreshed.StatusCode} {await refreshed.Content.ReadAsStringAsync()}");
+    }
+
+    [Fact]
+    public async Task Userinfo_WithClientCredentialsToken_IsRefusedCleanlyNotWithAServerError()
+    {
+        // A machine token's subject is a client id, not a user GUID.
+        using var factory = new TokenFormatFactory();
+        await SeedServiceClientAsync(factory, "jengo-agi-svc-test", "svc-secret-3481");
+        var token = await GetClientCredentialsTokenAsync(factory, "jengo-agi-svc-test", "svc-secret-3481");
+
+        var request = new HttpRequestMessage(HttpMethod.Get, "/connect/userinfo");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var response = await NewClient(factory).SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]

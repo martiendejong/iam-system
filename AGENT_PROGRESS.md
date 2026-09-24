@@ -478,3 +478,13 @@ at the container's left x-offset after scrolling right 600px, the corner cell re
 cleanly with no overlapping text, `main`'s own `scrollTop` stayed 0 (only the table's
 container scrolled), and the permissions dropdown still opens above the sticky layers.
 Left: nothing for this task.
+
+## 2026-09-24 — task 3481
+Done: `DisableAccessTokenEncryption()` so access tokens are signed RS256 JWTs (Martien picked option B), plus
+the requested security round: refresh/code grant now refuses deactivated or deleted users, userinfo returns 400
+instead of 500 for a machine token, claim destinations are deny-by-default, and `docs/ACCESS-TOKEN-VALIDATION.md`
+tells resource servers how to verify. PR #128.
+Verified: `dotnet test` IAM.API.Tests 165 passed / 3 skipped (baseline 157 / 3), 8 new in-process tests that run
+the real login/authorize/token/client_credentials/refresh flow with in-memory RSA keys (the Development dev certs
+hit the host's CNG limitation); without the Program.cs change 5 of them fail. Not verified: live deploy.
+Left: deploy is Martien's call; further hardening follow-ups are tracked as JengoWork tasks 4094-4099.
