@@ -294,6 +294,33 @@ public class ApiKeyAuthenticationTests : IClassFixture<ApiKeyAuthenticationTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    private sealed class SingleClientFactory(HttpClient client) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => client;
+    }
+
+    [Fact]
+    public async Task HttpApiKeyLookup_FromAnotherApp_ResolvesKeysAgainstThisIam()
+    {
+        // The consumer side of the hybrid design: Hazina's own HttpApiKeyLookup (what jengo-mcp/TaskManager use)
+        // talking to IAM's real introspection endpoint with a platform admin service key.
+        var tenant = Guid.NewGuid();
+        var (id, raw) = await CreateKeyAsync("write", tenant);
+        var (_, serviceRaw) = await CreateKeyAsync("admin");
+        var lookup = new HttpApiKeyLookup(
+            new SingleClientFactory(ClientWith(serviceRaw)),
+            Microsoft.Extensions.Options.Options.Create(new HttpApiKeyLookupOptions { BaseUrl = "http://localhost/" }));
+
+        var record = await lookup.FindByHashAsync(ApiKeyHasher.Hash(raw));
+
+        Assert.NotNull(record);
+        Assert.Equal(id.ToString("D"), record!.Id);
+        Assert.Equal(ApiKeyScope.Write, record.Scope);
+        Assert.Equal(tenant.ToString("D"), record.TenantId);
+        Assert.True(record.IsActive);
+        Assert.Null(await lookup.FindByHashAsync(ApiKeyHasher.Hash("no-such-key")));
+    }
+
     [Fact]
     public async Task Introspect_WithoutAKey_IsRefused()
     {
