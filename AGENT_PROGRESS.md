@@ -488,3 +488,13 @@ Verified: `dotnet test` IAM.API.Tests 165 passed / 3 skipped (baseline 157 / 3),
 the real login/authorize/token/client_credentials/refresh flow with in-memory RSA keys (the Development dev certs
 hit the host's CNG limitation); without the Program.cs change 5 of them fail. Not verified: live deploy.
 Left: deploy is Martien's call; further hardening follow-ups are tracked as JengoWork tasks 4094-4099.
+
+## 2026-09-24 - task 3911
+Done: IAM now authenticates X-Api-Key through the shared Hazina.Security.ApiKeys middleware (Hazina PR #318); its own
+ApiKeyAuthenticationMiddleware is deleted. EfApiKeyStore = IAM's table behind the module, hash-only, raw key archived in
+Vault. New: key scope (read/write/admin, migration AddApiKeyScopeAndVaultReference), POST /api/api-keys/introspect for the
+other apps, no-escalation guard on POST /api/api-keys, tenant-scoped keys 403 on the global app-role endpoints. See docs/API-KEYS.md.
+Verified: IAM.API.Tests 180 passed / 3 skipped (pre-existing) / 0 failed, IAM.Core.Tests 1/1; 23 new tests (HTTP-level scope,
+tenant, revoked/expired, rate limit, audit, introspection incl. Hazina HttpApiKeyLookup against this IAM, issue guard); mutation-checked the tenant guard.
+Left: not deployed. Before starting the new build apply the two ALTER TABLE statements in docs/API-KEYS.md to iam_db and set
+ApiKeys__Vault__*; merge Hazina PR #318 first (IAM references it by project). Owner: Martien / whoever deploys IAM.
