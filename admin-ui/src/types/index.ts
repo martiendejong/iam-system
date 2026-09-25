@@ -107,6 +107,18 @@ export interface IdentityProvider {
   updatedAt: string;
 }
 
+/**
+ * Shape returned by the anonymous GET /identity-providers/public endpoint.
+ * Only the fields the login page needs to render social login buttons;
+ * secrets and tenant-internal metadata are never exposed here.
+ */
+export interface PublicIdentityProvider {
+  id: string;
+  name: string;
+  displayName: string;
+  type: IdentityProviderTypeValue;
+}
+
 export interface ExternalLoginAccount {
   id: string;
   provider: string;

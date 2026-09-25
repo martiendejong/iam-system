@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { brandingApi } from '../../services/brandingApi';
 import type { PublicTenantBranding } from '../../services/brandingApi';
-import type { IdentityProvider } from '../../types';
+import type { PublicIdentityProvider } from '../../types';
 import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
 
 type LoginMethod = 'password' | 'magic-link' | 'sms';
@@ -24,7 +24,7 @@ export default function LoginPage() {
   const [otpSent, setOtpSent] = useState(false);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
-  const [socialProviders, setSocialProviders] = useState<IdentityProvider[]>([]);
+  const [socialProviders, setSocialProviders] = useState<PublicIdentityProvider[]>([]);
   const [branding, setBranding] = useState<PublicTenantBranding | null>(null);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [stepUpCode, setStepUpCode] = useState('');
@@ -57,14 +57,17 @@ export default function LoginPage() {
 
   const loadSocialProviders = async () => {
     try {
-      const providers = await api.getIdentityProviders();
-      setSocialProviders(providers.filter((p: IdentityProvider) => p.isActive));
+      // Public endpoint: works for anonymous visitors (the authorized
+      // /identity-providers list would 401 here) and only returns active
+      // providers, so no client-side isActive filtering is needed.
+      const providers = await api.getPublicIdentityProviders();
+      setSocialProviders(providers);
     } catch {
       // Social providers are optional, don't show error
     }
   };
 
-  const handleSocialLogin = async (provider: IdentityProvider) => {
+  const handleSocialLogin = async (provider: PublicIdentityProvider) => {
     try {
       setError('');
       const redirectUri = `${window.location.origin}/auth/login`;

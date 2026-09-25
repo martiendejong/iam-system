@@ -45,6 +45,30 @@ public class IdentityProvidersController : ControllerBase
     }
 
     /// <summary>
+    /// Public list of active identity providers for the login page.
+    /// Anonymous by design: an unauthenticated visitor must be able to see which
+    /// social login buttons to render. Returns only active providers and only the
+    /// whitelisted fields in <see cref="PublicIdentityProviderDto"/> · never the
+    /// entity itself, so no client credentials or tenant-internal metadata leak.
+    /// </summary>
+    [HttpGet("public")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetPublic([FromQuery] Guid? tenantId = null)
+    {
+        var providers = await _socialAuthService.GetIdentityProvidersAsync(tenantId);
+
+        return Ok(providers
+            .Where(p => p.IsActive)
+            .Select(p => new PublicIdentityProviderDto
+            {
+                Id = p.Id,
+                Name = p.Name,
+                DisplayName = p.DisplayName,
+                Type = p.Type.ToString()
+            }));
+    }
+
+    /// <summary>
     /// Get an identity provider by ID
     /// </summary>
     [HttpGet("{id:guid}")]
@@ -188,6 +212,19 @@ public class IdentityProvidersController : ControllerBase
 
         return Ok(new { message = "Identity provider deleted successfully" });
     }
+}
+
+/// <summary>
+/// Whitelisted identity provider fields that are safe to expose to anonymous
+/// visitors on the login page. Intentionally excludes ClientId, ClientSecret,
+/// MetadataUrl, AttributeMapping, tenant details and role mapping.
+/// </summary>
+public class PublicIdentityProviderDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string Type { get; set; } = "";
 }
 
 public class CreateIdentityProviderRequest

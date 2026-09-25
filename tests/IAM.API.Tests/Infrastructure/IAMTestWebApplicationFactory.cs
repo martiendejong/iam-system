@@ -41,7 +41,11 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
             {
                 ["Jwt:SecretKey"] = "DEVELOPMENT_SECRET_KEY_CHANGE_IN_PRODUCTION_32_CHARS_MIN",
                 ["Jwt:Issuer"] = "https://localhost:5001",
-                ["Jwt:Audience"] = "iam-api"
+                ["Jwt:Audience"] = "iam-api",
+                // Required by SecretsVaultService, which sits in the DI graph of every
+                // controller that uses ISocialAuthService (e.g. the anonymous
+                // /api/identity-providers/public endpoint). Test-only 32-byte key.
+                ["SecretsVault:MasterKey"] = Convert.ToBase64String(new byte[32])
             });
         });
 
