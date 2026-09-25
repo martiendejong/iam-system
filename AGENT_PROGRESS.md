@@ -498,3 +498,9 @@ Verified: IAM.API.Tests 180 passed / 3 skipped (pre-existing) / 0 failed, IAM.Co
 tenant, revoked/expired, rate limit, audit, introspection incl. Hazina HttpApiKeyLookup against this IAM, issue guard); mutation-checked the tenant guard.
 Left: not deployed. Before starting the new build apply the two ALTER TABLE statements in docs/API-KEYS.md to iam_db and set
 ApiKeys__Vault__*; merge Hazina PR #318 first (IAM references it by project). Owner: Martien / whoever deploys IAM.
+
+## 2026-09-25 - task 3481 (continuation)
+Done: merged develop (3911 API-key work) into PR #128, resolved the AGENT_PROGRESS conflict, dropped a stray staged revert of
+the hardening left in the worktree, marked the PR ready with the deploy prerequisites; dependency scan clean; commented on 3231/1748, reopened 3231.
+Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
+Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
