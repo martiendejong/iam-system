@@ -479,6 +479,16 @@ cleanly with no overlapping text, `main`'s own `scrollTop` stayed 0 (only the ta
 container scrolled), and the permissions dropdown still opens above the sticky layers.
 Left: nothing for this task.
 
+## 2026-09-24 — task 3481
+Done: `DisableAccessTokenEncryption()` so access tokens are signed RS256 JWTs (Martien picked option B), plus
+the requested security round: refresh/code grant now refuses deactivated or deleted users, userinfo returns 400
+instead of 500 for a machine token, claim destinations are deny-by-default, and `docs/ACCESS-TOKEN-VALIDATION.md`
+tells resource servers how to verify. PR #128.
+Verified: `dotnet test` IAM.API.Tests 165 passed / 3 skipped (baseline 157 / 3), 8 new in-process tests that run
+the real login/authorize/token/client_credentials/refresh flow with in-memory RSA keys (the Development dev certs
+hit the host's CNG limitation); without the Program.cs change 5 of them fail. Not verified: live deploy.
+Left: deploy is Martien's call; further hardening follow-ups are tracked as JengoWork tasks 4094-4099.
+
 ## 2026-09-24 - task 3911
 Done: IAM now authenticates X-Api-Key through the shared Hazina.Security.ApiKeys middleware (Hazina PR #318); its own
 ApiKeyAuthenticationMiddleware is deleted. EfApiKeyStore = IAM's table behind the module, hash-only, raw key archived in
@@ -488,3 +498,9 @@ Verified: IAM.API.Tests 180 passed / 3 skipped (pre-existing) / 0 failed, IAM.Co
 tenant, revoked/expired, rate limit, audit, introspection incl. Hazina HttpApiKeyLookup against this IAM, issue guard); mutation-checked the tenant guard.
 Left: not deployed. Before starting the new build apply the two ALTER TABLE statements in docs/API-KEYS.md to iam_db and set
 ApiKeys__Vault__*; merge Hazina PR #318 first (IAM references it by project). Owner: Martien / whoever deploys IAM.
+
+## 2026-09-25 - task 3481 (continuation)
+Done: merged develop (3911 API-key work) into PR #128, resolved the AGENT_PROGRESS conflict, dropped a stray staged revert of
+the hardening left in the worktree, marked the PR ready with the deploy prerequisites; dependency scan clean; commented on 3231/1748, reopened 3231.
+Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
+Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
