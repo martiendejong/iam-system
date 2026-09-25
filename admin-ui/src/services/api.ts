@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
-import type { LoginRequest, LoginResponse, RegisterRequest, User } from '../types';
+import type { LoginRequest, LoginResponse, PublicIdentityProvider, RegisterRequest, User } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
 
@@ -285,6 +285,17 @@ class ApiService {
   async getIdentityProviders(tenantId?: string): Promise<any[]> {
     const params = tenantId ? { tenantId } : {};
     const response = await this.client.get('/identity-providers', { params });
+    return response.data;
+  }
+
+  /**
+   * Public, unauthenticated list of active identity providers for the login
+   * page. The authorized getIdentityProviders() above requires a token and
+   * would 401 for anonymous visitors, hiding the social login buttons.
+   */
+  async getPublicIdentityProviders(tenantId?: string): Promise<PublicIdentityProvider[]> {
+    const params = tenantId ? { tenantId } : {};
+    const response = await this.client.get('/identity-providers/public', { params });
     return response.data;
   }
 

@@ -12,7 +12,7 @@ vi.mock('../../context/AuthContext', () => ({
 
 vi.mock('../../services/api', () => ({
   api: {
-    getIdentityProviders: vi.fn(),
+    getPublicIdentityProviders: vi.fn(),
     getClient: vi.fn(),
     resendLoginTwoFactorCode: vi.fn(),
     verifyLoginTwoFactor: vi.fn(),
@@ -57,7 +57,7 @@ describe('LoginPage returnUrl navigation', () => {
       logout: vi.fn(),
       setCurrentUser,
     });
-    mockedApi.getIdentityProviders.mockResolvedValue([]);
+    mockedApi.getPublicIdentityProviders.mockResolvedValue([]);
     mockedBrandingApi.getBrandingByDomain.mockRejectedValue(new Error('no branding'));
     mockedBrandingApi.getPublicBranding.mockRejectedValue(new Error('no branding'));
 
@@ -268,6 +268,44 @@ describe('LoginPage returnUrl navigation', () => {
       await waitFor(() => expect(mockedApi.verifyLoginTwoFactor).toHaveBeenCalledWith('user-1', '654321', false));
       await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
       await waitFor(() => expect(screen.getByText('Portal Profile Page')).toBeInTheDocument());
+    });
+  });
+
+  // Regression coverage for task 4315: the login page used to fetch providers from
+  // the authorized /identity-providers endpoint, which 401s for anonymous visitors,
+  // so social buttons never appeared. It must use the public endpoint instead.
+  describe('social login buttons', () => {
+    it('loads providers from the public endpoint and shows a button per provider', async () => {
+      mockedApi.getPublicIdentityProviders.mockResolvedValue([
+        { id: 'idp-1', name: 'google', displayName: 'Sign in with Google', type: 'Google' },
+      ]);
+
+      renderLoginPage('/portal/profile');
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Sign in with Google' })).toBeInTheDocument()
+      );
+      expect(screen.getByText('Or continue with')).toBeInTheDocument();
+      expect(mockedApi.getPublicIdentityProviders).toHaveBeenCalled();
+    });
+
+    it('shows no social section when the public endpoint returns an empty list', async () => {
+      mockedApi.getPublicIdentityProviders.mockResolvedValue([]);
+
+      renderLoginPage('/portal/profile');
+
+      await waitFor(() => expect(mockedApi.getPublicIdentityProviders).toHaveBeenCalled());
+      expect(screen.queryByText('Or continue with')).not.toBeInTheDocument();
+    });
+
+    it('keeps email/password login available when the provider fetch fails', async () => {
+      mockedApi.getPublicIdentityProviders.mockRejectedValue(new Error('network down'));
+
+      renderLoginPage('/portal/profile');
+
+      await waitFor(() => expect(mockedApi.getPublicIdentityProviders).toHaveBeenCalled());
+      expect(screen.getByLabelText('Email address')).toBeInTheDocument();
+      expect(screen.queryByText('Or continue with')).not.toBeInTheDocument();
     });
   });
 });
