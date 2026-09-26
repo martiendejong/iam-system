@@ -50,6 +50,13 @@ public class IdentityProvider
     public string? AttributeMapping { get; set; }
 
     /// <summary>
+    /// JSON array of allowed redirect URIs for this provider. Exact match only.
+    /// Example: ["https://app.example.com/callback", "https://app.example.com/link"]
+    /// When null or empty, falls back to the global SocialAuth:RedirectUri config value.
+    /// </summary>
+    public string? AllowedRedirectUris { get; set; }
+
+    /// <summary>
     /// Whether this identity provider is enabled
     /// </summary>
     public bool IsActive { get; set; } = true;
