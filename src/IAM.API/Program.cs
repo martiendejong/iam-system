@@ -261,6 +261,11 @@ builder.Services.AddOpenIddict()
         // Configure token lifetimes
         options.SetAccessTokenLifetime(TimeSpan.FromMinutes(15))
                .SetRefreshTokenLifetime(TimeSpan.FromDays(7));
+
+        // Reject 'plain' PKCE — code_challenge equals code_verifier so any intercepted
+        // authorization request leaks the verifier. All seeded clients use S256.
+        // Removing from CodeChallengeMethods also drops 'plain' from the discovery document.
+        options.Configure(o => o.CodeChallengeMethods.Remove(OpenIddictConstants.CodeChallengeMethods.Plain));
     })
     .AddValidation(options =>
     {
