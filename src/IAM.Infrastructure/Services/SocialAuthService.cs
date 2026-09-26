@@ -9,6 +9,7 @@ using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 
@@ -23,24 +24,30 @@ public class SocialAuthService : ISocialAuthService
     // Non-prefixed values are treated as plaintext (migration compatibility).
     private const string EncryptedPrefix = "enc:";
 
+    // State entries expire after 10 minutes (one full OAuth round-trip budget).
+    private static readonly TimeSpan StateEntryTtl = TimeSpan.FromMinutes(10);
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ISecretsVaultService _secretsVault;
+    private readonly IMemoryCache _cache;
 
     public SocialAuthService(
         IAMDbContext context,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         IClaimsMappingService claimsMappingService,
-        ISecretsVaultService secretsVault)
+        ISecretsVaultService secretsVault,
+        IMemoryCache cache)
     {
         _context = context;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
         _claimsMappingService = claimsMappingService;
         _secretsVault = secretsVault;
+        _cache = cache;
     }
 
     /// <summary>
@@ -97,6 +104,12 @@ public class SocialAuthService : ISocialAuthService
         if (!provider.IsActive)
             throw new InvalidOperationException("Identity provider is not active");
 
+        ValidateRedirectUri(provider, redirectUri);
+
+        // Store state server-side so the callback can validate it (replay + open-redirect protection).
+        var cacheKey = StateEntryKey(state);
+        _cache.Set(cacheKey, new SocialStateEntry(redirectUri, providerId), StateEntryTtl);
+
         var (authorizationEndpoint, scopes) = GetProviderEndpoints(provider.Type);
 
         var queryParams = new Dictionary<string, string>
@@ -116,6 +129,27 @@ public class SocialAuthService : ISocialAuthService
 
     public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state)
     {
+        // Consume the state entry exactly once: prevents replays and validates the origin.
+        var cacheKey = StateEntryKey(state);
+        if (!_cache.TryGetValue(cacheKey, out SocialStateEntry? stateEntry) || stateEntry == null)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired state parameter"
+            };
+        }
+        _cache.Remove(cacheKey); // one-time use
+
+        if (stateEntry.ProviderId != providerId)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "State provider mismatch"
+            };
+        }
+
         var provider = await _context.IdentityProviders
             .Include(p => p.DefaultRole)
             .FirstOrDefaultAsync(p => p.Id == providerId);
@@ -790,9 +824,49 @@ public class SocialAuthService : ISocialAuthService
         var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
         return Convert.ToBase64String(hashBytes);
     }
+
+    private static string StateEntryKey(string state) => $"SocialAuthState:{state}";
+
+    private void ValidateRedirectUri(IdentityProvider provider, string redirectUri)
+    {
+        if (string.IsNullOrEmpty(redirectUri))
+            throw new InvalidOperationException("redirectUri is required");
+
+        // Build allowlist: per-provider JSON array takes precedence over global config fallback.
+        List<string> allowed = [];
+
+        if (!string.IsNullOrEmpty(provider.AllowedRedirectUris))
+        {
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<List<string>>(provider.AllowedRedirectUris);
+                if (parsed != null)
+                    allowed = parsed;
+            }
+            catch
+            {
+                // Malformed JSON — treat as empty; global fallback applies.
+            }
+        }
+
+        if (allowed.Count == 0)
+        {
+            var globalFallback = _configuration["SocialAuth:RedirectUri"];
+            if (!string.IsNullOrEmpty(globalFallback))
+                allowed = [globalFallback];
+        }
+
+        if (allowed.Count == 0)
+            throw new InvalidOperationException("No allowed redirect URIs are configured for this provider");
+
+        if (!allowed.Contains(redirectUri, StringComparer.Ordinal))
+            throw new InvalidOperationException("redirectUri is not in the provider's allowed list");
+    }
 }
 
 // Internal helper classes
+
+internal record SocialStateEntry(string RedirectUri, Guid ProviderId);
 
 internal class OAuthTokenResponse
 {
