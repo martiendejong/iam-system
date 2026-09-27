@@ -258,6 +258,17 @@ builder.Services.AddOpenIddict()
                .EnableStatusCodePagesIntegration()
                .DisableTransportSecurityRequirement(); // Allow HTTP when behind IIS/ARR reverse proxy
 
+        // Access tokens are issued as signed-only RS256 JWTs (3 parts), not encrypted JWEs (task 3481).
+        // OpenIddict encrypts every token type by default, which made access tokens unreadable to any
+        // service without IAM's private encryption key, so resource servers (TaskManager, the MCP
+        // validator) could not verify them offline via /.well-known/jwks. Signed-only tokens verify
+        // against the published signing key. Claims in an access token are limited to sub, role,
+        // tenant_id, scope (see AuthorizationController.GetDestinations); name/email stay id_token-only.
+        // Refresh tokens and authorization codes stay encrypted, so the encryption certificate above
+        // is still required. Tokens issued before this change remain valid until they expire: the
+        // validation handler keeps the encryption key, so it still decrypts the old JWEs.
+        options.DisableAccessTokenEncryption();
+
         // Configure token lifetimes
         options.SetAccessTokenLifetime(TimeSpan.FromMinutes(15))
                .SetRefreshTokenLifetime(TimeSpan.FromDays(7));

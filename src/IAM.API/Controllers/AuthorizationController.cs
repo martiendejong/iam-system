@@ -208,6 +208,23 @@ public class AuthorizationController : ControllerBase
         {
             // Retrieve the claims principal stored in the authorization code/refresh token
             claimsPrincipal = (await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme)).Principal!;
+
+            // A refresh token outlives the login (7 days, sliding), and access tokens are now readable and
+            // verifiable offline by any resource server (task 3481). Re-check the account so a user who was
+            // deactivated or deleted after signing in cannot keep minting access tokens.
+            if (!await IsUserStillActiveAsync(claimsPrincipal))
+            {
+                _logger.LogWarning("Refused {GrantType} for subject {Subject}: user is missing or inactive",
+                    request.GrantType, claimsPrincipal.GetClaim(Claims.Subject));
+                return Forbid(
+                    authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                    properties: new AuthenticationProperties(new Dictionary<string, string?>
+                    {
+                        [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
+                        [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
+                            "The user account is no longer active."
+                    }));
+            }
         }
         else if (request.IsClientCredentialsGrantType())
         {
@@ -253,10 +270,16 @@ public class AuthorizationController : ControllerBase
             return BadRequest(new { error = "invalid_token", error_description = "User ID not found in token" });
         }
 
+        // A client-credentials token's subject is a client id, not a user GUID: refuse it instead of throwing (500).
+        if (!Guid.TryParse(userId, out var userGuid))
+        {
+            return BadRequest(new { error = "invalid_token", error_description = "Token does not belong to a user" });
+        }
+
         var user = await _context.Users
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(u => u.Id == Guid.Parse(userId));
+            .FirstOrDefaultAsync(u => u.Id == userGuid);
 
         if (user == null)
         {
@@ -366,11 +389,24 @@ public class AuthorizationController : ControllerBase
                 yield return Destinations.IdentityToken;
                 yield break;
 
-            // For other claims, only include in access token if scope is present
+            // Anything else is deliberately NOT serialized. Access tokens are signed-only JWTs (task 3481), so
+            // every claim in one is readable by whoever holds the token; a new claim must be added to an
+            // explicit case above rather than leaking into the access token by default.
             default:
-                yield return Destinations.AccessToken;
                 yield break;
         }
+    }
+
+    /// <summary>
+    /// True when the subject of an authorization code / refresh token still maps to an existing, active user.
+    /// Interactive flows always issue a user id (GUID) as the subject; anything else is refused.
+    /// </summary>
+    private async Task<bool> IsUserStillActiveAsync(ClaimsPrincipal principal)
+    {
+        if (!Guid.TryParse(principal.GetClaim(Claims.Subject), out var userId))
+            return false;
+
+        return await _context.Users.AsNoTracking().AnyAsync(u => u.Id == userId && u.IsActive, HttpContext.RequestAborted);
     }
 
     /// <summary>
