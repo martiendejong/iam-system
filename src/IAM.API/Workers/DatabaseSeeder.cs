@@ -53,6 +53,38 @@ public class DatabaseSeeder : IHostedService
         }
 
         await AuditAdminRolesAsync(context, cancellationToken);
+        await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
+    }
+
+    /// <summary>
+    /// Task 4056: idempotent group-role backfill. Canonicalizes legacy role value casing only -
+    /// it never removes memberships and never promotes anyone (pre-enforcement owner/admin rows
+    /// cannot be trusted). Groups without an active owner are logged here and listed for global
+    /// admins at GET /api/groups/ownerless.
+    /// </summary>
+    private async Task BackfillGroupRolesAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var groupService = services.GetRequiredService<Core.Services.IGroupService>();
+            var result = await groupService.BackfillGroupRolesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Group-role backfill: {Normalized} membership role value(s) canonicalized, {Ownerless} active group(s) without an active owner",
+                result.NormalizedRoleValues, result.GroupsWithoutActiveOwner);
+
+            if (result.GroupsWithoutActiveOwner > 0)
+            {
+                _logger.LogWarning(
+                    "{Count} group(s) have no active owner; global admins can list them via GET /api/groups/ownerless",
+                    result.GroupsWithoutActiveOwner);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never block startup on the backfill; enforcement itself does not depend on it.
+            _logger.LogError(ex, "Group-role backfill failed");
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

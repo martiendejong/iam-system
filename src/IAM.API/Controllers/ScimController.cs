@@ -429,7 +429,7 @@ public class ScimController : ControllerBase
     /// Create a SCIM token for a tenant (admin UI)
     /// </summary>
     [HttpPost("/api/scim/tokens")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> CreateToken([FromBody] CreateScimTokenRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
@@ -457,7 +457,7 @@ public class ScimController : ControllerBase
     /// List SCIM tokens for a tenant (admin UI)
     /// </summary>
     [HttpGet("/api/scim/tokens")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> ListTokens([FromQuery] Guid tenantId)
     {
         if (tenantId == Guid.Empty)
@@ -481,7 +481,7 @@ public class ScimController : ControllerBase
     /// Revoke a SCIM token (admin UI)
     /// </summary>
     [HttpDelete("/api/scim/tokens/{id:guid}")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> RevokeToken(Guid id)
     {
         var result = await _scimService.RevokeTokenAsync(id);
@@ -495,7 +495,7 @@ public class ScimController : ControllerBase
     /// Get provisioning logs for a tenant (admin UI)
     /// </summary>
     [HttpGet("/api/scim/logs")]
-    [Authorize]
+    [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> GetProvisioningLogs([FromQuery] Guid tenantId, [FromQuery] int skip = 0, [FromQuery] int take = 50)
     {
         if (tenantId == Guid.Empty)

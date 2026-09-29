@@ -16,6 +16,16 @@ public static class TestAuthenticationHelper
 
     public static string GenerateJwtToken(Guid userId, string username, string[] roles)
     {
+        // Root tenant from test seed data
+        return GenerateJwtToken(userId, username, roles, "11111111-1111-1111-1111-111111111111");
+    }
+
+    /// <summary>
+    /// Token with an explicit tenant_id claim, or NONE when <paramref name="tenantIdClaim"/> is
+    /// null (the shape of a password-login token, which carries no tenant_id).
+    /// </summary>
+    public static string GenerateJwtToken(Guid userId, string username, string[] roles, string? tenantIdClaim)
+    {
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
         var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
 
@@ -23,9 +33,13 @@ public static class TestAuthenticationHelper
         {
             new Claim("sub", userId.ToString()),
             new Claim(ClaimTypes.Name, username),
-            new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
-            new Claim("tenant_id", "11111111-1111-1111-1111-111111111111")  // Root tenant from test seed data
+            new Claim(ClaimTypes.NameIdentifier, userId.ToString())
         };
+
+        if (tenantIdClaim != null)
+        {
+            claims.Add(new Claim("tenant_id", tenantIdClaim));
+        }
 
         foreach (var role in roles)
         {
