@@ -274,6 +274,17 @@ public class DatabaseSeeder : IHostedService
             Description = "Access to the Jengo VPS MCP server",
             Resources = { JengoMcpAudience }
         }, cancellationToken);
+
+        // Task 4059: resolver scope — vault confidential client only.
+        // Maps to iam_api audience because the endpoint lives on IAM itself.
+        // Not advertised in discovery (not added to RegisterScopes in Program.cs discovery list).
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = IAM.API.Controllers.ResolverController.ResolverScope,
+            DisplayName = "IAM Resolver",
+            Description = "Allows the vault to call the who-decides resolver endpoint",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -980,6 +991,29 @@ public class DatabaseSeeder : IHostedService
                 Requirements =
                 {
                     OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // Task 4059: Vault resolver client — confidential, client_credentials only.
+        // Secret is read from config key "VaultResolver:ClientSecret" (never committed to git).
+        // In production the value comes from the vault or an environment variable.
+        var vaultClientSecret = configuration["VaultResolver:ClientSecret"];
+        if (!string.IsNullOrEmpty(vaultClientSecret)
+            && await manager.FindByClientIdAsync("jengo-vault", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-vault",
+                ClientSecret = vaultClientSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Vault (who-decides resolver)",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{IAM.API.Controllers.ResolverController.ResolverScope}"
                 }
             }, cancellationToken);
         }

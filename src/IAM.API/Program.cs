@@ -103,6 +103,7 @@ builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
 builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();
+builder.Services.AddScoped<IResolverService, ResolverService>();
 builder.Services.AddScoped<IRegionService, RegionService>();
 builder.Services.AddScoped<IDelegationService, DelegationService>();
 
@@ -213,7 +214,10 @@ builder.Services.AddOpenIddict()
             // scope store); registering them here makes discovery advertise them in
             // scopes_supported.
             "taskmanager_api",
-            "jengo_mcp"
+            "jengo_mcp",
+            // Task 4059: vault-only resolver scope; NOT advertised in discovery
+            // (it is internal and only the vault confidential client holds this permission).
+            IAM.API.Controllers.ResolverController.ResolverScope
         );
 
         // Register signing and encryption credentials
@@ -336,6 +340,18 @@ builder.Services.AddAuthentication(options =>
 
 // SuperAdmin inherits all admin roles (so role-guarded endpoints accept SuperAdmin)
 builder.Services.AddScoped<IClaimsTransformation, SuperAdminClaimsTransformation>();
+
+// Task 4059: scope-based authorization requirement for the vault resolver endpoint
+builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, IAM.API.Auth.ScopeRequirementHandler>();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(IAM.API.Controllers.ResolverController.PolicyName, policy =>
+    {
+        policy.AddAuthenticationSchemes(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new IAM.API.Auth.ScopeRequirement(IAM.API.Controllers.ResolverController.ResolverScope));
+    });
+});
 
 // Redis (for caching) with in-memory fallback
 var redisConnectionString = builder.Configuration["Redis:ConnectionString"];

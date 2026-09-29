@@ -716,7 +716,9 @@ public class AccessTokenFormatTests
                 [Scopes.Roles] = "iam_api",
                 ["tenants"] = "iam_api",
                 ["taskmanager_api"] = "taskmanager_api",
-                ["jengo_mcp"] = "jengo_mcp"
+                ["jengo_mcp"] = "jengo_mcp",
+                // Task 4059: vault-only resolver scope maps to iam_api (endpoint lives on IAM)
+                [IAM.API.Controllers.ResolverController.ResolverScope] = "iam_api"
             };
             foreach (var (name, audience) in expected)
             {
