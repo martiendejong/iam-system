@@ -114,6 +114,26 @@ public class AccessTokenFormatTests
             BaseAddress = new Uri("https://localhost")
         });
 
+    /// <summary>
+    /// Task 4099: register scope→audience mappings in the OpenIddict scope store, the way
+    /// DatabaseSeeder.SeedScopesAsync does in production (the seeder itself is a hosted service
+    /// that the test factory strips out).
+    /// </summary>
+    private static async Task SeedApiScopesAsync(TokenFormatFactory factory, params (string Scope, string Audience)[] mappings)
+    {
+        using var scope = factory.Services.CreateScope();
+        var scopes = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+        foreach (var (name, audience) in mappings)
+        {
+            await scopes.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = name,
+                DisplayName = name,
+                Resources = { audience }
+            });
+        }
+    }
+
     private static async Task SeedInteractiveClientAndUserAsync(TokenFormatFactory factory)
     {
         using var scope = factory.Services.CreateScope();
@@ -171,16 +191,17 @@ public class AccessTokenFormatTests
                 $"{Permissions.Prefixes.Scope}{Scopes.Profile}",
                 $"{Permissions.Prefixes.Scope}{Scopes.Email}",
                 $"{Permissions.Prefixes.Scope}{Scopes.Roles}",
-                $"{Permissions.Prefixes.Scope}{Scopes.OfflineAccess}"
+                $"{Permissions.Prefixes.Scope}{Scopes.OfflineAccess}",
+                $"{Permissions.Prefixes.Scope}taskmanager_api" // task 4099 audience tests
             }
         });
     }
 
-    private static async Task SeedServiceClientAsync(TokenFormatFactory factory, string clientId, string secret)
+    private static async Task SeedServiceClientAsync(TokenFormatFactory factory, string clientId, string secret, params string[] extraScopes)
     {
         using var scope = factory.Services.CreateScope();
         var apps = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
-        await apps.CreateAsync(new OpenIddictApplicationDescriptor
+        var descriptor = new OpenIddictApplicationDescriptor
         {
             ClientId = clientId,
             ClientSecret = secret,
@@ -193,11 +214,14 @@ public class AccessTokenFormatTests
                 Permissions.GrantTypes.ClientCredentials,
                 $"{Permissions.Prefixes.Scope}{Scopes.OpenId}"
             }
-        });
+        };
+        foreach (var extraScope in extraScopes)
+            descriptor.Permissions.Add($"{Permissions.Prefixes.Scope}{extraScope}");
+        await apps.CreateAsync(descriptor);
     }
 
     /// <summary>Real browser-equivalent flow: login, authorize (cookie), exchange the code.</summary>
-    private static async Task<JsonElement> LoginAndGetTokensAsync(TokenFormatFactory factory)
+    private static async Task<JsonElement> LoginAndGetTokensAsync(TokenFormatFactory factory, string scope = "openid profile email roles offline_access")
     {
         var client = NewClient(factory);
 
@@ -208,7 +232,7 @@ public class AccessTokenFormatTests
             $"?client_id={Uri.EscapeDataString(ClientId)}" +
             "&response_type=code" +
             $"&redirect_uri={Uri.EscapeDataString(RedirectUri)}" +
-            "&scope=" + Uri.EscapeDataString("openid profile email roles offline_access") +
+            "&scope=" + Uri.EscapeDataString(scope) +
             "&state=xyz";
         var authorize = await client.GetAsync(authorizeUrl);
         Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
@@ -229,7 +253,7 @@ public class AccessTokenFormatTests
         return JsonSerializer.Deserialize<JsonElement>(body);
     }
 
-    private static async Task<string> GetClientCredentialsTokenAsync(TokenFormatFactory factory, string clientId, string secret)
+    private static async Task<string> GetClientCredentialsTokenAsync(TokenFormatFactory factory, string clientId, string secret, string scope = "openid")
     {
         var client = NewClient(factory);
         var response = await client.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
@@ -237,7 +261,7 @@ public class AccessTokenFormatTests
             ["grant_type"] = "client_credentials",
             ["client_id"] = clientId,
             ["client_secret"] = secret,
-            ["scope"] = "openid"
+            ["scope"] = scope
         }));
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.StatusCode == HttpStatusCode.OK, $"client_credentials failed: {response.StatusCode} {body}");
@@ -250,6 +274,16 @@ public class AccessTokenFormatTests
         return JsonSerializer.Deserialize<JsonElement>(Base64UrlEncoder.DecodeBytes(segment));
     }
 
+    /// <summary>aud is a string when single-valued and an array when multi-valued (RFC 7519 §4.1.3).</summary>
+    private static string[] GetAudiences(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("aud", out var aud))
+            return Array.Empty<string>();
+        return aud.ValueKind == JsonValueKind.Array
+            ? aud.EnumerateArray().Select(e => e.GetString()!).ToArray()
+            : new[] { aud.GetString()! };
+    }
+
     /// <summary>The issuer a resource server would learn from the discovery document.</summary>
     private static async Task<string> GetIssuerAsync(HttpClient client)
     {
@@ -260,16 +294,19 @@ public class AccessTokenFormatTests
     /// <summary>
     /// What a resource server (TaskManager JwtBearer, MCP validator) would do: fetch the JWKS, accept
     /// only RS256 and only the "at+jwt" token type, check issuer + lifetime. Audience validation is
-    /// off because client-credentials tokens carry no aud (AuthorizationController).
+    /// opt-in per call (task 4099 migration step 2: each resource server turns it on individually,
+    /// passing its own audience): with <paramref name="audience"/> = null this validator behaves like
+    /// today's consumers, which do not check aud and accept tokens with or without one.
     /// </summary>
-    private static async Task<TokenValidationResult> ValidateAsResourceServerAsync(HttpClient client, string token)
+    private static async Task<TokenValidationResult> ValidateAsResourceServerAsync(HttpClient client, string token, string? audience = null)
     {
         var jwks = new JsonWebKeySet(await client.GetStringAsync("/.well-known/jwks"));
         return await new JsonWebTokenHandler().ValidateTokenAsync(token, new TokenValidationParameters
         {
             ValidIssuer = await GetIssuerAsync(client),
             ValidateIssuer = true,
-            ValidateAudience = false,
+            ValidateAudience = audience is not null,
+            ValidAudience = audience,
             ValidateLifetime = true,
             RequireSignedTokens = true,
             RequireExpirationTime = true,
@@ -499,5 +536,166 @@ public class AccessTokenFormatTests
         var bad = new HttpRequestMessage(HttpMethod.Get, "/connect/userinfo");
         bad.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "garbage");
         Assert.Equal(HttpStatusCode.Unauthorized, (await NewClient(after).SendAsync(bad)).StatusCode);
+    }
+
+    // ----- task 4099: audience claims via scope→resource mapping -----------------------------------
+
+    [Fact]
+    public async Task ClientCredentialsToken_CarriesAudienceOfItsTargetService_AndOnlyValidatesThere()
+    {
+        using var factory = new TokenFormatFactory();
+        await SeedApiScopesAsync(factory,
+            ("taskmanager_api", "taskmanager_api"),
+            ("jengo_mcp", "jengo_mcp"));
+        await SeedServiceClientAsync(factory, "jengo-agi-svc-test", "svc-secret-4099", "taskmanager_api");
+
+        var token = await GetClientCredentialsTokenAsync(factory, "jengo-agi-svc-test", "svc-secret-4099",
+            scope: "taskmanager_api");
+
+        // The granted scope's mapped resource is emitted as the aud claim.
+        Assert.Equal(new[] { "taskmanager_api" }, GetAudiences(DecodeSegment(token, 1)));
+        AssertOnlyAllowedClaims(token);
+
+        var client = NewClient(factory);
+
+        // Accepted by the resource server the token was issued for ...
+        var atTarget = await ValidateAsResourceServerAsync(client, token, audience: "taskmanager_api");
+        Assert.True(atTarget.IsValid, atTarget.Exception?.Message);
+
+        // ... rejected, offline against the same JWKS, by any other resource server that
+        // validates aud — the confused-deputy scenario from the task.
+        var atOther = await ValidateAsResourceServerAsync(client, token, audience: "jengo_mcp");
+        Assert.False(atOther.IsValid);
+        Assert.IsAssignableFrom<SecurityTokenInvalidAudienceException>(atOther.Exception);
+    }
+
+    [Fact]
+    public async Task InteractiveLoginAndRefresh_AccessTokensCarryAudiencesMappedFromGrantedScopes()
+    {
+        using var factory = new TokenFormatFactory();
+        await SeedApiScopesAsync(factory,
+            (Scopes.OpenId, "iam_api"),
+            ("taskmanager_api", "taskmanager_api"),
+            ("jengo_mcp", "jengo_mcp"));
+        await SeedInteractiveClientAndUserAsync(factory);
+
+        var tokens = await LoginAndGetTokensAsync(factory,
+            scope: "openid profile email roles offline_access taskmanager_api");
+        var accessToken = tokens.GetProperty("access_token").GetString()!;
+
+        // One audience per distinct resource mapped from the granted scopes; scopes without a
+        // mapping (profile, email, roles here) contribute nothing.
+        Assert.Equal(new[] { "iam_api", "taskmanager_api" },
+            GetAudiences(DecodeSegment(accessToken, 1)).OrderBy(a => a, StringComparer.Ordinal));
+        AssertOnlyAllowedClaims(accessToken);
+
+        var client = NewClient(factory);
+        var atTarget = await ValidateAsResourceServerAsync(client, accessToken, audience: "taskmanager_api");
+        Assert.True(atTarget.IsValid, atTarget.Exception?.Message);
+        Assert.IsAssignableFrom<SecurityTokenInvalidAudienceException>(
+            (await ValidateAsResourceServerAsync(client, accessToken, audience: "jengo_mcp")).Exception);
+
+        // The id_token's audience stays the client id — resource mapping only shapes the access token.
+        Assert.Equal(new[] { ClientId }, GetAudiences(DecodeSegment(tokens.GetProperty("id_token").GetString()!, 1)));
+
+        // Refresh grant: the fresh access token carries the same audiences (the mapping is
+        // re-resolved on every exchange, so it also picks up mapping changes made after login).
+        var refreshed = await client.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = tokens.GetProperty("refresh_token").GetString()!,
+            ["client_id"] = ClientId
+        }));
+        var body = await refreshed.Content.ReadAsStringAsync();
+        Assert.True(refreshed.StatusCode == HttpStatusCode.OK, $"refresh failed: {refreshed.StatusCode} {body}");
+        var newAccess = JsonSerializer.Deserialize<JsonElement>(body).GetProperty("access_token").GetString()!;
+
+        Assert.Equal(new[] { "iam_api", "taskmanager_api" },
+            GetAudiences(DecodeSegment(newAccess, 1)).OrderBy(a => a, StringComparer.Ordinal));
+        Assert.True((await ValidateAsResourceServerAsync(client, newAccess, audience: "taskmanager_api")).IsValid);
+        Assert.IsAssignableFrom<SecurityTokenInvalidAudienceException>(
+            (await ValidateAsResourceServerAsync(client, newAccess, audience: "jengo_mcp")).Exception);
+    }
+
+    [Fact]
+    public async Task TokenWhoseScopesMapToNoResource_HasNoAudClaim_AndStillValidatesAsToday()
+    {
+        // Backwards compatibility (migration step 1): no scope store entries at all — the
+        // pre-4099 situation for every deployment whose scopes were never mapped. Tokens keep
+        // being issued without aud and keep validating at consumers that don't check aud.
+        using var factory = new TokenFormatFactory();
+        await SeedServiceClientAsync(factory, "jengo-agi-svc-test", "svc-secret-3481");
+
+        var machineToken = await GetClientCredentialsTokenAsync(factory, "jengo-agi-svc-test", "svc-secret-3481");
+        Assert.Empty(GetAudiences(DecodeSegment(machineToken, 1)));
+        var result = await ValidateAsResourceServerAsync(NewClient(factory), machineToken);
+        Assert.True(result.IsValid, result.Exception?.Message);
+
+        await SeedInteractiveClientAndUserAsync(factory);
+        var accessToken = (await LoginAndGetTokensAsync(factory)).GetProperty("access_token").GetString()!;
+        Assert.Empty(GetAudiences(DecodeSegment(accessToken, 1)));
+        Assert.True((await ValidateAsResourceServerAsync(NewClient(factory), accessToken)).IsValid);
+    }
+
+    [Fact]
+    public async Task SeedScopes_MapsEveryScopeToItsAudience_IsIdempotent_AndOnlyAddsToExistingRows()
+    {
+        using var factory = new TokenFormatFactory();
+
+        // Pre-existing row, as on every already-deployed database (created by the pre-4099
+        // seeder or edited by hand): the seeder may only ADD the mapped audience to it.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+            await manager.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = "tenants",
+                DisplayName = "Tenants (customized)",
+                Description = "hand-edited description",
+                Resources = { "custom_audience" }
+            });
+        }
+
+        // Twice: the second run must be a no-op (idempotency).
+        for (var run = 0; run < 2; run++)
+        {
+            using var scope = factory.Services.CreateScope();
+            await IAM.API.Workers.DatabaseSeeder.SeedScopesAsync(scope.ServiceProvider, CancellationToken.None);
+        }
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictScopeManager>();
+
+            var expected = new Dictionary<string, string>
+            {
+                [Scopes.OpenId] = "iam_api",
+                [Scopes.Profile] = "iam_api",
+                [Scopes.Email] = "iam_api",
+                [Scopes.Roles] = "iam_api",
+                ["tenants"] = "iam_api",
+                ["taskmanager_api"] = "taskmanager_api",
+                ["jengo_mcp"] = "jengo_mcp"
+            };
+            foreach (var (name, audience) in expected)
+            {
+                var entry = await manager.FindByNameAsync(name);
+                Assert.NotNull(entry);
+                Assert.Contains(audience, await manager.GetResourcesAsync(entry!));
+            }
+
+            // Double seeding created no duplicate rows.
+            var total = 0;
+            await foreach (var _ in manager.ListAsync())
+                total++;
+            Assert.Equal(expected.Count, total);
+
+            // The customized row kept its data and only gained the mapped audience.
+            var tenants = await manager.FindByNameAsync("tenants");
+            Assert.Equal("Tenants (customized)", await manager.GetDisplayNameAsync(tenants!));
+            var resources = await manager.GetResourcesAsync(tenants!);
+            Assert.Contains("custom_audience", resources);
+            Assert.Contains("iam_api", resources);
+        }
     }
 }

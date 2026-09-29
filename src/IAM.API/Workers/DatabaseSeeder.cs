@@ -158,66 +158,120 @@ public class DatabaseSeeder : IHostedService
         await context.SaveChangesAsync(cancellationToken);
     }
 
-    private static async Task SeedScopesAsync(IServiceProvider provider, CancellationToken cancellationToken)
+    /// <summary>
+    /// Task 4099 audience naming convention: audiences are stable logical resource identifiers
+    /// in snake_case (iam_api, taskmanager_api, jengo_mcp), decoupled from URLs and client ids.
+    /// Each API scope maps to the audience of the resource server it grants access to; OpenIddict
+    /// emits the mapped resources as the access token's aud claim (see AuthorizationController).
+    /// </summary>
+    public const string IamApiAudience = "iam_api";
+    public const string TaskManagerAudience = "taskmanager_api";
+    public const string JengoMcpAudience = "jengo_mcp";
+
+    /// <summary>
+    /// Seeds/upserts the OAuth scopes and their scope→audience ("resource") mapping.
+    /// Idempotent: creates missing scopes, and for existing scopes only ADDS missing resources
+    /// (display name, description and already-present resources on existing rows are never
+    /// touched or removed), so re-running against a populated database is always safe.
+    /// Public + static so tests can run it in-process against the test host (the hosted-service
+    /// path is stripped from the test factory).
+    /// </summary>
+    public static async Task SeedScopesAsync(IServiceProvider provider, CancellationToken cancellationToken)
     {
         var manager = provider.GetRequiredService<IOpenIddictScopeManager>();
 
-        // OpenID Connect standard scopes
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.OpenId, cancellationToken) == null)
+        // OpenID Connect standard scopes — identity data served by IAM itself (userinfo), so
+        // they map to the iam_api audience.
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.OpenId,
-                DisplayName = "OpenID",
-                Description = "OpenID Connect authentication",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.OpenId,
+            DisplayName = "OpenID",
+            Description = "OpenID Connect authentication",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.Profile, cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.Profile,
-                DisplayName = "Profile",
-                Description = "Access to user profile information",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.Profile,
+            DisplayName = "Profile",
+            Description = "Access to user profile information",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.Email, cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.Email,
-                DisplayName = "Email",
-                Description = "Access to user email address",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.Email,
+            DisplayName = "Email",
+            Description = "Access to user email address",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.Roles, cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.Roles,
-                DisplayName = "Roles",
-                Description = "Access to user roles",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.Roles,
+            DisplayName = "Roles",
+            Description = "Access to user roles",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
         // Custom scope for tenant access
-        if (await manager.FindByNameAsync("tenants", cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = "tenants",
-                DisplayName = "Tenants",
-                Description = "Access to user's tenant assignments",
-                Resources = { "iam_api" }
-            }, cancellationToken);
+            Name = "tenants",
+            DisplayName = "Tenants",
+            Description = "Access to user's tenant assignments",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
+
+        // Task 4099: per-resource-server API scopes. Requesting one of these scopes is how a
+        // client asks for a token usable at that resource server; the mapped resource becomes
+        // the token's aud claim. TaskManager (task 3231) and the MCP validator (task 1748)
+        // enable aud validation on their side individually.
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = TaskManagerAudience,
+            DisplayName = "TaskManager API",
+            Description = "Access to the TaskManager (JengoWork) API",
+            Resources = { TaskManagerAudience }
+        }, cancellationToken);
+
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = JengoMcpAudience,
+            DisplayName = "Jengo MCP",
+            Description = "Access to the Jengo VPS MCP server",
+            Resources = { JengoMcpAudience }
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Create the scope when missing; when it exists, add any resources it is missing and leave
+    /// everything else (display name, description, extra resources someone added by hand) alone.
+    /// </summary>
+    private static async Task UpsertScopeAsync(
+        IOpenIddictScopeManager manager,
+        OpenIddictScopeDescriptor descriptor,
+        CancellationToken cancellationToken)
+    {
+        var existing = await manager.FindByNameAsync(descriptor.Name!, cancellationToken);
+        if (existing is null)
+        {
+            await manager.CreateAsync(descriptor, cancellationToken);
+            return;
         }
+
+        var current = new OpenIddictScopeDescriptor();
+        await manager.PopulateAsync(current, existing, cancellationToken);
+
+        var changed = false;
+        foreach (var resource in descriptor.Resources)
+        {
+            if (current.Resources.Add(resource))
+                changed = true;
+        }
+
+        if (changed)
+            await manager.UpdateAsync(existing, current, cancellationToken);
     }
 
     private static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, IWebHostEnvironment env, CancellationToken cancellationToken)
@@ -806,7 +860,13 @@ public class DatabaseSeeder : IHostedService
                     OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}",
-                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}tenants"
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}tenants",
+                    // Task 4099: allow requesting per-resource-server tokens (aud claim comes
+                    // from the scope→resource mapping in SeedScopesAsync). Existing databases
+                    // need these two scope permissions added via the OAuth clients admin API —
+                    // client seeding is create-if-missing only.
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{TaskManagerAudience}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{JengoMcpAudience}"
                 }
             }, cancellationToken);
         }

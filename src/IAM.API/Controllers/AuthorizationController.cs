@@ -174,6 +174,10 @@ public class AuthorizationController : ControllerBase
         // Set scopes
         identity.SetScopes(request.GetScopes());
 
+        // Task 4099: map the granted scopes to their resource servers so the access token
+        // carries an aud claim and only works at its target service (confused-deputy fix).
+        identity.SetResources(await GetResourcesAsync(identity.GetScopes()));
+
         // Set destinations for claims (which token types they should appear in)
         identity.SetDestinations(GetDestinations);
 
@@ -225,6 +229,12 @@ public class AuthorizationController : ControllerBase
                             "The user account is no longer active."
                     }));
             }
+
+            // Task 4099: re-resolve the scope→resource mapping on every exchange (authorization
+            // code AND refresh token) instead of trusting what was stored when the code/refresh
+            // token was minted, so audience mapping changes take effect on the next token, not
+            // only on the next login.
+            claimsPrincipal.SetResources(await GetResourcesAsync(claimsPrincipal.GetScopes()));
         }
         else if (request.IsClientCredentialsGrantType())
         {
@@ -240,6 +250,11 @@ public class AuthorizationController : ControllerBase
             claimsPrincipal = new ClaimsPrincipal(identity);
 
             claimsPrincipal.SetScopes(request.GetScopes());
+
+            // Task 4099: machine tokens get the same scope→resource audience mapping as
+            // interactive logins — a jengo-agi-svc token for taskmanager_api must not be
+            // accepted at jengo_mcp once resource servers validate aud.
+            claimsPrincipal.SetResources(await GetResourcesAsync(claimsPrincipal.GetScopes()));
             claimsPrincipal.SetDestinations(GetDestinations);
         }
         else
@@ -395,6 +410,25 @@ public class AuthorizationController : ControllerBase
             default:
                 yield break;
         }
+    }
+
+    /// <summary>
+    /// Task 4099: resolves the audiences ("resources") mapped to the granted scopes via the
+    /// OpenIddict scope store (DatabaseSeeder.SeedScopesAsync maintains the mapping). OpenIddict
+    /// emits every resource set on the principal as an aud claim in the access token. Scopes
+    /// that map to no resource contribute nothing; a token whose scopes map to no resource at
+    /// all is issued without an aud claim, exactly as before this task — resource servers that
+    /// do not validate aud are unaffected (backwards-compatible step 1 of the migration).
+    /// </summary>
+    private async Task<ImmutableArray<string>> GetResourcesAsync(ImmutableArray<string> scopes)
+    {
+        var resources = ImmutableArray.CreateBuilder<string>();
+        await foreach (var resource in _scopeManager.ListResourcesAsync(scopes, HttpContext.RequestAborted))
+        {
+            if (!resources.Contains(resource))
+                resources.Add(resource);
+        }
+        return resources.ToImmutable();
     }
 
     /// <summary>
