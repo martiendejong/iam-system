@@ -97,50 +97,21 @@ public class AuthorizationController : ControllerBase
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
         }
 
-        // Federated app-role gate: when an application has registered a role catalog
-        // (Roles with Category "app:{clientId}" — see AppRolesController), only users
-        // holding at least one of that app's roles may sign in to it. Applications
-        // without a catalog keep the historic everyone-active behavior. FAIL-OPEN on
-        // any error: a bug here must never lock every application out of the SSO.
-        //
-        // When the app does have a catalog, the matching UserRole's TenantId (see
-        // UsersController.AssignRole / TenantsController.ChangeMemberRole — assignments
-        // are already tenant-scopable) becomes the token's tenant_id claim, mirroring the
-        // tenant_id claim machine auth already issues (Hazina.Security.ApiKeys,
-        // ServiceAccountService, DeviceAuthenticationService) but for human logins.
-        Guid? tenantIdForToken = null;
-        try
+        // Federated app-role gate — shared with the refresh_token grant in Exchange, see
+        // EvaluateAppRoleGateAsync. Only the denial rendering differs: login shows an HTML
+        // page, refresh returns an OAuth invalid_grant error.
+        var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
+        if (!gate.Allowed)
         {
-            var clientIdLower = (request.ClientId ?? string.Empty).ToLowerInvariant();
-            if (clientIdLower.Length > 0)
-            {
-                var category = $"app:{clientIdLower}";
-                var appHasCatalog = await _context.Roles.AnyAsync(r => r.Category == category);
-                if (appHasCatalog)
-                {
-                    var rolePrefix = clientIdLower + ":";
-                    var appRoleAssignments = user.UserRoles
-                        .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    if (appRoleAssignments.Count == 0)
-                    {
-                        _logger.LogWarning("App access denied: {Email} has no {ClientId} role", user.Email, clientIdLower);
-                        return Content(
-                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>No access</title>" +
-                            "<style>body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
-                            ".card{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:420px}</style></head>" +
-                            $"<body><div class=\"card\"><h2>No access to this application</h2><p>Your account ({System.Net.WebUtility.HtmlEncode(user.Email)}) is not authorized for <strong>{System.Net.WebUtility.HtmlEncode(clientIdLower)}</strong>.</p>" +
-                            "<p>Ask your administrator to assign you a role for this application in the IAM system.</p></div></body></html>",
-                            "text/html");
-                    }
-                    tenantIdForToken = ResolveAppRoleTenantId(appRoleAssignments);
-                }
-            }
+            return Content(
+                "<!doctype html><html><head><meta charset=\"utf-8\"><title>No access</title>" +
+                "<style>body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
+                ".card{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:420px}</style></head>" +
+                $"<body><div class=\"card\"><h2>No access to this application</h2><p>Your account ({System.Net.WebUtility.HtmlEncode(user.Email)}) is not authorized for <strong>{System.Net.WebUtility.HtmlEncode((request.ClientId ?? string.Empty).ToLowerInvariant())}</strong>.</p>" +
+                "<p>Ask your administrator to assign you a role for this application in the IAM system.</p></div></body></html>",
+                "text/html");
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "App-role gate failed for client {ClientId} - failing open", request.ClientId);
-        }
+        Guid? tenantIdForToken = gate.TenantId;
 
         // Retrieve the application details from the database
         var application = await _applicationManager.FindByClientIdAsync(request.ClientId!) ??
@@ -212,7 +183,8 @@ public class AuthorizationController : ControllerBase
             // A refresh token outlives the login (7 days, sliding), and access tokens are now readable and
             // verifiable offline by any resource server (task 3481). Re-check the account so a user who was
             // deactivated or deleted after signing in cannot keep minting access tokens.
-            if (!await IsUserStillActiveAsync(claimsPrincipal))
+            var user = await FindTokenUserAsync(claimsPrincipal);
+            if (user == null || !user.IsActive)
             {
                 _logger.LogWarning("Refused {GrantType} for subject {Subject}: user is missing or inactive",
                     request.GrantType, claimsPrincipal.GetClaim(Claims.Subject));
@@ -224,6 +196,40 @@ public class AuthorizationController : ControllerBase
                         [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
                             "The user account is no longer active."
                     }));
+            }
+
+            // Task 4096: roles can be revoked while a refresh token is still valid. Do NOT copy the
+            // role/tenant_id claims stored inside the refresh token into the new access token — re-run
+            // the same app-role gate the login applies and rebuild both claims from the database.
+            if (request.IsRefreshTokenGrantType())
+            {
+                var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
+                if (!gate.Allowed)
+                {
+                    _logger.LogWarning("Refused refresh_token for {Email}: no longer holds any {ClientId} role",
+                        user.Email, request.ClientId);
+                    return Forbid(
+                        authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                        properties: new AuthenticationProperties(new Dictionary<string, string?>
+                        {
+                            [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
+                            [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
+                                "The user no longer has access to this application."
+                        }));
+                }
+
+                // Rebuild the identity from the stored principal (keeps sub/scopes/authorization id),
+                // then overwrite the role and tenant_id claims with the current database state.
+                // SetClaim(type, null) removes the claim, so a tenant scope that no longer applies
+                // disappears instead of being carried over.
+                var identity = new ClaimsIdentity(claimsPrincipal.Claims,
+                    authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                    nameType: Claims.Name,
+                    roleType: Claims.Role);
+                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray());
+                identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
+                identity.SetDestinations(GetDestinations);
+                claimsPrincipal = new ClaimsPrincipal(identity);
             }
         }
         else if (request.IsClientCredentialsGrantType())
@@ -398,15 +404,71 @@ public class AuthorizationController : ControllerBase
     }
 
     /// <summary>
-    /// True when the subject of an authorization code / refresh token still maps to an existing, active user.
-    /// Interactive flows always issue a user id (GUID) as the subject; anything else is refused.
+    /// Loads the user behind an authorization code / refresh token, roles included, so callers can both
+    /// re-check the account (existing, active) and rebuild role/tenant claims from the database.
+    /// Interactive flows always issue a user id (GUID) as the subject; anything else yields null (refused).
     /// </summary>
-    private async Task<bool> IsUserStillActiveAsync(ClaimsPrincipal principal)
+    private async Task<User?> FindTokenUserAsync(ClaimsPrincipal principal)
     {
         if (!Guid.TryParse(principal.GetClaim(Claims.Subject), out var userId))
-            return false;
+            return null;
 
-        return await _context.Users.AsNoTracking().AnyAsync(u => u.Id == userId && u.IsActive, HttpContext.RequestAborted);
+        return await _context.Users.AsNoTracking()
+            .Include(u => u.UserRoles)
+            .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId, HttpContext.RequestAborted);
+    }
+
+    /// <summary>
+    /// Outcome of the federated app-role gate: whether the user may receive tokens for the app at all,
+    /// and, when the app has a role catalog, which tenant the token is scoped to (null = unscoped).
+    /// </summary>
+    private readonly record struct AppRoleGateResult(bool Allowed, Guid? TenantId);
+
+    /// <summary>
+    /// Federated app-role gate, shared by login (Authorize) and token refresh (Exchange) so the two
+    /// checks can never drift apart. When an application has registered a role catalog (Roles with
+    /// Category "app:{clientId}" — see AppRolesController), only users holding at least one of that
+    /// app's roles pass. Applications without a catalog keep the historic everyone-active behavior.
+    /// FAIL-OPEN on any unexpected error: a bug here must never lock every application out of the SSO.
+    ///
+    /// When the app does have a catalog, the matching UserRole's TenantId (see
+    /// UsersController.AssignRole / TenantsController.ChangeMemberRole — assignments are already
+    /// tenant-scopable) becomes the token's tenant_id claim, mirroring the tenant_id claim machine
+    /// auth already issues (Hazina.Security.ApiKeys, ServiceAccountService,
+    /// DeviceAuthenticationService) but for human logins.
+    /// </summary>
+    /// <param name="user">User with UserRoles + Role loaded.</param>
+    private async Task<AppRoleGateResult> EvaluateAppRoleGateAsync(User user, string? clientId)
+    {
+        try
+        {
+            var clientIdLower = (clientId ?? string.Empty).ToLowerInvariant();
+            if (clientIdLower.Length == 0)
+                return new AppRoleGateResult(Allowed: true, TenantId: null);
+
+            var category = $"app:{clientIdLower}";
+            var appHasCatalog = await _context.Roles.AnyAsync(r => r.Category == category);
+            if (!appHasCatalog)
+                return new AppRoleGateResult(Allowed: true, TenantId: null);
+
+            var rolePrefix = clientIdLower + ":";
+            var appRoleAssignments = user.UserRoles
+                .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (appRoleAssignments.Count == 0)
+            {
+                _logger.LogWarning("App access denied: {Email} has no {ClientId} role", user.Email, clientIdLower);
+                return new AppRoleGateResult(Allowed: false, TenantId: null);
+            }
+
+            return new AppRoleGateResult(Allowed: true, TenantId: ResolveAppRoleTenantId(appRoleAssignments));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "App-role gate failed for client {ClientId} - failing open", clientId);
+            return new AppRoleGateResult(Allowed: true, TenantId: null);
+        }
     }
 
     /// <summary>
