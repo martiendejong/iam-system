@@ -216,6 +216,15 @@ public class GroupService : IGroupService
             throw new InvalidOperationException("Cannot demote the last owner of the group");
         }
 
+        // Nor silently expired: re-granting owner to the last owner WITH an expiry would drop
+        // the group to zero owners the moment the clock passes it (review finding SF-1 on
+        // PR #138). Owner grants on the sole owner must be open-ended.
+        if (currentRole == GroupRoles.Owner && newRole == GroupRoles.Owner && expiresAt != null
+            && !await HasAnotherActiveOwnerAsync(groupId, userId, ct))
+        {
+            throw new InvalidOperationException("Cannot set an expiry on the last owner of the group");
+        }
+
         if (existingMembership != null)
         {
             // Reactivate if previously removed / upsert the role

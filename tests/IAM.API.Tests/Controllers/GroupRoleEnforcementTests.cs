@@ -391,6 +391,47 @@ public class GroupRoleEnforcementTests : IClassFixture<IAMTestWebApplicationFact
         Assert.Equal("member", (await GetMembershipAsync(group.Id, owner.Id))!.Role);
     }
 
+    [Fact]
+    public async Task LastOwner_CannotBeGivenAnExpiry_ButWithASecondOwnerItWorks()
+    {
+        // Review finding SF-1 on PR #138: re-granting owner WITH an expiry to the sole owner
+        // would drop the group to zero owners once the clock passes it.
+        var owner = await CreateUserAsync();
+        var superAdmin = await CreateUserAsync();
+        var group = await CreateGroupWithMembersAsync(RootTenantId, (owner.Id, "owner"));
+        var superClient = ClientAs(superAdmin, roles: new[] { "SuperAdmin" });
+
+        var expiringOwner = new { userId = owner.Id, role = "owner", expiresAt = DateTime.UtcNow.AddMinutes(5) };
+        Assert.Equal(HttpStatusCode.BadRequest, (await superClient.PostAsJsonAsync($"/api/groups/{group.Id}/members", expiringOwner)).StatusCode);
+        Assert.Null((await GetMembershipAsync(group.Id, owner.Id))!.ExpiresAt);
+
+        var secondOwner = await CreateUserAsync();
+        Assert.Equal(HttpStatusCode.OK, (await superClient.PostAsJsonAsync($"/api/groups/{group.Id}/members", new { userId = secondOwner.Id, role = "owner" })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await superClient.PostAsJsonAsync($"/api/groups/{group.Id}/members", expiringOwner)).StatusCode);
+        Assert.NotNull((await GetMembershipAsync(group.Id, owner.Id))!.ExpiresAt);
+    }
+
+    // ----- SCIM admin surface -------------------------------------------------------------------
+
+    [Fact]
+    public async Task ScimTokenMinting_ByPlainUser_IsForbidden_SuperAdminOnly()
+    {
+        // Review blocker on PR #138: POST /api/scim/tokens was plain [Authorize], letting any
+        // logged-in user mint a SCIM bearer for ANY tenant and bypass every group-role rule
+        // through the SCIM write path (ownerless groups, wiped memberships).
+        var plainUser = await CreateUserAsync(memberOfTenant: RootTenantId);
+        var superAdmin = await CreateUserAsync();
+        var payload = new { tenantId = RootTenantId, name = "probe" };
+
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await ClientAs(plainUser).PostAsJsonAsync("/api/scim/tokens", payload)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await ClientAs(plainUser).GetAsync("/api/scim/tokens?tenantId=" + RootTenantId)).StatusCode);
+
+        var minted = await ClientAs(superAdmin, roles: new[] { "SuperAdmin" }).PostAsJsonAsync("/api/scim/tokens", payload);
+        Assert.Equal(HttpStatusCode.OK, minted.StatusCode);
+    }
+
     // ----- permission roles ---------------------------------------------------------------------
 
     [Fact]
