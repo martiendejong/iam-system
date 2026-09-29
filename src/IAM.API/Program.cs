@@ -414,6 +414,11 @@ app.UseStaticFiles(new StaticFileOptions
             ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
     }
 });
+// Token-endpoint brute-force throttle (task 4097). Must run BEFORE UseAuthentication: OpenIddict
+// rejects invalid client credentials inside the authentication middleware, so failed attempts never
+// reach the general UseRateLimiting below. Keyed on RemoteIpAddress, which UseForwardedHeaders
+// (first in the pipeline) has already rewritten from the trusted proxy's X-Forwarded-For.
+app.UseTokenEndpointRateLimiting();
 app.UseHazinaApiKeyAuth(); // API key auth + per-key rate limiting before JWT (sets HttpContext.User if the X-Api-Key header is present)
 app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
