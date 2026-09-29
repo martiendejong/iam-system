@@ -20,6 +20,36 @@ public class GroupsController : ControllerBase
     }
 
     /// <summary>
+    /// The caller on whose behalf group mutations run (task 4056). Global admin = SuperAdmin.
+    /// Password-login tokens carry no tenant_id; when a tenant_id claim IS present the service
+    /// only honours group authority inside that tenant.
+    /// </summary>
+    private GroupActor? TryGetActor()
+    {
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+        {
+            return null;
+        }
+
+        Guid? tenantId = null;
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var parsedTenantId))
+            {
+                return null;
+            }
+            tenantId = parsedTenantId;
+        }
+
+        return new GroupActor(userId, User.IsInRole("SuperAdmin"), tenantId);
+    }
+
+    private ObjectResult Forbidden(GroupAccessDeniedException ex) =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+
+    /// <summary>
     /// Create a new group
     /// </summary>
     [HttpPost]
@@ -33,6 +63,12 @@ public class GroupsController : ControllerBase
         if (request.TenantId == Guid.Empty)
         {
             return BadRequest(new { error = "Tenant ID is required" });
+        }
+
+        var actor = TryGetActor();
+        if (actor == null)
+        {
+            return Unauthorized();
         }
 
         var metadataJson = request.Metadata != null
@@ -51,7 +87,7 @@ public class GroupsController : ControllerBase
 
         try
         {
-            var created = await _groupService.CreateGroupAsync(group);
+            var created = await _groupService.CreateGroupAsync(group, actor);
 
             return CreatedAtAction(
                 nameof(GetGroup),
@@ -68,6 +104,10 @@ public class GroupsController : ControllerBase
                     isActive = created.IsActive,
                     createdAt = created.CreatedAt
                 });
+        }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -160,13 +200,19 @@ public class GroupsController : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> UpdateGroup(Guid id, [FromBody] UpdateGroupRequest request)
     {
+        var actor = TryGetActor();
+        if (actor == null)
+        {
+            return Unauthorized();
+        }
+
         var metadataJson = request.Metadata != null
             ? JsonSerializer.Serialize(request.Metadata)
             : null;
 
         try
         {
-            var group = await _groupService.UpdateGroupAsync(id, request.Name ?? string.Empty, request.Description, metadataJson);
+            var group = await _groupService.UpdateGroupAsync(id, request.Name ?? string.Empty, request.Description, metadataJson, actor);
 
             return Ok(new
             {
@@ -178,6 +224,10 @@ public class GroupsController : ControllerBase
                 isActive = group.IsActive,
                 updatedAt = group.UpdatedAt
             });
+        }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -191,15 +241,25 @@ public class GroupsController : ControllerBase
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> DeleteGroup(Guid id)
     {
+        var actor = TryGetActor();
+        if (actor == null)
+        {
+            return Unauthorized();
+        }
+
         try
         {
-            var result = await _groupService.DeleteGroupAsync(id);
+            var result = await _groupService.DeleteGroupAsync(id, actor);
             if (!result)
             {
                 return NotFound(new { error = "Group not found" });
             }
 
             return Ok(new { message = "Group deleted successfully" });
+        }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -218,11 +278,18 @@ public class GroupsController : ControllerBase
             return BadRequest(new { error = "User ID is required" });
         }
 
+        var actor = TryGetActor();
+        if (actor == null)
+        {
+            return Unauthorized();
+        }
+
         try
         {
             var membership = await _groupService.AddMemberAsync(
                 id,
                 request.UserId,
+                actor,
                 request.Role ?? "member",
                 request.ExpiresAt);
 
@@ -237,6 +304,10 @@ public class GroupsController : ControllerBase
                 isActive = membership.IsActive
             });
         }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
@@ -249,13 +320,30 @@ public class GroupsController : ControllerBase
     [HttpDelete("{id:guid}/members/{userId:guid}")]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
     {
-        var result = await _groupService.RemoveMemberAsync(id, userId);
-        if (!result)
+        var actor = TryGetActor();
+        if (actor == null)
         {
-            return NotFound(new { error = "Membership not found" });
+            return Unauthorized();
         }
 
-        return Ok(new { message = "Member removed from group" });
+        try
+        {
+            var result = await _groupService.RemoveMemberAsync(id, userId, actor);
+            if (!result)
+            {
+                return NotFound(new { error = "Membership not found" });
+            }
+
+            return Ok(new { message = "Member removed from group" });
+        }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>
@@ -322,9 +410,11 @@ public class GroupsController : ControllerBase
             return BadRequest(new { error = "Tenant ID is required" });
         }
 
-        // Get the current user's ID for audit trail
-        var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        Guid? assignedByUserId = currentUserId != null ? Guid.Parse(currentUserId) : null;
+        var actor = TryGetActor();
+        if (actor == null)
+        {
+            return Unauthorized();
+        }
 
         try
         {
@@ -332,7 +422,7 @@ public class GroupsController : ControllerBase
                 id,
                 request.RoleId,
                 request.TenantId,
-                assignedByUserId);
+                actor);
 
             return Ok(new
             {
@@ -343,6 +433,10 @@ public class GroupsController : ControllerBase
                 assignedByUserId = groupRole.AssignedByUserId,
                 assignedAt = groupRole.AssignedAt
             });
+        }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -356,13 +450,49 @@ public class GroupsController : ControllerBase
     [HttpDelete("{id:guid}/roles/{roleId:guid}")]
     public async Task<IActionResult> RemoveRole(Guid id, Guid roleId)
     {
-        var result = await _groupService.RemoveRoleFromGroupAsync(id, roleId);
-        if (!result)
+        var actor = TryGetActor();
+        if (actor == null)
         {
-            return NotFound(new { error = "Role assignment not found" });
+            return Unauthorized();
         }
 
-        return Ok(new { message = "Role removed from group" });
+        try
+        {
+            var result = await _groupService.RemoveRoleFromGroupAsync(id, roleId, actor);
+            if (!result)
+            {
+                return NotFound(new { error = "Role assignment not found" });
+            }
+
+            return Ok(new { message = "Role removed from group" });
+        }
+        catch (GroupAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
+    }
+
+    /// <summary>
+    /// Groups without an active owner (backfill promotes nobody, so legacy groups may be
+    /// ownerless; global admins adopt them from here). Task 4056.
+    /// </summary>
+    [HttpGet("ownerless")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> GetOwnerlessGroups()
+    {
+        var groups = await _groupService.GetGroupsWithoutActiveOwnerAsync();
+
+        return Ok(groups.Select(g => new
+        {
+            id = g.Id,
+            name = g.Name,
+            description = g.Description,
+            tenantId = g.TenantId,
+            tenantName = g.Tenant?.Name,
+            groupType = g.GroupType,
+            isActive = g.IsActive,
+            createdAt = g.CreatedAt
+        }));
     }
 
     /// <summary>
