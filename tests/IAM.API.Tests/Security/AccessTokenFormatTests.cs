@@ -192,7 +192,8 @@ public class AccessTokenFormatTests
                 $"{Permissions.Prefixes.Scope}{Scopes.Email}",
                 $"{Permissions.Prefixes.Scope}{Scopes.Roles}",
                 $"{Permissions.Prefixes.Scope}{Scopes.OfflineAccess}",
-                $"{Permissions.Prefixes.Scope}taskmanager_api" // task 4099 audience tests
+                $"{Permissions.Prefixes.Scope}taskmanager_api", // task 4099 audience tests
+                $"{Permissions.Prefixes.Scope}jengo_mcp" // task 4099 downscoped-refresh test
             }
         });
     }
@@ -610,6 +611,46 @@ public class AccessTokenFormatTests
         Assert.True(refreshed.StatusCode == HttpStatusCode.OK, $"refresh failed: {refreshed.StatusCode} {body}");
         var newAccess = JsonSerializer.Deserialize<JsonElement>(body).GetProperty("access_token").GetString()!;
 
+        Assert.Equal(new[] { "iam_api", "taskmanager_api" },
+            GetAudiences(DecodeSegment(newAccess, 1)).OrderBy(a => a, StringComparer.Ordinal));
+        Assert.True((await ValidateAsResourceServerAsync(client, newAccess, audience: "taskmanager_api")).IsValid);
+        Assert.IsAssignableFrom<SecurityTokenInvalidAudienceException>(
+            (await ValidateAsResourceServerAsync(client, newAccess, audience: "jengo_mcp")).Exception);
+    }
+
+    [Fact]
+    public async Task DownscopedRefresh_NarrowsTheAudience_ToTheEffectiveScopes()
+    {
+        // RFC 6749 §6: a refresh request may send a NARROWER scope parameter. OpenIddict
+        // narrows the scope claim accordingly — the audience must follow, or a deliberately
+        // attenuated token would still pass aud validation at services its scopes no longer
+        // cover (review blocker on PR #136).
+        using var factory = new TokenFormatFactory();
+        await SeedApiScopesAsync(factory,
+            (Scopes.OpenId, "iam_api"),
+            ("taskmanager_api", "taskmanager_api"),
+            ("jengo_mcp", "jengo_mcp"));
+        await SeedInteractiveClientAndUserAsync(factory);
+
+        var tokens = await LoginAndGetTokensAsync(factory,
+            scope: "openid profile roles offline_access taskmanager_api jengo_mcp");
+        Assert.Equal(new[] { "iam_api", "jengo_mcp", "taskmanager_api" },
+            GetAudiences(DecodeSegment(tokens.GetProperty("access_token").GetString()!, 1))
+                .OrderBy(a => a, StringComparer.Ordinal));
+
+        var client = NewClient(factory);
+        var refreshed = await client.PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = tokens.GetProperty("refresh_token").GetString()!,
+            ["client_id"] = ClientId,
+            ["scope"] = "openid taskmanager_api"
+        }));
+        var body = await refreshed.Content.ReadAsStringAsync();
+        Assert.True(refreshed.StatusCode == HttpStatusCode.OK, $"downscoped refresh failed: {refreshed.StatusCode} {body}");
+        var newAccess = JsonSerializer.Deserialize<JsonElement>(body).GetProperty("access_token").GetString()!;
+
+        // The attenuated token's audience follows the effective scopes: jengo_mcp is gone.
         Assert.Equal(new[] { "iam_api", "taskmanager_api" },
             GetAudiences(DecodeSegment(newAccess, 1)).OrderBy(a => a, StringComparer.Ordinal));
         Assert.True((await ValidateAsResourceServerAsync(client, newAccess, audience: "taskmanager_api")).IsValid);

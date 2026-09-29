@@ -45,7 +45,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidateAudience = false,                                    // no aud in IAM access tokens yet
+            ValidateAudience = false,                                    // flip to true + set ValidAudience when this consumer opts in (task 4099)
             ValidateLifetime = true,
             ValidAlgorithms = new[] { SecurityAlgorithms.RsaSha256 },
             ValidTypes = new[] { "at+jwt" },                             // rejects id_tokens

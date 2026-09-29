@@ -234,7 +234,17 @@ public class AuthorizationController : ControllerBase
             // code AND refresh token) instead of trusting what was stored when the code/refresh
             // token was minted, so audience mapping changes take effect on the next token, not
             // only on the next login.
-            claimsPrincipal.SetResources(await GetResourcesAsync(claimsPrincipal.GetScopes()));
+            //
+            // RFC 6749 §6 allows a refresh request to DOWNSCOPE with a narrower scope parameter;
+            // OpenIddict applies that narrowing to the scope claim, so the audience must follow
+            // the effective (narrowed) scopes — never the stored ones — or an attenuated token
+            // would still pass audience validation at services its scopes no longer cover.
+            var effectiveScopes = claimsPrincipal.GetScopes();
+            if (request.IsRefreshTokenGrantType() && request.GetScopes() is { Length: > 0 } requestedScopes)
+            {
+                effectiveScopes = effectiveScopes.Intersect(requestedScopes).ToImmutableArray();
+            }
+            claimsPrincipal.SetResources(await GetResourcesAsync(effectiveScopes));
         }
         else if (request.IsClientCredentialsGrantType())
         {

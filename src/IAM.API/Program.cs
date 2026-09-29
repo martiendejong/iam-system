@@ -207,7 +207,12 @@ builder.Services.AddOpenIddict()
             OpenIddictConstants.Scopes.Profile,
             OpenIddictConstants.Scopes.Email,
             OpenIddictConstants.Scopes.Roles,
-            "tenants"
+            "tenants",
+            // Task 4099: resource-server scopes (their scope→audience mapping lives in the
+            // scope store); registering them here makes discovery advertise them in
+            // scopes_supported.
+            "taskmanager_api",
+            "jengo_mcp"
         );
 
         // Register signing and encryption credentials
