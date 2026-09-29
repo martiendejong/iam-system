@@ -15,6 +15,10 @@ export interface ServiceAccount {
   certificateThumbprint: string | null;
   description: string | null;
   isActive: boolean;
+  /** Optional manager (a user); null = no manager (task 4057) */
+  managerUserId: string | null;
+  /** Human / Agent / Service; service accounts default to Service (task 4057) */
+  principalKind: string;
   createdAt: string;
   updatedAt: string;
   lastAuthenticatedAt: string | null;
@@ -129,6 +133,14 @@ class ServiceAccountApiService {
       clientSecret,
     });
     return response.data;
+  }
+
+  /**
+   * Set or clear a service account's manager and principal kind in one PUT
+   * (task 4057). PUT replaces both fields; managerUserId = null clears the manager.
+   */
+  async setPrincipal(id: string, managerUserId: string | null, principalKind: string): Promise<void> {
+    await this.client.put(`/service-accounts/${id}/principal`, { managerUserId, principalKind });
   }
 
   // Reuse for dropdowns
