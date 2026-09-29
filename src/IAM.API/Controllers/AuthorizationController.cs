@@ -227,7 +227,13 @@ public class AuthorizationController : ControllerBase
                     nameType: Claims.Name,
                     roleType: Claims.Role);
                 identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray());
-                identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
+                if (!gate.Errored)
+                {
+                    identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
+                }
+                // On a fail-open gate error the tenant_id copied from the stored principal is
+                // kept as-is: stripping it would silently WIDEN the token (tenant-less can mean
+                // platform-wide to resource servers), which is worse than a stale scope.
                 identity.SetDestinations(GetDestinations);
                 claimsPrincipal = new ClaimsPrincipal(identity);
             }
@@ -423,7 +429,7 @@ public class AuthorizationController : ControllerBase
     /// Outcome of the federated app-role gate: whether the user may receive tokens for the app at all,
     /// and, when the app has a role catalog, which tenant the token is scoped to (null = unscoped).
     /// </summary>
-    private readonly record struct AppRoleGateResult(bool Allowed, Guid? TenantId);
+    private readonly record struct AppRoleGateResult(bool Allowed, Guid? TenantId, bool Errored = false);
 
     /// <summary>
     /// Federated app-role gate, shared by login (Authorize) and token refresh (Exchange) so the two
@@ -467,7 +473,7 @@ public class AuthorizationController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "App-role gate failed for client {ClientId} - failing open", clientId);
-            return new AppRoleGateResult(Allowed: true, TenantId: null);
+            return new AppRoleGateResult(Allowed: true, TenantId: null, Errored: true);
         }
     }
 
