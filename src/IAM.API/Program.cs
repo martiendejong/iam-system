@@ -102,6 +102,7 @@ builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
 builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
+builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();
 builder.Services.AddScoped<IRegionService, RegionService>();
 builder.Services.AddScoped<IDelegationService, DelegationService>();
 

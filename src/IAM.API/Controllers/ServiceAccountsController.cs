@@ -46,6 +46,8 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = account.CertificateThumbprint,
             description = account.Description,
             isActive = account.IsActive,
+            managerUserId = account.ManagerUserId,
+            principalKind = account.PrincipalKind,
             createdAt = account.CreatedAt,
             warning = "Save the client secret now. It will NOT be shown again."
         });
@@ -76,6 +78,8 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = a.CertificateThumbprint,
             description = a.Description,
             isActive = a.IsActive,
+            managerUserId = a.ManagerUserId,
+            principalKind = a.PrincipalKind,
             createdAt = a.CreatedAt,
             updatedAt = a.UpdatedAt,
             lastAuthenticatedAt = a.LastAuthenticatedAt
@@ -107,10 +111,54 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = account.CertificateThumbprint,
             description = account.Description,
             isActive = account.IsActive,
+            managerUserId = account.ManagerUserId,
+            principalKind = account.PrincipalKind,
             createdAt = account.CreatedAt,
             updatedAt = account.UpdatedAt,
             lastAuthenticatedAt = account.LastAuthenticatedAt
         });
+    }
+
+    /// <summary>
+    /// Set or clear a service account's manager and principal kind in one PUT
+    /// (task 4057). PUT replaces BOTH fields: managerUserId = null explicitly
+    /// clears the manager. SuperAdmin and SystemAdmin only; service-account
+    /// tokens carry no roles and are rejected by the role gate. Cross-tenant
+    /// managers are allowed only for SuperAdmin callers. A disabled manager may
+    /// still be stored.
+    /// </summary>
+    [HttpPut("{id:guid}/principal")]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
+    public async Task<IActionResult> SetPrincipal(
+        Guid id,
+        [FromBody] SetPrincipalRequest request,
+        [FromServices] IPrincipalDirectoryService principalDirectory)
+    {
+        if (request.PrincipalKind == null)
+            return BadRequest(new { error = "principalKind is required (Human, Agent or Service)" });
+
+        var actorIdRaw = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        Guid? actorId = Guid.TryParse(actorIdRaw, out var parsedActor) ? parsedActor : null;
+
+        var result = await principalDirectory.SetServiceAccountPrincipalAsync(
+            id,
+            request.ManagerUserId,
+            request.PrincipalKind.Value,
+            actorId,
+            callerIsSuperAdmin: User.IsInRole("SuperAdmin"),
+            HttpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            PrincipalAssignmentStatus.TargetNotFound => NotFound(new { error = "Service account not found" }),
+            PrincipalAssignmentStatus.ValidationFailed => BadRequest(new { error = result.Error }),
+            _ => Ok(new
+            {
+                id,
+                managerUserId = request.ManagerUserId,
+                principalKind = request.PrincipalKind.Value
+            })
+        };
     }
 
     /// <summary>
@@ -144,6 +192,8 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = account.CertificateThumbprint,
             description = account.Description,
             isActive = account.IsActive,
+            managerUserId = account.ManagerUserId,
+            principalKind = account.PrincipalKind,
             updatedAt = account.UpdatedAt
         });
     }

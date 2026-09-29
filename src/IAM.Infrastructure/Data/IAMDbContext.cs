@@ -133,6 +133,14 @@ public class IAMDbContext : DbContext
                 .WithOne(e => e.User)
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Manager link + principal kind (task 4057)
+            entity.HasIndex(e => e.ManagerUserId);
+            entity.Property(e => e.PrincipalKind).HasConversion<int>();
+            entity.HasOne(e => e.ManagerUser)
+                .WithMany()
+                .HasForeignKey(e => e.ManagerUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // RecoveryCode configuration
@@ -1651,6 +1659,14 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Manager link + principal kind (task 4057)
+            entity.HasIndex(e => e.ManagerUserId);
+            entity.Property(e => e.PrincipalKind).HasConversion<int>();
+            entity.HasOne(e => e.ManagerUser)
+                .WithMany()
+                .HasForeignKey(e => e.ManagerUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // TokenExchange configuration (RFC 8693 token exchange audit trail)
