@@ -57,6 +57,15 @@ public class TokenEndpointRateLimitingMiddleware
             return;
         }
 
+        // A limit of 0 or below means "disabled": pass through instead of blocking
+        // (or crashing on an empty window) so a misconfigured knob can never take
+        // the token endpoint down.
+        if (_failureLimit <= 0)
+        {
+            await _next(context);
+            return;
+        }
+
         // Must be read AFTER UseForwardedHeaders (this middleware is registered later in the
         // pipeline), so behind the trusted reverse proxy this is the real client IP.
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";

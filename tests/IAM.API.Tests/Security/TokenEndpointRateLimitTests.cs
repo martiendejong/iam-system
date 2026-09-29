@@ -352,4 +352,25 @@ public class TokenEndpointRateLimitTests
         Assert.Equal(HttpStatusCode.TooManyRequests, blocked.StatusCode);
         Assert.True(blocked.Headers.Contains("Retry-After"));
     }
+
+    [Fact]
+    public async Task ZeroThreshold_DisablesTheLimiter_InsteadOfBlockingOrCrashing()
+    {
+        using var factory = new RateLimitFactory(failureLimit: 0);
+        await SeedServiceClientAsync(factory);
+        var client = NewClient(factory);
+        const string ip = "203.0.113.77";
+
+        // With the limiter disabled every request must reach OpenIddict and get a
+        // normal auth failure — never a 429 and never a 500.
+        for (var i = 0; i < 15; i++)
+        {
+            var failure = await ClientCredentialsRequestAsync(client, WrongSecret, ip);
+            Assert.True(IsAuthFailure(failure.StatusCode),
+                $"request {i + 1}/15 should be a normal auth failure, got {failure.StatusCode}");
+        }
+
+        var success = await ClientCredentialsRequestAsync(client, ServiceClientSecret, ip);
+        Assert.Equal(HttpStatusCode.OK, success.StatusCode);
+    }
 }
