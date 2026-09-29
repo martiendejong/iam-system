@@ -133,7 +133,8 @@ class ApiService {
 
   // User endpoints
   async getUsers(): Promise<User[]> {
-    const response = await this.client.get<any>('/users');
+    // pageSize=100 is the API maximum; the default of 20 silently truncated the manager picker
+    const response = await this.client.get<any>('/users?pageSize=100');
     return response.data?.items ?? response.data;
   }
 

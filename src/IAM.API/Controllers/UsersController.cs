@@ -466,6 +466,9 @@ public class UsersController : ControllerBase
         if (request.PrincipalKind == null)
             return BadRequest(new { error = "principalKind is required (Human, Agent or Service)" });
 
+        if (!Enum.IsDefined(request.PrincipalKind.Value))
+            return BadRequest(new { error = "principalKind must be Human, Agent or Service" });
+
         var actorIdRaw = User.FindFirstValue(ClaimTypes.NameIdentifier);
         Guid? actorId = Guid.TryParse(actorIdRaw, out var parsedActor) ? parsedActor : null;
 

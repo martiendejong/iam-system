@@ -514,4 +514,19 @@ public class PrincipalManagerTests : IClassFixture<IAMTestWebApplicationFactory>
 
         Assert.Equal(3, GetPrincipalAuditRows(userId).Count);
     }
+    [Fact]
+    public async Task SetPrincipal_UndefinedKindInteger_IsRejectedWith400()
+    {
+        // Review finding on PR #137: JsonStringEnumConverter accepts undefined numerics, so
+        // {"principalKind":99} used to persist as (PrincipalKind)99.
+        var target = CreateUser();
+
+        var response = await _superAdmin.PutAsJsonAsync($"/api/users/{target}/principal",
+            new { principalKind = 99, managerUserId = (Guid?)null });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var stored = await GetUserJson(target);
+        Assert.Equal("Human", stored.GetProperty("principalKind").GetString());
+    }
+
 }
