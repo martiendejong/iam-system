@@ -110,7 +110,11 @@ public class ResolverService : IResolverService
 
     // --- private helpers ---
 
-    /// <summary>Walk the user manager chain starting from the given manager ID.</summary>
+    /// <summary>
+    /// Walk the manager chain iteratively, one hop at a time (max <see cref="MaxChainHops"/>
+    /// per-hop queries). This avoids a full Users-table scan: the chain is at most 8 hops deep,
+    /// so at most 8 user-lookups + 8 tenant-lookups are executed.
+    /// </summary>
     private async Task<ResolverResult> WalkManagerChainAsync(
         Guid? startingManagerId,
         HashSet<Guid> subjectTenantIds,
@@ -118,29 +122,6 @@ public class ResolverService : IResolverService
     {
         if (!startingManagerId.HasValue)
             return ResolverResult.Ok(Array.Empty<AuthorityHop>());
-
-        // Single snapshot to avoid N+1 on the manager chain walk.
-        var allUsers = await _context.Users
-            .AsNoTracking()
-            .Select(u => new
-            {
-                u.Id,
-                u.FirstName,
-                u.LastName,
-                u.Email,
-                u.IsActive,
-                u.ManagerUserId,
-                u.PrincipalKind
-            })
-            .ToDictionaryAsync(u => u.Id, ct);
-
-        // Snapshot of each user's tenant IDs for boundary checking
-        var tenantsByUser = await _context.UserRoles
-            .AsNoTracking()
-            .Where(ur => ur.TenantId != null)
-            .GroupBy(ur => ur.UserId)
-            .Select(g => new { UserId = g.Key, TenantIds = g.Select(ur => ur.TenantId!.Value).Distinct().ToList() })
-            .ToDictionaryAsync(g => g.UserId, g => (IReadOnlyList<Guid>)g.TenantIds, ct);
 
         var chain = new List<AuthorityHop>();
         var visited = new HashSet<Guid>();
@@ -153,11 +134,25 @@ public class ResolverService : IResolverService
             if (!visited.Add(current.Value))
                 break;
 
-            if (!allUsers.TryGetValue(current.Value, out var manager))
-                break; // Manager deleted from DB — chain ends
+            var manager = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.Id == current.Value)
+                .Select(u => new { u.Id, u.FirstName, u.LastName, u.Email, u.IsActive, u.ManagerUserId, u.PrincipalKind })
+                .FirstOrDefaultAsync(ct);
 
-            // Tenant boundary: if the manager has no tenant overlap with the subject, stop.
-            if (!IsInBounds(current.Value, subjectTenantIds, tenantsByUser))
+            if (manager == null)
+                break; // Deleted from DB — chain ends
+
+            // Fetch this manager's tenant IDs for boundary check
+            var managerTenantIds = await _context.UserRoles
+                .AsNoTracking()
+                .Where(ur => ur.UserId == current.Value && ur.TenantId != null)
+                .Select(ur => ur.TenantId!.Value)
+                .Distinct()
+                .ToListAsync(ct);
+
+            // Tenant boundary: stop when the manager has no tenant overlap with the subject
+            if (!IsInBounds(managerTenantIds, subjectTenantIds))
                 break;
 
             if (manager.IsActive)
@@ -168,8 +163,10 @@ public class ResolverService : IResolverService
                     break;
                 }
 
-                var managerTenantId = tenantsByUser.TryGetValue(current.Value, out var tids) && tids.Count > 0
-                    ? tids[0]
+                // Deterministic primary tenant: smallest GUID so the value is stable
+                // across restarts regardless of query row order.
+                var primaryTenantId = managerTenantIds.Count > 0
+                    ? managerTenantIds.OrderBy(t => t).First()
                     : (Guid?)null;
 
                 chain.Add(new AuthorityHop(
@@ -178,9 +175,9 @@ public class ResolverService : IResolverService
                     Kind: manager.PrincipalKind.ToString(),
                     IamSubject: $"user:{manager.Email}",
                     HopRole: "manager",
-                    TenantId: managerTenantId));
+                    TenantId: primaryTenantId));
             }
-            // Inactive managers are silently skipped; we continue to their own manager.
+            // Inactive managers are silently skipped; the walk continues to their own manager.
 
             current = manager.ManagerUserId;
         }
@@ -189,21 +186,15 @@ public class ResolverService : IResolverService
     }
 
     /// <summary>
-    /// A manager is "in bounds" if they share at least one tenant with the subject,
-    /// or if both parties have no tenant (global principals).
+    /// A manager is "in bounds" when they share at least one tenant with the subject,
+    /// or when both parties have no tenant (global principals).
     /// </summary>
-    private static bool IsInBounds(
-        Guid managerId,
-        HashSet<Guid> subjectTenantIds,
-        Dictionary<Guid, IReadOnlyList<Guid>> tenantsByUser)
+    private static bool IsInBounds(IReadOnlyList<Guid> managerTenantIds, HashSet<Guid> subjectTenantIds)
     {
-        if (!tenantsByUser.TryGetValue(managerId, out var managerTenants) || managerTenants.Count == 0)
-        {
-            // Manager has no tenant — in bounds only if the subject also has no tenant
+        if (managerTenantIds.Count == 0)
             return subjectTenantIds.Count == 0;
-        }
 
-        return managerTenants.Any(t => subjectTenantIds.Contains(t));
+        return managerTenantIds.Any(t => subjectTenantIds.Contains(t));
     }
 
     private async Task<HashSet<Guid>> GetUserTenantIdsAsync(Guid userId, CancellationToken ct)

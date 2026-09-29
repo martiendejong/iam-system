@@ -998,7 +998,16 @@ public class DatabaseSeeder : IHostedService
         // Task 4059: Vault resolver client — confidential, client_credentials only.
         // Secret is read from config key "VaultResolver:ClientSecret" (never committed to git).
         // In production the value comes from the vault or an environment variable.
+        // If the key is absent the client is not seeded and all resolver calls will return 401.
         var vaultClientSecret = configuration["VaultResolver:ClientSecret"];
+        if (string.IsNullOrEmpty(vaultClientSecret))
+        {
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>().LogWarning(
+                "VaultResolver:ClientSecret is not configured — the 'jengo-vault' OAuth client " +
+                "will NOT be seeded. All calls to GET /api/resolver/* will return 401. " +
+                "Set VaultResolver:ClientSecret to enable the who-decides resolver (task 4059).");
+        }
+
         if (!string.IsNullOrEmpty(vaultClientSecret)
             && await manager.FindByClientIdAsync("jengo-vault", cancellationToken) == null)
         {

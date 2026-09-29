@@ -214,10 +214,12 @@ builder.Services.AddOpenIddict()
             // scope store); registering them here makes discovery advertise them in
             // scopes_supported.
             "taskmanager_api",
-            "jengo_mcp",
-            // Task 4059: vault-only resolver scope; NOT advertised in discovery
-            // (it is internal and only the vault confidential client holds this permission).
-            IAM.API.Controllers.ResolverController.ResolverScope
+            "jengo_mcp"
+            // NOTE: "iam_resolver" (task 4059) is intentionally NOT in this list —
+            // RegisterScopes populates scopes_supported in the discovery document,
+            // and the resolver scope must stay undiscoverable to reduce attack surface.
+            // The scope is in the OpenIddict scope store (DatabaseSeeder.SeedScopesAsync)
+            // and the token endpoint enforces it via the jengo-vault client's permission list.
         );
 
         // Register signing and encryption credentials

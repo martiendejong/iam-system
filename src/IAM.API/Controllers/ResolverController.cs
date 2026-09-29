@@ -44,7 +44,6 @@ public class ResolverController : ControllerBase
     /// <response code="200">Chain resolved (may be empty when the user has no manager).</response>
     /// <response code="404">User not found.</response>
     [HttpGet("users/{userId:guid}/chain")]
-    [ResponseCache(Duration = 60, VaryByHeader = "Authorization")]
     public async Task<IActionResult> GetUserChainAsync(Guid userId, CancellationToken ct)
     {
         var result = await _resolver.ResolveUserChainAsync(userId, ct);
@@ -56,7 +55,6 @@ public class ResolverController : ControllerBase
     /// Chain starts with the service account's direct manager (always a User).
     /// </summary>
     [HttpGet("service-accounts/{serviceAccountId:guid}/chain")]
-    [ResponseCache(Duration = 60, VaryByHeader = "Authorization")]
     public async Task<IActionResult> GetServiceAccountChainAsync(Guid serviceAccountId, CancellationToken ct)
     {
         var result = await _resolver.ResolveServiceAccountChainAsync(serviceAccountId, ct);
@@ -68,7 +66,6 @@ public class ResolverController : ControllerBase
     /// Consumed by access-request flow T11.
     /// </summary>
     [HttpGet("groups/{groupId:guid}/chain")]
-    [ResponseCache(Duration = 60, VaryByHeader = "Authorization")]
     public async Task<IActionResult> GetGroupChainAsync(Guid groupId, CancellationToken ct)
     {
         var result = await _resolver.ResolveGroupChainAsync(groupId, ct);

@@ -40,6 +40,7 @@ public class ResolverControllerTests : IDisposable
     private static readonly Guid OtherTenantUserId = Guid.Parse("aaaaaaaa-4059-4059-4059-000000000005");
     private static readonly Guid ServiceAccountId = Guid.Parse("bbbbbbbb-4059-4059-4059-000000000001");
     private static readonly Guid GroupId = Guid.Parse("cccccccc-4059-4059-4059-000000000001");
+    private static readonly Guid UserWithDisabledManagerId = Guid.Parse("aaaaaaaa-4059-4059-4059-000000000009");
     private static readonly Guid GroupOwnerId = Guid.Parse("aaaaaaaa-4059-4059-4059-000000000006");
     private static readonly Guid GroupAdminId = Guid.Parse("aaaaaaaa-4059-4059-4059-000000000007");
     private static readonly Guid GroupMemberId = Guid.Parse("aaaaaaaa-4059-4059-4059-000000000008");
@@ -167,24 +168,22 @@ public class ResolverControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task UserChain_SkipsDisabledManager()
+    public async Task UserChain_DirectManagerDisabled_SkipsAndContinues()
     {
-        // DisabledManager has ManagerUserId = RootManagerId but is inactive.
-        // A user whose manager is DisabledManager should still surface RootManager.
+        // UserWithDisabledManager has DisabledManager as direct manager.
+        // DisabledManager is inactive but has ManagerUserId = RootManagerId.
+        // The resolver must skip DisabledManager AND continue to surface RootManagerId.
         var token = await GetVaultTokenAsync();
 
-        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/resolver/users/{DisabledManagerId}/chain");
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/resolver/users/{UserWithDisabledManagerId}/chain");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var resp = await _client.SendAsync(req);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
-        // DisabledManager's manager IS RootManager; but DisabledManager itself is inactive
-        // so when resolving DisabledManager's chain, RootManager should appear (DisabledManager's own manager)
-        // Actually DisabledManager itself is the subject - its chain starts from its manager = RootManager
         var body = await ParseBodyAsync(resp);
         var chain = body.GetProperty("chain");
-        // DisabledManager → RootManager (1 hop, since RootManager is active)
+        // DisabledManager is skipped (inactive); walk continues → RootManager (1 active hop)
         Assert.Equal(1, chain.GetArrayLength());
         Assert.Equal(RootManagerId.ToString(), chain[0].GetProperty("principalId").GetString());
     }
@@ -344,6 +343,7 @@ public class ResolverControllerTests : IDisposable
             new User { Id = MidManagerId, Email = "mid@resolver.test", FirstName = "Mid", LastName = "Manager", IsActive = true, EmailConfirmed = true, ManagerUserId = RootManagerId, PrincipalKind = PrincipalKind.Human },
             new User { Id = LeafUserId, Email = "leaf@resolver.test", FirstName = "Leaf", LastName = "User", IsActive = true, EmailConfirmed = true, ManagerUserId = MidManagerId, PrincipalKind = PrincipalKind.Human },
             new User { Id = DisabledManagerId, Email = "disabled@resolver.test", FirstName = "Disabled", LastName = "Manager", IsActive = false, EmailConfirmed = true, ManagerUserId = RootManagerId, PrincipalKind = PrincipalKind.Human },
+            new User { Id = UserWithDisabledManagerId, Email = "hasdisabled@resolver.test", FirstName = "Has", LastName = "DisabledMgr", IsActive = true, EmailConfirmed = true, ManagerUserId = DisabledManagerId, PrincipalKind = PrincipalKind.Human },
             new User { Id = OtherTenantUserId, Email = "other@resolver.test", FirstName = "Other", LastName = "Tenant", IsActive = true, EmailConfirmed = true, ManagerUserId = RootManagerId, PrincipalKind = PrincipalKind.Human },
             new User { Id = GroupOwnerId, Email = "owner@resolver.test", FirstName = "Group", LastName = "Owner", IsActive = true, EmailConfirmed = true, PrincipalKind = PrincipalKind.Human },
             new User { Id = GroupAdminId, Email = "admin@resolver.test", FirstName = "Group", LastName = "Admin", IsActive = true, EmailConfirmed = true, PrincipalKind = PrincipalKind.Human },
@@ -360,7 +360,7 @@ public class ResolverControllerTests : IDisposable
         };
         db.Roles.Add(baseRole);
 
-        foreach (var userId in new[] { RootManagerId, MidManagerId, LeafUserId, DisabledManagerId, GroupOwnerId, GroupAdminId, GroupMemberId })
+        foreach (var userId in new[] { RootManagerId, MidManagerId, LeafUserId, DisabledManagerId, UserWithDisabledManagerId, GroupOwnerId, GroupAdminId, GroupMemberId })
         {
             db.UserRoles.Add(new UserRole
             {
