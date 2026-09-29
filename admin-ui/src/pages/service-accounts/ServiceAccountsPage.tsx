@@ -1,7 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
+import PrincipalEditor from '../../components/common/PrincipalEditor';
 import { serviceAccountApi } from '../../services/serviceAccountApi';
 import type { ServiceAccount, CreateServiceAccountRequest } from '../../services/serviceAccountApi';
+import { api } from '../../services/api';
+import type { User } from '../../types';
 
 const SERVICE_ACCOUNT_TYPES = [
   { value: 0, label: 'API' },
@@ -18,6 +21,8 @@ interface Tenant {
 export default function ServiceAccountsPage() {
   const [accounts, setAccounts] = useState<ServiceAccount[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [editingPrincipalId, setEditingPrincipalId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -48,6 +53,7 @@ export default function ServiceAccountsPage() {
   useEffect(() => {
     loadAccounts();
     loadTenants();
+    loadUsers();
   }, []);
 
   const loadAccounts = async () => {
@@ -76,6 +82,30 @@ export default function ServiceAccountsPage() {
       // Non-critical
     }
   };
+
+  const loadUsers = async () => {
+    try {
+      const data = await api.getUsers();
+      setUsers(Array.isArray(data) ? data : []);
+    } catch {
+      // Non-critical: the manager picker falls back to the current value
+    }
+  };
+
+  const managerLabel = (managerUserId: string | null) => {
+    if (!managerUserId) return '-';
+    const manager = users.find(u => u.id === managerUserId);
+    return manager
+      ? (`${manager.firstName} ${manager.lastName}`.trim() || manager.email)
+      : `${managerUserId.slice(0, 8)}…`;
+  };
+
+  const handleSavePrincipal = (accountId: string) =>
+    async (managerUserId: string | null, principalKind: string) => {
+      await serviceAccountApi.setPrincipal(accountId, managerUserId, principalKind);
+      setEditingPrincipalId(null);
+      loadAccounts();
+    };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -330,6 +360,8 @@ export default function ServiceAccountsPage() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Client ID</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Kind</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Manager</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tenant</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Auth</th>
@@ -338,7 +370,8 @@ export default function ServiceAccountsPage() {
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {accounts.map(account => (
-                      <tr key={account.id} className="hover:bg-gray-50">
+                      <Fragment key={account.id}>
+                      <tr className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div>
                             <div className="text-sm font-medium text-gray-900">{account.name}</div>
@@ -361,6 +394,18 @@ export default function ServiceAccountsPage() {
                             {account.type}
                           </span>
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            account.principalKind === 'Human' ? 'bg-green-100 text-green-800' :
+                            account.principalKind === 'Agent' ? 'bg-violet-100 text-violet-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {account.principalKind || 'Service'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {managerLabel(account.managerUserId)}
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {account.tenantName || '-'}
                         </td>
@@ -377,6 +422,12 @@ export default function ServiceAccountsPage() {
                             : 'Never'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
+                          <button
+                            onClick={() => setEditingPrincipalId(editingPrincipalId === account.id ? null : account.id)}
+                            className="text-indigo-600 hover:text-indigo-900"
+                          >
+                            {editingPrincipalId === account.id ? 'Close' : 'Manager/Kind'}
+                          </button>
                           <button
                             onClick={() => handleRotateSecret(account.id)}
                             className="text-indigo-600 hover:text-indigo-900"
@@ -397,6 +448,20 @@ export default function ServiceAccountsPage() {
                           </button>
                         </td>
                       </tr>
+                      {editingPrincipalId === account.id && (
+                        <tr className="bg-gray-50">
+                          <td colSpan={9} className="px-6 py-4">
+                            <PrincipalEditor
+                              managerUserId={account.managerUserId}
+                              principalKind={account.principalKind || 'Service'}
+                              users={users}
+                              onSave={handleSavePrincipal(account.id)}
+                              compact
+                            />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>

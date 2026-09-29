@@ -133,7 +133,8 @@ class ApiService {
 
   // User endpoints
   async getUsers(): Promise<User[]> {
-    const response = await this.client.get<any>('/users');
+    // pageSize=100 is the API maximum; the default of 20 silently truncated the manager picker
+    const response = await this.client.get<any>('/users?pageSize=100');
     return response.data?.items ?? response.data;
   }
 
@@ -163,6 +164,14 @@ class ApiService {
 
   async changeUserPassword(id: string, newPassword: string): Promise<void> {
     await this.client.post(`/users/${id}/change-password`, { newPassword });
+  }
+
+  /**
+   * Set or clear a user's manager and principal kind in one PUT (task 4057).
+   * PUT replaces both fields; managerUserId = null clears the manager.
+   */
+  async setUserPrincipal(id: string, managerUserId: string | null, principalKind: string): Promise<void> {
+    await this.client.put(`/users/${id}/principal`, { managerUserId, principalKind });
   }
 
   async resendVerification(id: string): Promise<void> {

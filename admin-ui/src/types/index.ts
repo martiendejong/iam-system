@@ -9,7 +9,20 @@ export interface User {
   phoneNumber?: string;
   createdAt: string;
   updatedAt: string;
+  /** Optional manager (another user); null = no manager (task 4057) */
+  managerUserId?: string | null;
+  /** Human / Agent / Service; users default to Human (task 4057) */
+  principalKind?: PrincipalKindValue;
 }
+
+// Principal kind (task 4057) - shared by users and service accounts
+export const PrincipalKind = {
+  Human: 'Human',
+  Agent: 'Agent',
+  Service: 'Service',
+} as const;
+
+export type PrincipalKindValue = typeof PrincipalKind[keyof typeof PrincipalKind];
 
 export interface UserRole {
   userId: string;
