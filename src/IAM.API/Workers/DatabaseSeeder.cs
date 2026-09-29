@@ -956,6 +956,44 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Jengo Commerce Admin — pay.prospergenics.com (Authorization Code Flow with PKCE, public client)
+        if (await manager.FindByClientIdAsync("jengo-commerce", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-commerce",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Commerce Admin",
+                RedirectUris =
+                {
+                    new Uri("https://pay.prospergenics.com/admin/"),
+                    new Uri("http://localhost:5292/admin/")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://pay.prospergenics.com/admin/"),
+                    new Uri("http://localhost:5292/admin/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         if (await manager.FindByClientIdAsync("jengo-knowledge", cancellationToken) == null)
         {
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
