@@ -414,6 +414,45 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // CoachOS coachingplatform — coaching.martiendejong.nl/coaching, platform-breed voor alle
+        // tenants: de tenant reist mee via een cookie in de app zelf, dus één vaste redirect_uri
+        // volstaat (Authorization Code Flow with PKCE, public client). Taak 4448.
+        if (await manager.FindByClientIdAsync("coachos", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "coachos",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "CoachOS coachingplatform",
+                RedirectUris =
+                {
+                    new Uri("https://coaching.martiendejong.nl/coaching/api/auth/iam/callback"),
+                    new Uri("http://localhost:5188/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://coaching.martiendejong.nl/coaching/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         // Password Manager — vault.prospergenics.com (Authorization Code Flow with PKCE, public client)
         if (await manager.FindByClientIdAsync("passwordmanager", cancellationToken) == null)
         {
