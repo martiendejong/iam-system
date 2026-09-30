@@ -1,8 +1,11 @@
 using System.Security.Claims;
 using IAM.Core.Entities;
 using IAM.Core.Services;
+using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace IAM.API.Controllers;
 
@@ -12,20 +15,54 @@ namespace IAM.API.Controllers;
 public class TenantBrandingController : ControllerBase
 {
     private readonly ITenantBrandingService _brandingService;
+    private readonly IAMDbContext _context;
     private readonly ILogger<TenantBrandingController> _logger;
 
-    public TenantBrandingController(ITenantBrandingService brandingService, ILogger<TenantBrandingController> logger)
+    public TenantBrandingController(ITenantBrandingService brandingService, IAMDbContext context, ILogger<TenantBrandingController> logger)
     {
         _brandingService = brandingService;
+        _context = context;
         _logger = logger;
     }
 
     /// <summary>
-    /// Get branding for a tenant (admin, authenticated).
+    /// Returns true when the caller may access the given tenant's branding. SuperAdmin can
+    /// access any tenant. Otherwise mirrors GroupService.CreateGroupAsync's tenant-membership
+    /// check: a tenant_id claim, when present, must match the target tenant, and the caller
+    /// additionally needs an active UserRoles row for that tenant - password-login tokens carry
+    /// no tenant_id claim at all, so a claim-only check would wrongly 403 a tenant admin's own
+    /// tenant (task 4522 review).
+    /// </summary>
+    private async Task<bool> IsAuthorizedForTenantAsync(Guid tenantId, CancellationToken ct)
+    {
+        if (User.IsInRole("SuperAdmin")) return true;
+
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId)) return false;
+
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var claimedTenantId) || claimedTenantId != tenantId)
+                return false;
+        }
+
+        var now = DateTime.UtcNow;
+        return await _context.UserRoles.AnyAsync(ur =>
+            ur.UserId == userId
+            && ur.TenantId == tenantId
+            && (ur.ExpiresAt == null || ur.ExpiresAt > now), ct);
+    }
+
+    /// <summary>
+    /// Get branding for a tenant (scoped to the caller's own tenant, or SuperAdmin).
     /// </summary>
     [HttpGet("{tenantId}")]
     public async Task<IActionResult> GetBranding(Guid tenantId, CancellationToken ct)
     {
+        if (!await IsAuthorizedForTenantAsync(tenantId, ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Access to this tenant's branding is not allowed." });
+
         var branding = await _brandingService.GetByTenantIdAsync(tenantId, ct);
 
         if (branding == null)
@@ -115,11 +152,14 @@ public class TenantBrandingController : ControllerBase
     }
 
     /// <summary>
-    /// Create or update branding for a tenant.
+    /// Create or update branding for a tenant (scoped to the caller's own tenant, or SuperAdmin).
     /// </summary>
     [HttpPut("{tenantId}")]
     public async Task<IActionResult> UpsertBranding(Guid tenantId, [FromBody] UpsertBrandingRequest request, CancellationToken ct)
     {
+        if (!await IsAuthorizedForTenantAsync(tenantId, ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Access to this tenant's branding is not allowed." });
+
         var branding = new TenantBranding
         {
             LogoUrl = request.LogoUrl,
@@ -141,11 +181,14 @@ public class TenantBrandingController : ControllerBase
     }
 
     /// <summary>
-    /// Delete branding for a tenant (resets to platform defaults).
+    /// Delete branding for a tenant (scoped to the caller's own tenant, or SuperAdmin).
     /// </summary>
     [HttpDelete("{tenantId}")]
     public async Task<IActionResult> DeleteBranding(Guid tenantId, CancellationToken ct)
     {
+        if (!await IsAuthorizedForTenantAsync(tenantId, ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Access to this tenant's branding is not allowed." });
+
         var deleted = await _brandingService.DeleteAsync(tenantId, ct);
 
         if (!deleted)
