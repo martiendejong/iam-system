@@ -2,6 +2,7 @@ using System.Security.Claims;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
@@ -21,11 +22,25 @@ public class TenantBrandingController : ControllerBase
     }
 
     /// <summary>
-    /// Get branding for a tenant (admin, authenticated).
+    /// Returns true when the caller may access the given tenant's branding.
+    /// SuperAdmin can access any tenant; all other roles are scoped to their own tenant_id claim.
+    /// </summary>
+    private bool IsAuthorizedForTenant(Guid tenantId)
+    {
+        if (User.IsInRole("SuperAdmin")) return true;
+        var claim = User.FindFirst("tenant_id")?.Value;
+        return Guid.TryParse(claim, out var actorTenantId) && actorTenantId == tenantId;
+    }
+
+    /// <summary>
+    /// Get branding for a tenant (scoped to the caller's own tenant, or SuperAdmin).
     /// </summary>
     [HttpGet("{tenantId}")]
     public async Task<IActionResult> GetBranding(Guid tenantId, CancellationToken ct)
     {
+        if (!IsAuthorizedForTenant(tenantId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Access to this tenant's branding is not allowed." });
+
         var branding = await _brandingService.GetByTenantIdAsync(tenantId, ct);
 
         if (branding == null)
@@ -115,11 +130,14 @@ public class TenantBrandingController : ControllerBase
     }
 
     /// <summary>
-    /// Create or update branding for a tenant.
+    /// Create or update branding for a tenant (scoped to the caller's own tenant, or SuperAdmin).
     /// </summary>
     [HttpPut("{tenantId}")]
     public async Task<IActionResult> UpsertBranding(Guid tenantId, [FromBody] UpsertBrandingRequest request, CancellationToken ct)
     {
+        if (!IsAuthorizedForTenant(tenantId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Access to this tenant's branding is not allowed." });
+
         var branding = new TenantBranding
         {
             LogoUrl = request.LogoUrl,
@@ -141,11 +159,14 @@ public class TenantBrandingController : ControllerBase
     }
 
     /// <summary>
-    /// Delete branding for a tenant (resets to platform defaults).
+    /// Delete branding for a tenant (scoped to the caller's own tenant, or SuperAdmin).
     /// </summary>
     [HttpDelete("{tenantId}")]
     public async Task<IActionResult> DeleteBranding(Guid tenantId, CancellationToken ct)
     {
+        if (!IsAuthorizedForTenant(tenantId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Access to this tenant's branding is not allowed." });
+
         var deleted = await _brandingService.DeleteAsync(tenantId, ct);
 
         if (!deleted)
