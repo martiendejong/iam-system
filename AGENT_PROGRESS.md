@@ -504,3 +504,8 @@ Done: merged develop (3911 API-key work) into PR #128, resolved the AGENT_PROGRE
 the hardening left in the worktree, marked the PR ready with the deploy prerequisites; dependency scan clean; commented on 3231/1748, reopened 3231.
 Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
 Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
+
+## 2026-09-30 - task 4094
+Done: live rotation done earlier today (jengo-agi-svc new random secret in vault 9/212, backend_service + postman_client dropped); PR #143 adds a startup audit that logs Critical when a client secret matches a published repo default. Review added the open-webui literal that shipped 2026-06-12..2026-09-10 to the list plus DefaultClientSecretAuditTests.
+Verified: live DB read-only hash check of all 28 clients vs 8 published literals = 0 matches; old jengo-agi-svc default 401 invalid_client, vault secret 200 (3-part JWT); IAM.API.Tests 279 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; new test fails without the added literal.
+Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).

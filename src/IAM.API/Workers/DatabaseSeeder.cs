@@ -67,14 +67,18 @@ public class DatabaseSeeder : IHostedService
     /// </summary>
     private async Task AuditDefaultClientSecretsAsync(IServiceProvider services, CancellationToken cancellationToken)
     {
-        // Every literal that has ever shipped in DatabaseSeeder.cs as a fallback client
-        // secret (git history sweep, 2026-09-30). Add new dev fallbacks here too.
+        // Every literal that has ever shipped in DatabaseSeeder.cs as a client secret, dev
+        // fallback or hard-coded (git history sweep, 2026-09-30). Add new ones here too.
         string[] knownDefaultSecrets =
         {
             "postman_secret_dev_only",
             "backend_secret_dev_only",
             "jengo-agi-svc-secret-dev",
-            "jengo-mcp-iam-secret-dev"
+            "jengo-mcp-iam-secret-dev",
+            // open-webui was seeded with a hard-coded secret from 2026-06-12 until the 2026-09-10
+            // auth-hardening commit made it configuration-only; a row created (or restored from a
+            // backup) in that window would still carry it.
+            "Ow9kP2mXqR5vN8dL3jT7"
         };
 
         try
