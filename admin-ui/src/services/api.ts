@@ -99,6 +99,14 @@ class ApiService {
     return response.data;
   }
 
+  async verifyLoginTotp(userId: string, code: string, rememberMe = false): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>('/auth/2fa/totp/verify', { userId, code, rememberMe });
+    if (response.data.accessToken) {
+      localStorage.setItem('accessToken', response.data.accessToken);
+    }
+    return response.data;
+  }
+
   async resendLoginTwoFactorCode(userId: string, returnUrl?: string): Promise<void> {
     await this.client.post('/auth/2fa/resend', { userId, returnUrl });
   }

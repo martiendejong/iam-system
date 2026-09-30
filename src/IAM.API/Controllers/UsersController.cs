@@ -516,6 +516,34 @@ public class UsersController : ControllerBase
 
         return Ok(new { message = "Password changed successfully" });
     }
+
+    /// <summary>
+    /// Permanently delete a user and all their data (SuperAdmin only).
+    /// A SuperAdmin may not delete their own account. The deletion is irreversible.
+    /// </summary>
+    [HttpDelete("{id}")]
+    [Authorize(Roles = "SuperAdmin")]
+    public async Task<IActionResult> DeleteUser(Guid id)
+    {
+        var actorIdRaw = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (Guid.TryParse(actorIdRaw, out var actorId) && actorId == id)
+            return BadRequest(new { error = "You cannot delete your own account." });
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        // Delete entities not covered by cascade (sessions, magic links, OTPs).
+        _context.UserSessions.RemoveRange(_context.UserSessions.Where(s => s.UserId == id));
+        _context.MagicLinkTokens.RemoveRange(_context.MagicLinkTokens.Where(m => m.UserId == id));
+        _context.OtpCodes.RemoveRange(_context.OtpCodes.Where(o => o.UserId == id));
+
+        // UserRoles, RefreshTokens and RecoveryCodes cascade via DB FK config.
+        _context.Users.Remove(user);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { message = "User permanently deleted." });
+    }
 }
 
 public record UpdateProfileRequest(string? FirstName, string? LastName);

@@ -107,19 +107,37 @@ public class MfaController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ValidateTotp([FromBody] TotpValidateRequest request, CancellationToken ct)
     {
-        // Try TOTP code first
-        var success = await _totpService.ValidateTotpLoginAsync(request.UserId, request.Code, ct);
-
-        if (!success)
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == request.UserId, ct);
+        if (user == null)
         {
-            // Fall back to recovery code
-            success = await _totpService.UseRecoveryCodeAsync(request.UserId, request.Code, ct);
-        }
-
-        if (!success)
-        {
+            // Don't reveal whether the user exists
             return BadRequest(new { error = "Invalid authentication code." });
         }
+
+        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        {
+            return BadRequest(new { error = "Account is temporarily locked. Try again later." });
+        }
+
+        var success = await _totpService.ValidateTotpLoginAsync(request.UserId, request.Code, ct)
+                   || await _totpService.UseRecoveryCodeAsync(request.UserId, request.Code, ct);
+
+        if (!success)
+        {
+            user.FailedLoginAttempts++;
+            if (user.FailedLoginAttempts >= 5)
+            {
+                user.IsLockedOut = true;
+                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
+                await _context.SaveChangesAsync(ct);
+                return BadRequest(new { error = "Too many failed attempts. Account temporarily locked." });
+            }
+            await _context.SaveChangesAsync(ct);
+            return BadRequest(new { error = "Invalid authentication code." });
+        }
+
+        user.FailedLoginAttempts = 0;
+        await _context.SaveChangesAsync(ct);
 
         return Ok(new
         {

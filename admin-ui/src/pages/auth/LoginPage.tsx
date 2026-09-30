@@ -31,6 +31,7 @@ export default function LoginPage() {
   const [twoFactorPending, setTwoFactorPending] = useState(false);
   const [twoFactorUserId, setTwoFactorUserId] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorMethod, setTwoFactorMethod] = useState<'email' | 'totp'>('email');
   const { login, setCurrentUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -105,6 +106,7 @@ export default function LoginPage() {
     setTwoFactorPending(false);
     setTwoFactorUserId('');
     setTwoFactorCode('');
+    setTwoFactorMethod('email');
   };
 
   const navigateAfterLogin = () => navigateAfterAuth(returnUrl, navigate);
@@ -144,6 +146,7 @@ export default function LoginPage() {
       }
       if (response.requiresTwoFactor && response.userId) {
         setTwoFactorUserId(response.userId);
+        setTwoFactorMethod((response.twoFactorMethod === 'totp' ? 'totp' : 'email') as 'email' | 'totp');
         setTwoFactorPending(true);
         setMessage(response.message || 'A verification code has been sent to your email.');
         return;
@@ -180,7 +183,9 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode, rememberMe);
+      const response = twoFactorMethod === 'totp'
+        ? await api.verifyLoginTotp(twoFactorUserId, twoFactorCode, rememberMe)
+        : await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode, rememberMe);
       if (response.user) {
         setCurrentUser(response.user);
       }
@@ -254,6 +259,7 @@ export default function LoginPage() {
       // completing sign-in — mirrors the password + 2FA and magic-link + 2FA flows.
       if (response.data.requiresTwoFactor && response.data.userId) {
         setTwoFactorUserId(response.data.userId);
+        setTwoFactorMethod((response.data.twoFactorMethod === 'totp' ? 'totp' : 'email') as 'email' | 'totp');
         setTwoFactorPending(true);
         setMessage(response.data.message || 'A verification code has been sent to your email.');
         return;
@@ -397,42 +403,50 @@ export default function LoginPage() {
           <form className="mt-4 space-y-6" onSubmit={handleTwoFactorVerify}>
             <div>
               <label htmlFor="two-factor-code" className="block text-sm font-medium text-gray-700">
-                Verification code
+                {twoFactorMethod === 'totp' ? 'Authenticator code' : 'Verification code'}
               </label>
               <input
                 id="two-factor-code"
                 name="code"
                 type="text"
-                inputMode="numeric"
-                pattern="[0-9]{6}"
-                maxLength={6}
+                inputMode={twoFactorMethod === 'totp' ? 'text' : 'numeric'}
+                maxLength={twoFactorMethod === 'totp' ? 20 : 6}
                 required
-                placeholder="000000"
+                placeholder={twoFactorMethod === 'totp' ? '000000 or recovery code' : '000000'}
                 autoFocus
+                autoComplete="one-time-code"
                 value={twoFactorCode}
-                onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                onChange={(e) => setTwoFactorCode(
+                  twoFactorMethod === 'totp'
+                    ? e.target.value.trim()
+                    : e.target.value.replace(/\D/g, '').slice(0, 6)
+                )}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-center text-2xl tracking-widest font-mono"
               />
               <p className="mt-1 text-xs text-gray-500">
-                Enter the code we emailed to {email}, or click the link in that email to sign in automatically.
+                {twoFactorMethod === 'totp'
+                  ? 'Enter the 6-digit code from your authenticator app, or a one-time recovery code.'
+                  : `Enter the code we emailed to ${email}, or click the link in that email to sign in automatically.`}
               </p>
             </div>
             <button
               type="submit"
-              disabled={loading || twoFactorCode.length !== 6}
+              disabled={loading || twoFactorCode.length < 6}
               className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
             >
               {loading ? 'Verifying...' : 'Verify and Sign In'}
             </button>
             <div className="flex items-center justify-between text-sm">
-              <button
-                type="button"
-                onClick={handleResendTwoFactorCode}
-                disabled={loading}
-                className="text-indigo-600 hover:text-indigo-500"
-              >
-                Resend code
-              </button>
+              {twoFactorMethod === 'email' && (
+                <button
+                  type="button"
+                  onClick={handleResendTwoFactorCode}
+                  disabled={loading}
+                  className="text-indigo-600 hover:text-indigo-500"
+                >
+                  Resend code
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => { resetState(); }}
