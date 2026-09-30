@@ -90,11 +90,15 @@ public class AuthController : ControllerBase
 
         if (result.RequiresTwoFactor)
         {
+            var isTotpMethod = result.TwoFactorMethod == "totp";
             return Ok(new
             {
                 requiresTwoFactor = true,
+                twoFactorMethod = result.TwoFactorMethod ?? "email",
                 userId = result.User!.Id,
-                message = "A verification code has been sent to your email."
+                message = isTotpMethod
+                    ? "Open your authenticator app and enter the code."
+                    : "A verification code has been sent to your email."
             });
         }
 
@@ -108,6 +112,22 @@ public class AuthController : ControllerBase
         var userAgent = Request.Headers["User-Agent"].ToString();
 
         var result = await _authService.VerifyLoginTwoFactorAsync(request.UserId, request.Code, ipAddress, userAgent, request.RememberMe);
+
+        if (!result.Success)
+        {
+            return BadRequest(new { error = result.Error });
+        }
+
+        return await CompleteLoginAsync(result, request.RememberMe);
+    }
+
+    [HttpPost("2fa/totp/verify")]
+    public async Task<IActionResult> VerifyTotpFactor([FromBody] TwoFactorVerifyRequest request, CancellationToken ct)
+    {
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _authService.VerifyLoginTotpAsync(request.UserId, request.Code, ipAddress, userAgent, request.RememberMe, ct);
 
         if (!result.Success)
         {

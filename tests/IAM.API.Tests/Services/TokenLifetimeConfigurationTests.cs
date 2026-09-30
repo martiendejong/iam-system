@@ -51,7 +51,8 @@ public class TokenLifetimeConfigurationTests
         var otpService = new OtpService(context, emailService, smsService, emailSettings, NullLogger<OtpService>.Instance);
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         var claimsMappingService = new ClaimsMappingService(context);
-        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, claimsMappingService, NullLogger<AuthService>.Instance);
+        var totpService = new TotpService(context);
+        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, totpService, claimsMappingService, NullLogger<AuthService>.Instance);
         return (authService, context);
     }
 
