@@ -518,3 +518,15 @@ unrelated to this PR); 7 new UsersControllerDeleteUserTests all pass. admin-ui: 
 39/39 pass, Playwright smoke test against the dev server (mocked API) confirms Delete is hidden on the SuperAdmin's
 own row, a dismissed confirm does not call DELETE, and accepting it calls DELETE once and removes the row.
 Left: nothing for this task; PR #142 still carries 4521/4523's own scope, untouched here.
+
+## 2026-09-30 - task 4521
+Done: addressed the sole CHANGES REQUESTED finding on PR #142 for this task (TOTP-at-login fix
+itself was already correct) - added TotpTwoFactorLoginTests.cs (8 tests) mirroring
+EmailTwoFactorLoginTests.cs: TOTP challenge on login/passwordless login, valid code and recovery
+code both complete login, wrong code fails, no-2FA regression. Filed the review's recommended
+follow-up (PasskeyController/SocialAuthService fully bypass 2FA for any method) as its own new
+task 4573 rather than folding it into this one.
+Verified: dotnet test 292 passed / 3 skipped / 2 failed (PkceMethodsTests - confirmed pre-existing
+on develop, unrelated), all 8 new tests pass; admin-ui build clean (already fixed in the 4479
+round on this same branch).
+Left: nothing for this task. Task 4573 tracks the passkey/social 2FA bypass separately.
