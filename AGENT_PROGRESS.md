@@ -504,3 +504,16 @@ Done: merged develop (3911 API-key work) into PR #128, resolved the AGENT_PROGRE
 the hardening left in the worktree, marked the PR ready with the deploy prerequisites; dependency scan clean; commented on 3231/1748, reopened 3231.
 Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
 Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
+
+## 2026-09-30 - task 4522 (continuation, PR #141)
+Done: fixed the CHANGES REQUESTED review on the TenantBrandingController IDOR fix. IsAuthorizedForTenantAsync now mirrors
+GroupService.CreateGroupAsync's real check: SuperAdmin bypass, then (if a tenant_id claim is present it must match) an
+active UserRoles row for the target tenant via IAMDbContext - a claim-only check wrongly 403'd a normal password-login
+TenantAdmin on their own tenant. Added TenantBrandingAccessControlTests.cs (14 tests: own-tenant GET/PUT/DELETE for both
+claim-less and claim-present tokens, cross-tenant blocked incl. a tenant-scoped-claim-for-a-different-tenant case,
+no-membership-at-all blocked, SuperAdmin bypass on all three verbs, both anonymous endpoints still 404 with no auth).
+Verified: build clean (HazinaRoot=C:/projects/hazina-3911/), new tests 14/14 pass; full IAM.API.Tests 291 passed / 3
+skipped / 2 failed (PkceMethodsTests, pre-existing on develop too - OpenIddict "at least one flow enabled" config issue,
+unrelated to this change, confirmed by running the same filter against iam-system-base/develop).
+Left: nothing on this task; the follow-up ticket for EmailTemplatesController/OrganizationSettingsController/
+NetworkPolicyController's identical missing-check pattern is still out of scope per the task description.
