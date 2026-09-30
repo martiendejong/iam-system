@@ -54,6 +54,61 @@ public class DatabaseSeeder : IHostedService
 
         await AuditAdminRolesAsync(context, cancellationToken);
         await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
+        await AuditDefaultClientSecretsAsync(scope.ServiceProvider, cancellationToken);
+    }
+
+    /// <summary>
+    /// Task 4094: startup audit — alert when any OAuth client still authenticates with a
+    /// client secret that has ever shipped in this repository as a dev fallback. The stored
+    /// value is a PBKDF2 hash, so the comparison goes through the manager's own secret
+    /// validation rather than string equality. Critical outside Development (a published
+    /// secret on a live confidential client lets anyone with repo access mint tokens as
+    /// that client); informational in Development, where the fallbacks are intentional.
+    /// </summary>
+    private async Task AuditDefaultClientSecretsAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        // Every literal that has ever shipped in DatabaseSeeder.cs as a client secret, dev
+        // fallback or hard-coded (git history sweep, 2026-09-30). Add new ones here too.
+        string[] knownDefaultSecrets =
+        {
+            "postman_secret_dev_only",
+            "backend_secret_dev_only",
+            "jengo-agi-svc-secret-dev",
+            "jengo-mcp-iam-secret-dev",
+            // open-webui was seeded with a hard-coded secret from 2026-06-12 until the 2026-09-10
+            // auth-hardening commit made it configuration-only; a row created (or restored from a
+            // backup) in that window would still carry it.
+            "Ow9kP2mXqR5vN8dL3jT7"
+        };
+
+        try
+        {
+            var manager = services.GetRequiredService<IOpenIddictApplicationManager>();
+            await foreach (var application in manager.ListAsync(cancellationToken: cancellationToken))
+            {
+                foreach (var secret in knownDefaultSecrets)
+                {
+                    if (!await manager.ValidateClientSecretAsync(application, secret, cancellationToken))
+                        continue;
+
+                    var clientId = await manager.GetClientIdAsync(application, cancellationToken);
+                    if (_env.IsDevelopment())
+                        _logger.LogInformation(
+                            "Client '{ClientId}' uses a published dev fallback secret (expected in Development).",
+                            clientId);
+                    else
+                        _logger.LogCritical(
+                            "SECURITY ALERT: OAuth client '{ClientId}' authenticates with a client secret that is published in the repository. Rotate it immediately (task 4094).",
+                            clientId);
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // The audit only reports; it must never take IAM down.
+            _logger.LogError(ex, "Default-client-secret audit failed");
+        }
     }
 
     /// <summary>
