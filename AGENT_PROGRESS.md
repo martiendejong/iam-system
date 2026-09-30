@@ -504,3 +504,17 @@ Done: merged develop (3911 API-key work) into PR #128, resolved the AGENT_PROGRE
 the hardening left in the worktree, marked the PR ready with the deploy prerequisites; dependency scan clean; commented on 3231/1748, reopened 3231.
 Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
 Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
+
+## 2026-09-30 - task 4479
+Done: addressed CHANGES REQUESTED on PR #142 (which bundles 4521/4523/4479) for the delete-user task only.
+Added Users page Delete action (UsersPage.tsx + api.deleteUser) next to Activate/Deactivate, with a confirm() prompt.
+Backend DeleteUser now explicitly removes UserRoles/RefreshTokens/RecoveryCodes and clears AuditLog.UserId instead
+of relying on DB FK cascade - an integration test proved cascade never fires for untracked rows, so the prior
+"backend is solid, cascade config in code is enough" review conclusion was wrong on this specific point. Also fixed
+two unrelated build breaks already on this branch (AuthService test helpers missing the new ITotpService param;
+LoginResponse missing twoFactorMethod) that blocked running any test/build at all.
+Verified: dotnet test 284 passed / 3 skipped / 2 failed (PkceMethodsTests - confirmed pre-existing on develop,
+unrelated to this PR); 7 new UsersControllerDeleteUserTests all pass. admin-ui: npm run build clean, npm test
+39/39 pass, Playwright smoke test against the dev server (mocked API) confirms Delete is hidden on the SuperAdmin's
+own row, a dismissed confirm does not call DELETE, and accepting it calls DELETE once and removes the row.
+Left: nothing for this task; PR #142 still carries 4521/4523's own scope, untouched here.

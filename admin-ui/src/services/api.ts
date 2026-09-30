@@ -170,6 +170,10 @@ class ApiService {
     await this.client.post(`/users/${id}/deactivate`, {});
   }
 
+  async deleteUser(id: string): Promise<void> {
+    await this.client.delete(`/users/${id}`);
+  }
+
   async changeUserPassword(id: string, newPassword: string): Promise<void> {
     await this.client.post(`/users/${id}/change-password`, { newPassword });
   }

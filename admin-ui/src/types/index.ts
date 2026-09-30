@@ -86,6 +86,8 @@ export interface LoginResponse {
   /** True when adaptive risk-based MFA requires an extra emailed-code step before tokens are issued */
   requiresStepUp?: boolean;
   requiresTwoFactor?: boolean;
+  /** Which 2FA challenge to present when requiresTwoFactor is true: "email" (default) or "totp" */
+  twoFactorMethod?: 'email' | 'totp';
   userId?: string;
   message?: string;
 }

@@ -533,12 +533,23 @@ public class UsersController : ControllerBase
         if (user == null)
             return NotFound(new { error = "User not found" });
 
-        // Delete entities not covered by cascade (sessions, magic links, OTPs).
+        // Deleted explicitly rather than relying on the DB FK cascade config: cascade only
+        // fires for rows already tracked by this DbContext, so an untracked child row (the
+        // normal case here) would otherwise survive the delete.
         _context.UserSessions.RemoveRange(_context.UserSessions.Where(s => s.UserId == id));
         _context.MagicLinkTokens.RemoveRange(_context.MagicLinkTokens.Where(m => m.UserId == id));
         _context.OtpCodes.RemoveRange(_context.OtpCodes.Where(o => o.UserId == id));
+        _context.UserRoles.RemoveRange(_context.UserRoles.Where(ur => ur.UserId == id));
+        _context.RefreshTokens.RemoveRange(_context.RefreshTokens.Where(rt => rt.UserId == id));
+        _context.RecoveryCodes.RemoveRange(_context.RecoveryCodes.Where(rc => rc.UserId == id));
 
-        // UserRoles, RefreshTokens and RecoveryCodes cascade via DB FK config.
+        // AuditLog rows are kept for security history; only the user reference is cleared.
+        var auditLogs = await _context.AuditLogs.Where(a => a.UserId == id).ToListAsync();
+        foreach (var auditLog in auditLogs)
+        {
+            auditLog.UserId = null;
+        }
+
         _context.Users.Remove(user);
         await _context.SaveChangesAsync();
 
