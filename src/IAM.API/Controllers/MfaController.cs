@@ -137,6 +137,8 @@ public class MfaController : ControllerBase
         }
 
         user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.LockoutEnd = null;
         await _context.SaveChangesAsync(ct);
 
         return Ok(new

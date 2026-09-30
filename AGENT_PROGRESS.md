@@ -530,3 +530,14 @@ Verified: dotnet test 292 passed / 3 skipped / 2 failed (PkceMethodsTests - conf
 on develop, unrelated), all 8 new tests pass; admin-ui build clean (already fixed in the 4479
 round on this same branch).
 Left: nothing for this task. Task 4573 tracks the passkey/social 2FA bypass separately.
+
+## 2026-09-30 - task 4523
+Done: addressed both CHANGES REQUESTED findings on PR #142 for this task - MfaController.ValidateTotp's
+success branch now resets IsLockedOut/LockoutEnd alongside FailedLoginAttempts (matching every other
+login success path's convention), and added MfaControllerValidateTotpTests.cs (5 tests): 5-wrong-codes
+lockout, correct code still rejected while locked, a fresh user's correct code succeeding, the
+IsLockedOut/LockoutEnd reset regression test, and the unknown-userId non-disclosure check.
+Verified: confirmed the reset test genuinely fails without the fix (reverted it, watched the test fail,
+restored it); dotnet test 297 passed / 3 skipped / 2 failed (PkceMethodsTests - confirmed pre-existing
+on develop, unrelated), all 5 new tests pass.
+Left: nothing for this task.
