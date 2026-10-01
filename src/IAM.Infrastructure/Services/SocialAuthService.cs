@@ -11,6 +11,7 @@ using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IAM.Infrastructure.Services;
@@ -24,6 +25,9 @@ public class SocialAuthService : ISocialAuthService
     // Non-prefixed values are treated as plaintext (migration compatibility).
     private const string EncryptedPrefix = "enc:";
 
+    // Role name that makes a user an admin of the tenant its UserRole row is scoped to.
+    private const string TenantAdminRoleName = "TenantAdmin";
+
     // State entries expire after 10 minutes (one full OAuth round-trip budget).
     private static readonly TimeSpan StateEntryTtl = TimeSpan.FromMinutes(10);
 
@@ -33,6 +37,7 @@ public class SocialAuthService : ISocialAuthService
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ISecretsVaultService _secretsVault;
     private readonly IMemoryCache _cache;
+    private readonly ILogger<SocialAuthService>? _logger;
 
     public SocialAuthService(
         IAMDbContext context,
@@ -40,7 +45,8 @@ public class SocialAuthService : ISocialAuthService
         IHttpClientFactory httpClientFactory,
         IClaimsMappingService claimsMappingService,
         ISecretsVaultService secretsVault,
-        IMemoryCache cache)
+        IMemoryCache cache,
+        ILogger<SocialAuthService>? logger = null)
     {
         _context = context;
         _configuration = configuration;
@@ -48,6 +54,7 @@ public class SocialAuthService : ISocialAuthService
         _claimsMappingService = claimsMappingService;
         _secretsVault = secretsVault;
         _cache = cache;
+        _logger = logger;
     }
 
     /// <summary>
@@ -236,16 +243,28 @@ public class SocialAuthService : ISocialAuthService
 
                 _context.Users.Add(user);
 
-                // Assign default role if configured
+                // Assign default role if configured - never a privileged one. The management API no
+                // longer stores such a role, so this only triggers for a row written before that rule
+                // (or edited out-of-band): the user is created WITHOUT the role rather than with it.
                 if (provider.DefaultRoleId.HasValue)
                 {
-                    var userRole = new UserRole
+                    if (provider.DefaultRole != null && !PrivilegedRoles.IsPrivileged(provider.DefaultRole))
                     {
-                        UserId = user.Id,
-                        RoleId = provider.DefaultRoleId.Value,
-                        TenantId = provider.TenantId
-                    };
-                    _context.UserRoles.Add(userRole);
+                        var userRole = new UserRole
+                        {
+                            UserId = user.Id,
+                            RoleId = provider.DefaultRoleId.Value,
+                            TenantId = provider.TenantId
+                        };
+                        _context.UserRoles.Add(userRole);
+                    }
+                    else
+                    {
+                        _logger?.LogCritical(
+                            "Identity provider {ProviderId} ({ProviderName}) has default role {RoleId} ({RoleName}), which is missing or privileged; " +
+                            "auto-created user {UserId} was created without a role. Fix the provider's default role.",
+                            provider.Id, provider.Name, provider.DefaultRoleId, provider.DefaultRole?.Name, user.Id);
+                    }
                 }
             }
             else
@@ -391,8 +410,13 @@ public class SocialAuthService : ISocialAuthService
         return await query.OrderBy(p => p.Name).ToListAsync();
     }
 
-    public async Task<IdentityProvider> CreateIdentityProviderAsync(IdentityProvider provider)
+    public async Task<IdentityProvider> CreateIdentityProviderAsync(
+        IdentityProvider provider, IdentityProviderActor actor, CancellationToken ct = default)
     {
+        await RequireProviderAdminAnywhereAsync(actor, ct);
+        await RequireTenantAuthorityAsync(provider.TenantId, actor, ct);
+        await ValidateTenantAndDefaultRoleAsync(provider.TenantId, provider.DefaultRoleId, ct);
+
         provider.CreatedAt = DateTime.UtcNow;
         provider.UpdatedAt = DateTime.UtcNow;
 
@@ -401,15 +425,32 @@ public class SocialAuthService : ISocialAuthService
             provider.ClientSecret = await EncryptClientSecretAsync(provider.ClientSecret);
 
         _context.IdentityProviders.Add(provider);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         return provider;
     }
 
-    public async Task<IdentityProvider> UpdateIdentityProviderAsync(Guid id, IdentityProvider provider)
+    public async Task<IdentityProvider> UpdateIdentityProviderAsync(
+        Guid id, IdentityProvider provider, IdentityProviderActor actor, CancellationToken ct = default)
     {
-        var existing = await _context.IdentityProviders.FindAsync(id)
+        // Authorize before looking the provider up, so a caller with no provider-admin authority
+        // gets 403 whether or not the id exists.
+        await RequireProviderAdminAnywhereAsync(actor, ct);
+
+        var existing = await _context.IdentityProviders.FindAsync(new object[] { id }, ct)
             ?? throw new InvalidOperationException("Identity provider not found");
+
+        // Authority is judged on the STORED tenant, never on the tenant the request claims.
+        await RequireTenantAuthorityAsync(existing.TenantId, actor, ct);
+
+        // Moving a provider to another tenant (or making it platform-wide) is a global-admin act.
+        if (existing.TenantId != provider.TenantId && !actor.IsGlobalAdmin)
+        {
+            throw new IdentityProviderAccessDeniedException(
+                "Only SuperAdmin or SystemAdmin can move an identity provider to another tenant");
+        }
+
+        await ValidateTenantAndDefaultRoleAsync(provider.TenantId, provider.DefaultRoleId, ct);
 
         existing.Name = provider.Name;
         existing.DisplayName = provider.DisplayName;
@@ -435,21 +476,117 @@ public class SocialAuthService : ISocialAuthService
         existing.DefaultRoleId = provider.DefaultRoleId;
         existing.UpdatedAt = DateTime.UtcNow;
 
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         return existing;
     }
 
-    public async Task<bool> DeleteIdentityProviderAsync(Guid id)
+    public async Task<bool> DeleteIdentityProviderAsync(Guid id, IdentityProviderActor actor, CancellationToken ct = default)
     {
-        var provider = await _context.IdentityProviders.FindAsync(id);
+        await RequireProviderAdminAnywhereAsync(actor, ct);
+
+        var provider = await _context.IdentityProviders.FindAsync(new object[] { id }, ct);
         if (provider == null)
             return false;
 
+        await RequireTenantAuthorityAsync(provider.TenantId, actor, ct);
+
         _context.IdentityProviders.Remove(provider);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         return true;
+    }
+
+    // --- Identity-provider management authorization (task 4697) ---
+
+    /// <summary>
+    /// Coarse gate that runs first on every write: the actor must be a global admin or hold an
+    /// active TenantAdmin role in at least one tenant (only the token's own tenant, when the token
+    /// carries a tenant_id claim). Keeps the answer for plain users at 403 regardless of the payload or id.
+    /// </summary>
+    private async Task RequireProviderAdminAnywhereAsync(IdentityProviderActor actor, CancellationToken ct)
+    {
+        if (actor.IsGlobalAdmin)
+            return;
+
+        var now = DateTime.UtcNow;
+        var query = _context.UserRoles.Where(ur =>
+            ur.UserId == actor.UserId
+            && ur.TenantId != null
+            && ur.Role.Name == TenantAdminRoleName
+            && (ur.ExpiresAt == null || ur.ExpiresAt > now));
+
+        if (actor.TenantId.HasValue)
+            query = query.Where(ur => ur.TenantId == actor.TenantId.Value);
+
+        if (!await query.AnyAsync(ct))
+        {
+            throw new IdentityProviderAccessDeniedException(
+                "Only SuperAdmin, SystemAdmin or a tenant admin can manage identity providers");
+        }
+    }
+
+    /// <summary>
+    /// Requires authority over providers of <paramref name="tenantId"/>: a global admin, or an
+    /// active TenantAdmin role scoped to exactly that tenant (a role row without a tenant does not
+    /// count). Platform-wide providers (null tenant) are global-admin only.
+    /// </summary>
+    private async Task RequireTenantAuthorityAsync(Guid? tenantId, IdentityProviderActor actor, CancellationToken ct)
+    {
+        if (actor.IsGlobalAdmin)
+            return;
+
+        if (tenantId == null)
+        {
+            throw new IdentityProviderAccessDeniedException(
+                "Only SuperAdmin or SystemAdmin can manage platform-wide identity providers");
+        }
+
+        if (actor.TenantId.HasValue && actor.TenantId.Value != tenantId.Value)
+        {
+            throw new IdentityProviderAccessDeniedException("Token is scoped to a different tenant");
+        }
+
+        var now = DateTime.UtcNow;
+        var isTenantAdmin = await _context.UserRoles.AnyAsync(ur =>
+            ur.UserId == actor.UserId
+            && ur.TenantId == tenantId.Value
+            && ur.Role.Name == TenantAdminRoleName
+            && (ur.ExpiresAt == null || ur.ExpiresAt > now), ct);
+
+        if (!isTenantAdmin)
+        {
+            throw new IdentityProviderAccessDeniedException(
+                "Only SuperAdmin, SystemAdmin or an admin of the provider's tenant can manage it");
+        }
+    }
+
+    /// <summary>
+    /// The tenant must exist, and the default role handed to auto-created users must exist, be
+    /// non-privileged, and be usable in the provider's tenant (global, or owned by that tenant).
+    /// </summary>
+    private async Task ValidateTenantAndDefaultRoleAsync(Guid? tenantId, Guid? defaultRoleId, CancellationToken ct)
+    {
+        if (tenantId.HasValue && !await _context.Tenants.AnyAsync(t => t.Id == tenantId.Value, ct))
+            throw new IdentityProviderValidationException("Tenant not found");
+
+        if (!defaultRoleId.HasValue)
+            return;
+
+        var role = await _context.Roles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == defaultRoleId.Value, ct)
+            ?? throw new IdentityProviderValidationException("Default role not found");
+
+        if (PrivilegedRoles.IsPrivileged(role))
+        {
+            throw new IdentityProviderValidationException(
+                $"Default role '{role.Name}' is a privileged role and cannot be assigned to auto-created users");
+        }
+
+        if (role.TenantId.HasValue && role.TenantId != tenantId)
+        {
+            throw new IdentityProviderValidationException(
+                "Default role belongs to a different tenant than the identity provider");
+        }
     }
 
     // --- Private helper methods ---

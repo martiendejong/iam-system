@@ -511,6 +511,6 @@ Verified: live DB read-only hash check of all 28 clients vs 8 published literals
 Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).
 
 ## 2026-10-02 - task 4697
-Done: in progress - restricting identity-provider management (POST/PUT/DELETE) to SuperAdmin/SystemAdmin or the provider's own tenant admin, and blocking privileged default roles.
-Verified: not yet.
-Left: implementation, tests, review.
+Done: POST/PUT/DELETE /api/identity-providers now need SuperAdmin/SystemAdmin or a TenantAdmin UserRole scoped to the provider's stored tenant (no moving/platform-wide for tenant admins); the service validates DefaultRoleId (exists, not privileged, fits the tenant); AutoCreateUsers defaults to false; login auto-create skips a privileged default role on pre-existing rows. PR #144.
+Verified: IAM.API.Tests 375 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; 96 new tests, mutation-checked (disabling the authority checks fails 15, the role/move checks 24).
+Left: deploy is Martien's call; on the live DB check existing providers for a privileged default role (read-only SELECT); follow-ups filed for OrganizationSettings authz and the identity-provider GET endpoints.
