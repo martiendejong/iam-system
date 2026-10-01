@@ -1,4 +1,5 @@
 using System.Text.Json;
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -14,15 +15,41 @@ public class WebhooksController : ControllerBase
     private readonly IWebhookService _webhookService;
     private readonly IEventBus _eventBus;
     private readonly ILogger<WebhooksController> _logger;
+    private readonly IWebhookAccessResolver _access;
 
     public WebhooksController(
         IWebhookService webhookService,
         IEventBus eventBus,
-        ILogger<WebhooksController> logger)
+        ILogger<WebhooksController> logger,
+        IWebhookAccessResolver access)
     {
         _webhookService = webhookService;
         _eventBus = eventBus;
         _logger = logger;
+        _access = access;
+    }
+
+    private const string ForbiddenMessage = "Only SuperAdmin or an administrator of the subscription's tenant can manage webhooks.";
+
+    private ObjectResult Forbidden() =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = ForbiddenMessage });
+
+    /// <summary>
+    /// Loads a subscription for an action on it. The privilege check runs BEFORE the lookup, so a caller who
+    /// administers nothing gets 403 for any id (no existence oracle); then the stored subscription's tenant
+    /// must be one the caller manages. Returns the error result, or null with the subscription set.
+    /// </summary>
+    private async Task<(ActionResult? Error, WebhookSubscription? Subscription)> LoadManagedAsync(Guid id, CancellationToken ct)
+    {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.HasAny)
+            return (Forbidden(), null);
+
+        var subscription = await _webhookService.GetSubscriptionAsync(id, ct);
+        if (subscription == null)
+            return (NotFound(new { error = "Webhook subscription not found" }), null);
+
+        return access.CanManage(subscription.TenantId) ? (null, subscription) : (Forbidden(), null);
     }
 
     /// <summary>
@@ -33,6 +60,10 @@ public class WebhooksController : ControllerBase
         [FromBody] CreateWebhookRequest request,
         CancellationToken cancellationToken = default)
     {
+        var access = await _access.ResolveAsync(User, cancellationToken);
+        if (!access.HasAny || (request.TenantId != Guid.Empty && !access.CanManage(request.TenantId)))
+            return Forbidden();
+
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { error = "Name is required" });
 
@@ -83,6 +114,10 @@ public class WebhooksController : ControllerBase
         [FromQuery] Guid tenantId,
         CancellationToken cancellationToken = default)
     {
+        var access = await _access.ResolveAsync(User, cancellationToken);
+        if (!access.HasAny || (tenantId != Guid.Empty && !access.CanManage(tenantId)))
+            return Forbidden();
+
         if (tenantId == Guid.Empty)
             return BadRequest(new { error = "TenantId query parameter is required" });
 
@@ -99,11 +134,11 @@ public class WebhooksController : ControllerBase
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        var subscription = await _webhookService.GetSubscriptionAsync(id, cancellationToken);
-        if (subscription == null)
-            return NotFound(new { error = "Webhook subscription not found" });
+        var (error, subscription) = await LoadManagedAsync(id, cancellationToken);
+        if (error != null)
+            return error;
 
-        return Ok(MapToResponse(subscription));
+        return Ok(MapToResponse(subscription!));
     }
 
     /// <summary>
@@ -115,6 +150,10 @@ public class WebhooksController : ControllerBase
         [FromBody] UpdateWebhookRequest request,
         CancellationToken cancellationToken = default)
     {
+        var (error, _) = await LoadManagedAsync(id, cancellationToken);
+        if (error != null)
+            return error;
+
         try
         {
             var updated = await _webhookService.UpdateSubscriptionAsync(
@@ -145,6 +184,10 @@ public class WebhooksController : ControllerBase
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        var (error, _) = await LoadManagedAsync(id, cancellationToken);
+        if (error != null)
+            return error;
+
         var deleted = await _webhookService.DeleteSubscriptionAsync(id, cancellationToken);
         if (!deleted)
             return NotFound(new { error = "Webhook subscription not found" });
@@ -160,6 +203,10 @@ public class WebhooksController : ControllerBase
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        var (error, _) = await LoadManagedAsync(id, cancellationToken);
+        if (error != null)
+            return error;
+
         try
         {
             var delivery = await _webhookService.TestWebhookAsync(id, cancellationToken);
@@ -193,10 +240,9 @@ public class WebhooksController : ControllerBase
         [FromQuery] int limit = 50,
         CancellationToken cancellationToken = default)
     {
-        // Verify subscription exists
-        var subscription = await _webhookService.GetSubscriptionAsync(id, cancellationToken);
-        if (subscription == null)
-            return NotFound(new { error = "Webhook subscription not found" });
+        var (error, _) = await LoadManagedAsync(id, cancellationToken);
+        if (error != null)
+            return error;
 
         var deliveries = await _eventBus.GetDeliveryHistoryAsync(id, limit, cancellationToken);
 
