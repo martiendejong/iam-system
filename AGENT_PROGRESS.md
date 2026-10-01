@@ -514,3 +514,18 @@ Left: the critical log only appears once IAM is redeployed (Martien's call; deve
 Done: POST /api/api-keys now follows the caller's real authority: platform-wide keys need SuperAdmin/SystemAdmin, tenant keys need SuperAdmin/SystemAdmin or a TenantAdmin UserRole for that tenant (omitted tenant = own tenant, never platform-wide); plain users get 403. Permissions (lowercase resource:action, no wildcards, max 25) and rate limit (1-1000) validated in the service (400).
 Verified: IAM.API.Tests 303 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 28 new/changed tests; mutation-checked (no-op authority check fails 9, no-op validation fails 11).
 Left: deploy is Martien's call; existing keys are not reviewed or revoked - list live keys with a null tenant for suspicious ones (read-only SELECT).
+
+## 2026-10-02 - task 4697
+Done: POST/PUT/DELETE /api/identity-providers now need SuperAdmin/SystemAdmin or a TenantAdmin UserRole scoped to the provider's stored tenant (no moving/platform-wide for tenant admins); the service validates DefaultRoleId (exists, not privileged, fits the tenant); AutoCreateUsers defaults to false; login auto-create skips a privileged default role on pre-existing rows. PR #144.
+Verified: IAM.API.Tests 375 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; 96 new tests, mutation-checked (disabling the authority checks fails 15, the role/move checks 24).
+Left: deploy is Martien's call; on the live DB check existing providers for a privileged default role (read-only SELECT); follow-ups filed for OrganizationSettings authz and the identity-provider GET endpoints.
+
+## 2026-10-02 - task 4714
+Done: PR #146 - new AuditAccessResolver used by GET /api/audit/events, GET /statistics and POST /reports: admins only, tenant admins (TenantAdmin/BuildingOwner/BuildingManager UserRoles row in that tenant) pinned to their tenant, foreign tenantId = 403, SuperAdmin/SecurityAdmin cross-tenant.
+Verified: build clean; AuditControllerTests 54/54 pass (36 of them fail on the old controller); full IAM.API.Tests 321 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped.
+Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo calls /api/audit (admin-ui, SDKs, Terraform), so no client breaks.
+
+## 2026-10-02 - task 4702
+Done: webhook targets must be public addresses (shared PublicAddress classifier, IPv4+IPv6 incl. mapped/NAT64/6to4; WebhookUrlGuard checks at save, at every delivery and in the HttpClient connect callback; no redirects, no proxy); blocked deliveries are recorded failed with no body and not retried. Every /api/webhooks action except event-types needs SuperAdmin or an admin of the subscription tenant (WebhookAccessResolver, privilege check before lookup).
+Verified: IAM.API.Tests 441 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 120 new tests incl. real loopback sockets for the connect guard; mutation-checked (no-op tenant check fails 7, no-op delivery guard fails 5).
+Left: deploy is Martien call; existing subscriptions with internal URLs now fail at delivery - list them (read-only SELECT on WebhookSubscriptions) and tell owners; optional Webhooks:AllowedHosts for local dev receivers.

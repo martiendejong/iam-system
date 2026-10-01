@@ -60,6 +60,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
+builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.Authorization.AuditAccessResolver>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
@@ -77,6 +78,9 @@ builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); /
 builder.Services.AddScoped<ICertificateAuthorityService, CertificateAuthorityService>();
 builder.Services.AddScoped<IEventBus, EventBusService>();
 builder.Services.AddScoped<IWebhookService, WebhookService>();
+builder.Services.AddSingleton<IHostResolver, DnsHostResolver>();
+builder.Services.AddSingleton<IWebhookUrlGuard, WebhookUrlGuard>();
+builder.Services.AddScoped<IAM.API.Authorization.IWebhookAccessResolver, IAM.API.Authorization.WebhookAccessResolver>();
 builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
 builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
@@ -111,14 +115,10 @@ builder.Services.AddScoped<IDelegationService, DelegationService>();
 builder.Services.AddHttpClient("WebhookDelivery", client => {
     client.Timeout = TimeSpan.FromSeconds(30);
 })
-.ConfigurePrimaryHttpMessageHandler(() =>
-{
-    var handler = new HttpClientHandler();
-    if (builder.Environment.IsDevelopment())
-        // Allow self-signed certificates in development for webhook endpoints
-        handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-    return handler;
-});
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    // Task 4702: connection-time SSRF guard, no redirects, no proxy. Self-signed certificates are
+    // allowed in development only.
+    WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
 
 // HttpClient for social/enterprise SSO provider calls
 builder.Services.AddHttpClient("SocialAuth");

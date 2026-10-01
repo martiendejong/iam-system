@@ -2,6 +2,7 @@ using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace IAM.API.Controllers;
 
@@ -16,6 +17,40 @@ public class IdentityProvidersController : ControllerBase
     {
         _socialAuthService = socialAuthService;
     }
+
+    /// <summary>
+    /// The caller on whose behalf provider mutations run (task 4697). Global admin = SuperAdmin or
+    /// SystemAdmin. Password-login tokens carry no tenant_id; when a tenant_id claim IS present the
+    /// service only honours tenant-admin authority inside that tenant. Same shape as
+    /// GroupsController.TryGetActor.
+    /// </summary>
+    private IdentityProviderActor? TryGetActor()
+    {
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+        {
+            return null;
+        }
+
+        Guid? tenantId = null;
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var parsedTenantId))
+            {
+                return null;
+            }
+            tenantId = parsedTenantId;
+        }
+
+        return new IdentityProviderActor(
+            userId,
+            User.IsInRole("SuperAdmin") || User.IsInRole("SystemAdmin"),
+            tenantId);
+    }
+
+    private ObjectResult Forbidden(IdentityProviderAccessDeniedException ex) =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
 
     /// <summary>
     /// List all identity providers, optionally filtered by tenant
@@ -103,11 +138,15 @@ public class IdentityProvidersController : ControllerBase
     }
 
     /// <summary>
-    /// Create a new identity provider
+    /// Create a new identity provider. SuperAdmin/SystemAdmin, or an admin of the target tenant.
     /// </summary>
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateIdentityProviderRequest request)
+    public async Task<IActionResult> Create([FromBody] CreateIdentityProviderRequest request, CancellationToken ct)
     {
+        var actor = TryGetActor();
+        if (actor == null)
+            return Unauthorized();
+
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { error = "Name is required" });
 
@@ -128,33 +167,50 @@ public class IdentityProvidersController : ControllerBase
             MetadataUrl = request.MetadataUrl,
             AttributeMapping = request.AttributeMapping,
             IsActive = request.IsActive ?? true,
-            AutoCreateUsers = request.AutoCreateUsers ?? true,
+            // Off unless explicitly enabled: auto-creating accounts from a social login is opt-in.
+            AutoCreateUsers = request.AutoCreateUsers ?? false,
             DefaultRoleId = request.DefaultRoleId
         };
 
-        var created = await _socialAuthService.CreateIdentityProviderAsync(provider);
-
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, new
+        try
         {
-            id = created.Id,
-            name = created.Name,
-            displayName = created.DisplayName,
-            type = created.Type.ToString(),
-            tenantId = created.TenantId,
-            clientId = created.ClientId,
-            isActive = created.IsActive,
-            autoCreateUsers = created.AutoCreateUsers,
-            defaultRoleId = created.DefaultRoleId,
-            createdAt = created.CreatedAt
-        });
+            var created = await _socialAuthService.CreateIdentityProviderAsync(provider, actor, ct);
+
+            return CreatedAtAction(nameof(GetById), new { id = created.Id }, new
+            {
+                id = created.Id,
+                name = created.Name,
+                displayName = created.DisplayName,
+                type = created.Type.ToString(),
+                tenantId = created.TenantId,
+                clientId = created.ClientId,
+                isActive = created.IsActive,
+                autoCreateUsers = created.AutoCreateUsers,
+                defaultRoleId = created.DefaultRoleId,
+                createdAt = created.CreatedAt
+            });
+        }
+        catch (IdentityProviderAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
+        catch (IdentityProviderValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>
-    /// Update an existing identity provider
+    /// Update an existing identity provider. SuperAdmin/SystemAdmin, or an admin of the provider's
+    /// own tenant (who cannot move it to another tenant).
     /// </summary>
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateIdentityProviderRequest request)
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateIdentityProviderRequest request, CancellationToken ct)
     {
+        var actor = TryGetActor();
+        if (actor == null)
+            return Unauthorized();
+
         if (!Enum.TryParse<IdentityProviderType>(request.Type, true, out var providerType))
             return BadRequest(new { error = "Invalid provider type" });
 
@@ -171,11 +227,12 @@ public class IdentityProvidersController : ControllerBase
                 MetadataUrl = request.MetadataUrl,
                 AttributeMapping = request.AttributeMapping,
                 IsActive = request.IsActive ?? true,
-                AutoCreateUsers = request.AutoCreateUsers ?? true,
+                // PUT replaces the whole provider, so an omitted flag falls back to the safe default.
+                AutoCreateUsers = request.AutoCreateUsers ?? false,
                 DefaultRoleId = request.DefaultRoleId
             };
 
-            var updated = await _socialAuthService.UpdateIdentityProviderAsync(id, provider);
+            var updated = await _socialAuthService.UpdateIdentityProviderAsync(id, provider, actor, ct);
 
             return Ok(new
             {
@@ -191,6 +248,14 @@ public class IdentityProvidersController : ControllerBase
                 updatedAt = updated.UpdatedAt
             });
         }
+        catch (IdentityProviderAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
+        catch (IdentityProviderValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
         catch (InvalidOperationException ex)
         {
             return NotFound(new { error = ex.Message });
@@ -198,19 +263,30 @@ public class IdentityProvidersController : ControllerBase
     }
 
     /// <summary>
-    /// Delete an identity provider
+    /// Delete an identity provider. SuperAdmin/SystemAdmin, or an admin of the provider's own tenant.
     /// </summary>
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id)
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var success = await _socialAuthService.DeleteIdentityProviderAsync(id);
+        var actor = TryGetActor();
+        if (actor == null)
+            return Unauthorized();
 
-        if (!success)
+        try
         {
-            return NotFound(new { error = "Identity provider not found" });
-        }
+            var success = await _socialAuthService.DeleteIdentityProviderAsync(id, actor, ct);
 
-        return Ok(new { message = "Identity provider deleted successfully" });
+            if (!success)
+            {
+                return NotFound(new { error = "Identity provider not found" });
+            }
+
+            return Ok(new { message = "Identity provider deleted successfully" });
+        }
+        catch (IdentityProviderAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 }
 

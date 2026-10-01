@@ -19,6 +19,7 @@ public class EventBusService : IEventBus
     private readonly IAMDbContext _context;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<EventBusService> _logger;
+    private readonly IWebhookUrlGuard _urlGuard;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -29,11 +30,13 @@ public class EventBusService : IEventBus
     public EventBusService(
         IAMDbContext context,
         IHttpClientFactory httpClientFactory,
-        ILogger<EventBusService> logger)
+        ILogger<EventBusService> logger,
+        IWebhookUrlGuard urlGuard)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _urlGuard = urlGuard;
     }
 
     public async Task PublishAsync(string eventType, object payload, Guid? tenantId = null, CancellationToken ct = default)
@@ -96,6 +99,9 @@ public class EventBusService : IEventBus
             .ToListAsync(ct);
     }
 
+    /// <summary>Recorded as the delivery error when the target is refused by the SSRF guard (no response body).</summary>
+    public const string BlockedDeliveryError = "Blocked: webhook target is not a public internet address.";
+
     private static bool IsSubscribedToEvent(WebhookSubscription subscription, string eventType)
     {
         try
@@ -153,6 +159,10 @@ public class EventBusService : IEventBus
             subscription.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync(ct);
 
+            // A blocked target stays blocked: retrying only repeats the DNS lookups.
+            if (delivery.Error == BlockedDeliveryError)
+                return;
+
             _logger.LogWarning(
                 "Webhook delivery failed to {Url} for event {EventType} (attempt {Attempt}/{Max}): {Error}",
                 subscription.Url, eventType, attempt, maxAttempts, delivery.Error);
@@ -192,6 +202,22 @@ public class EventBusService : IEventBus
         };
 
         var stopwatch = Stopwatch.StartNew();
+
+        // Re-check at every delivery: covers DNS that changed since the URL was saved and rows saved before
+        // the guard existed. The client's connect callback checks again at connection time.
+        if (await _urlGuard.CheckAsync(subscription.Url, ct) != null)
+        {
+            delivery.DurationMs = stopwatch.Elapsed.TotalMilliseconds;
+            delivery.Success = false;
+            delivery.Error = BlockedDeliveryError;
+            delivery.HttpStatusCode = 0;
+            delivery.ResponseBody = null;
+            _logger.LogWarning("Webhook delivery to subscription {SubscriptionId} refused: target is not public", subscription.Id);
+
+            _context.Set<WebhookDelivery>().Add(delivery);
+            await _context.SaveChangesAsync(ct);
+            return delivery;
+        }
 
         try
         {
@@ -260,6 +286,15 @@ public class EventBusService : IEventBus
             delivery.Success = false;
             delivery.Error = $"Request timed out after {subscription.TimeoutSeconds}s";
             delivery.HttpStatusCode = 0;
+        }
+        catch (HttpRequestException ex) when (ex.GetBaseException() is WebhookTargetBlockedException)
+        {
+            stopwatch.Stop();
+            delivery.DurationMs = stopwatch.Elapsed.TotalMilliseconds;
+            delivery.Success = false;
+            delivery.Error = BlockedDeliveryError;
+            delivery.HttpStatusCode = 0;
+            delivery.ResponseBody = null;
         }
         catch (HttpRequestException ex)
         {
