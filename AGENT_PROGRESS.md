@@ -509,3 +509,8 @@ Left: deploy IAM (Martien), then live check: client_credentials token is 3-part 
 Done: live rotation done earlier today (jengo-agi-svc new random secret in vault 9/212, backend_service + postman_client dropped); PR #143 adds a startup audit that logs Critical when a client secret matches a published repo default. Review added the open-webui literal that shipped 2026-06-12..2026-09-10 to the list plus DefaultClientSecretAuditTests.
 Verified: live DB read-only hash check of all 28 clients vs 8 published literals = 0 matches; old jengo-agi-svc default 401 invalid_client, vault secret 200 (3-part JWT); IAM.API.Tests 279 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; new test fails without the added literal.
 Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).
+
+## 2026-10-02 - task 4714
+Done: PR #146 - new AuditAccessResolver used by GET /api/audit/events, GET /statistics and POST /reports: admins only, tenant admins (TenantAdmin/BuildingOwner/BuildingManager UserRoles row in that tenant) pinned to their tenant, foreign tenantId = 403, SuperAdmin/SecurityAdmin cross-tenant.
+Verified: build clean; AuditControllerTests 54/54 pass (36 of them fail on the old controller); full IAM.API.Tests 321 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped.
+Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo calls /api/audit (admin-ui, SDKs, Terraform), so no client breaks.
