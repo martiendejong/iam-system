@@ -60,6 +60,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
+builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.Authorization.AuditAccessResolver>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();

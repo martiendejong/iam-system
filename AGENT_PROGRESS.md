@@ -511,6 +511,6 @@ Verified: live DB read-only hash check of all 28 clients vs 8 published literals
 Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).
 
 ## 2026-10-02 - task 4714
-Done: started - plan is a shared tenant-scope resolver for /api/audit/events, /statistics and /reports (admin only, own tenant, SuperAdmin/SecurityAdmin cross-tenant).
-Verified: not yet.
-Left: implementation + tests.
+Done: PR #146 - new AuditAccessResolver used by GET /api/audit/events, GET /statistics and POST /reports: admins only, tenant admins (TenantAdmin/BuildingOwner/BuildingManager UserRoles row in that tenant) pinned to their tenant, foreign tenantId = 403, SuperAdmin/SecurityAdmin cross-tenant.
+Verified: build clean; AuditControllerTests 54/54 pass (36 of them fail on the old controller); full IAM.API.Tests 321 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped.
+Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo calls /api/audit (admin-ui, SDKs, Terraform), so no client breaks.
