@@ -35,17 +35,26 @@ public interface ISocialAuthService
     Task<List<IdentityProvider>> GetIdentityProvidersAsync(Guid? tenantId = null);
 
     /// <summary>
-    /// Create a new identity provider configuration
+    /// Create a new identity provider configuration. Only a global admin (SuperAdmin/SystemAdmin)
+    /// may create a platform-wide provider; a tenant admin may create one for their own tenant.
     /// </summary>
-    Task<IdentityProvider> CreateIdentityProviderAsync(IdentityProvider provider);
+    /// <exception cref="IdentityProviderAccessDeniedException">The actor may not manage providers for the target tenant.</exception>
+    /// <exception cref="IdentityProviderValidationException">Unknown tenant, or the default role is unknown or privileged.</exception>
+    Task<IdentityProvider> CreateIdentityProviderAsync(IdentityProvider provider, IdentityProviderActor actor, CancellationToken ct = default);
 
     /// <summary>
-    /// Update an existing identity provider configuration
+    /// Update an existing identity provider configuration. The actor must administer the stored
+    /// provider's tenant; only a global admin may move a provider to another tenant (or make it platform-wide).
     /// </summary>
-    Task<IdentityProvider> UpdateIdentityProviderAsync(Guid id, IdentityProvider provider);
+    /// <exception cref="InvalidOperationException">The provider does not exist.</exception>
+    /// <exception cref="IdentityProviderAccessDeniedException">The actor may not manage this provider.</exception>
+    /// <exception cref="IdentityProviderValidationException">Unknown tenant, or the default role is unknown or privileged.</exception>
+    Task<IdentityProvider> UpdateIdentityProviderAsync(Guid id, IdentityProvider provider, IdentityProviderActor actor, CancellationToken ct = default);
 
     /// <summary>
-    /// Delete an identity provider configuration
+    /// Delete an identity provider configuration. The actor must administer the stored provider's tenant.
     /// </summary>
-    Task<bool> DeleteIdentityProviderAsync(Guid id);
+    /// <returns>False when the provider does not exist.</returns>
+    /// <exception cref="IdentityProviderAccessDeniedException">The actor may not manage this provider.</exception>
+    Task<bool> DeleteIdentityProviderAsync(Guid id, IdentityProviderActor actor, CancellationToken ct = default);
 }
