@@ -514,3 +514,8 @@ Left: the critical log only appears once IAM is redeployed (Martien's call; deve
 Done: POST/PUT/DELETE /api/identity-providers now need SuperAdmin/SystemAdmin or a TenantAdmin UserRole scoped to the provider's stored tenant (no moving/platform-wide for tenant admins); the service validates DefaultRoleId (exists, not privileged, fits the tenant); AutoCreateUsers defaults to false; login auto-create skips a privileged default role on pre-existing rows. PR #144.
 Verified: IAM.API.Tests 375 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; 96 new tests, mutation-checked (disabling the authority checks fails 15, the role/move checks 24).
 Left: deploy is Martien's call; on the live DB check existing providers for a privileged default role (read-only SELECT); follow-ups filed for OrganizationSettings authz and the identity-provider GET endpoints.
+
+## 2026-10-02 - task 4714
+Done: PR #146 - new AuditAccessResolver used by GET /api/audit/events, GET /statistics and POST /reports: admins only, tenant admins (TenantAdmin/BuildingOwner/BuildingManager UserRoles row in that tenant) pinned to their tenant, foreign tenantId = 403, SuperAdmin/SecurityAdmin cross-tenant.
+Verified: build clean; AuditControllerTests 54/54 pass (36 of them fail on the old controller); full IAM.API.Tests 321 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped.
+Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo calls /api/audit (admin-ui, SDKs, Terraform), so no client breaks.
