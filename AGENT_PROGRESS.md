@@ -517,5 +517,5 @@ Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo
 
 ## 2026-10-02 - task 4702
 Done: webhook targets must be public addresses (shared PublicAddress classifier, IPv4+IPv6 incl. mapped/NAT64/6to4; WebhookUrlGuard checks at save, at every delivery and in the HttpClient connect callback; no redirects, no proxy); blocked deliveries are recorded failed with no body and not retried. Every /api/webhooks action except event-types needs SuperAdmin or an admin of the subscription tenant (WebhookAccessResolver, privilege check before lookup).
-Verified: IAM.API.Tests 441 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 115 new tests incl. real loopback sockets for the connect guard; mutation-checked (no-op tenant check fails 7, no-op delivery guard fails 5).
+Verified: IAM.API.Tests 441 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 120 new tests incl. real loopback sockets for the connect guard; mutation-checked (no-op tenant check fails 7, no-op delivery guard fails 5).
 Left: deploy is Martien call; existing subscriptions with internal URLs now fail at delivery - list them (read-only SELECT on WebhookSubscriptions) and tell owners; optional Webhooks:AllowedHosts for local dev receivers.
