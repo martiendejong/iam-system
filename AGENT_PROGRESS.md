@@ -510,6 +510,11 @@ Done: live rotation done earlier today (jengo-agi-svc new random secret in vault
 Verified: live DB read-only hash check of all 28 clients vs 8 published literals = 0 matches; old jengo-agi-svc default 401 invalid_client, vault secret 200 (3-part JWT); IAM.API.Tests 279 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; new test fails without the added literal.
 Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).
 
+## 2026-10-02 - task 4701
+Done: POST /api/api-keys now follows the caller's real authority: platform-wide keys need SuperAdmin/SystemAdmin, tenant keys need SuperAdmin/SystemAdmin or a TenantAdmin UserRole for that tenant (omitted tenant = own tenant, never platform-wide); plain users get 403. Permissions (lowercase resource:action, no wildcards, max 25) and rate limit (1-1000) validated in the service (400).
+Verified: IAM.API.Tests 303 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 28 new/changed tests; mutation-checked (no-op authority check fails 9, no-op validation fails 11).
+Left: deploy is Martien's call; existing keys are not reviewed or revoked - list live keys with a null tenant for suspicious ones (read-only SELECT).
+
 ## 2026-10-02 - task 4697
 Done: POST/PUT/DELETE /api/identity-providers now need SuperAdmin/SystemAdmin or a TenantAdmin UserRole scoped to the provider's stored tenant (no moving/platform-wide for tenant admins); the service validates DefaultRoleId (exists, not privileged, fits the tenant); AutoCreateUsers defaults to false; login auto-create skips a privileged default role on pre-existing rows. PR #144.
 Verified: IAM.API.Tests 375 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; 96 new tests, mutation-checked (disabling the authority checks fails 15, the role/move checks 24).

@@ -37,6 +37,9 @@ public class ApiKeyService : IApiKeyService
         if (!ApiKeyScopes.TryParse(scope, out var parsedScope))
             throw new ArgumentException("Scope must be one of: read, write, admin.", nameof(scope));
 
+        if (ApiKeyIssueRules.Validate(permissions, rateLimitPerMinute) is { } invalid)
+            throw new ArgumentException(invalid);
+
         var issued = await _manager.CreateAsync(new ApiKeyCreateRequest
         {
             Id = Guid.NewGuid().ToString("D"),
@@ -53,6 +56,19 @@ public class ApiKeyService : IApiKeyService
         // Return the entity AND the raw key (shown to the user ONCE; the database only ever holds the hash).
         var entity = await _context.ApiKeys.AsNoTracking().FirstAsync(k => k.Id == Guid.Parse(issued.Record.Id), ct);
         return (entity, issued.RawKey);
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetAdministeredTenantIdsAsync(Guid userId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        return await _context.UserRoles.AsNoTracking()
+            .Where(ur => ur.UserId == userId
+                && ur.TenantId != null
+                && ur.Role.Name == ApiKeyIssueRules.TenantAdminRoleName
+                && (ur.ExpiresAt == null || ur.ExpiresAt > now))
+            .Select(ur => ur.TenantId!.Value)
+            .Distinct()
+            .ToListAsync(ct);
     }
 
     public async Task<List<ApiKey>> GetApiKeysAsync(
