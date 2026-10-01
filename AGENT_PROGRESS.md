@@ -510,5 +510,7 @@ Done: live rotation done earlier today (jengo-agi-svc new random secret in vault
 Verified: live DB read-only hash check of all 28 clients vs 8 published literals = 0 matches; old jengo-agi-svc default 401 invalid_client, vault secret 200 (3-part JWT); IAM.API.Tests 279 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; new test fails without the added literal.
 Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).
 
-## 2026-10-02 - task 4717 (in progress)
-Plan: grant and the three revoke endpoints of ResourcePermissionController require ManageAccess on the resource (or SuperAdmin / tenant admin), in the caller tenant.
+## 2026-10-02 - task 4717
+Done: grant and the three revoke endpoints of ResourcePermissionController now 403 unless the caller holds ManageAccess on the resource, is SuperAdmin, or has an active TenantAdmin/SystemAdmin/BuildingOwner UserRoles row in the caller tenant (role claims alone do not count); the resource must exist in the caller tenant (else 404); non-admins cannot grant actions they do not hold. One shared `AuthorizeManageAccessAsync` in ResourcePermissionService. PR #145.
+Verified: IAM.API.Tests 301 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; 22 new tests in ResourcePermissionAccessControlTests, 12 of them fail when the gate is stubbed to always allow. Not verified: live deploy. Existing test RevokePermission_RemovesAccess now revokes as admin (it revoked as the low-privilege user).
+Left: deploy is Martien's call; no known caller of these endpoints outside tests (admin-ui, SDKs, Terraform do not use them).
