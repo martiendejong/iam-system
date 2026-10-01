@@ -43,7 +43,7 @@ public class AuditAccessResolver : IAuditAccessResolver
     /// endpoints use (TenantsController, InvitationsController: BuildingOwner/BuildingManager)
     /// plus TenantAdmin (TemporalPolicyController).
     /// </summary>
-    private static readonly string[] TenantAdminRoles = { "TenantAdmin", "BuildingOwner", "BuildingManager" };
+    internal static readonly string[] TenantAdminRoles = { "TenantAdmin", "BuildingOwner", "BuildingManager" };
 
     private readonly IAMDbContext _context;
 

@@ -519,3 +519,8 @@ Left: deploy is Martien's call; on the live DB check existing providers for a pr
 Done: PR #146 - new AuditAccessResolver used by GET /api/audit/events, GET /statistics and POST /reports: admins only, tenant admins (TenantAdmin/BuildingOwner/BuildingManager UserRoles row in that tenant) pinned to their tenant, foreign tenantId = 403, SuperAdmin/SecurityAdmin cross-tenant.
 Verified: build clean; AuditControllerTests 54/54 pass (36 of them fail on the old controller); full IAM.API.Tests 321 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped.
 Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo calls /api/audit (admin-ui, SDKs, Terraform), so no client breaks.
+
+## 2026-10-02 - task 4702
+Done: webhook targets must be public addresses (shared PublicAddress classifier, IPv4+IPv6 incl. mapped/NAT64/6to4; WebhookUrlGuard checks at save, at every delivery and in the HttpClient connect callback; no redirects, no proxy); blocked deliveries are recorded failed with no body and not retried. Every /api/webhooks action except event-types needs SuperAdmin or an admin of the subscription tenant (WebhookAccessResolver, privilege check before lookup).
+Verified: IAM.API.Tests 441 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 120 new tests incl. real loopback sockets for the connect guard; mutation-checked (no-op tenant check fails 7, no-op delivery guard fails 5).
+Left: deploy is Martien call; existing subscriptions with internal URLs now fail at delivery - list them (read-only SELECT on WebhookSubscriptions) and tell owners; optional Webhooks:AllowedHosts for local dev receivers.
