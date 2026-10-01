@@ -11,10 +11,12 @@ namespace IAM.API.Controllers;
 public class ResourcePermissionController : ControllerBase
 {
     private readonly IResourcePermissionService _permissionService;
+    private readonly ILogger<ResourcePermissionController> _logger;
 
-    public ResourcePermissionController(IResourcePermissionService permissionService)
+    public ResourcePermissionController(IResourcePermissionService permissionService, ILogger<ResourcePermissionController> logger)
     {
         _permissionService = permissionService;
+        _logger = logger;
     }
 
     private Guid GetTenantId()
@@ -37,6 +39,41 @@ public class ResourcePermissionController : ControllerBase
             throw new UnauthorizedAccessException("User ID not found in token");
         }
         return userId;
+    }
+
+    /// <summary>
+    /// Shared gate for the four write endpoints (task 4717): the caller must hold ManageAccess on the
+    /// resource or be SuperAdmin / a tenant admin, and the resource must belong to the caller's tenant.
+    /// Returns null when allowed, otherwise the 403/404 response to return (nothing has been changed yet).
+    /// </summary>
+    private async Task<ActionResult?> DenyUnlessMayManageAccessAsync(
+        Guid userId,
+        Guid tenantId,
+        ResourceType resourceType,
+        Guid resourceId,
+        PermissionAction? grantedActions,
+        bool requireResourceInTenant,
+        CancellationToken ct)
+    {
+        var decision = await _permissionService.AuthorizeManageAccessAsync(
+            userId, User.IsInRole("SuperAdmin"), resourceType, resourceId, tenantId,
+            grantedActions, requireResourceInTenant, ct);
+
+        if (decision == ManageAccessDecision.Allowed)
+            return null;
+
+        _logger.LogWarning(
+            "Resource permission change refused ({Decision}): user {UserId}, tenant {TenantId}, {ResourceType} {ResourceId}",
+            decision, userId, tenantId, resourceType, resourceId);
+
+        return decision switch
+        {
+            ManageAccessDecision.ResourceNotFound => NotFound(),
+            ManageAccessDecision.ExceedsOwnPermissions => StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "You cannot grant actions you do not hold yourself on this resource." }),
+            _ => StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Managing access to this resource requires the ManageAccess permission on it." })
+        };
     }
 
     /// <summary>
@@ -172,18 +209,28 @@ public class ResourcePermissionController : ControllerBase
     }
 
     /// <summary>
-    /// Grant permission to user or role
+    /// Grant permission to user or role. Requires ManageAccess on the resource (or SuperAdmin / tenant
+    /// admin) and the resource must belong to the caller's tenant; non-admins cannot grant actions they
+    /// do not hold themselves.
     /// </summary>
     [HttpPost("grant")]
     [ProducesResponseType(typeof(ResourcePermission), 201)]
     [ProducesResponseType(400)]
-    public async Task<ActionResult<ResourcePermission>> GrantPermission([FromBody] GrantPermissionRequest request)
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<ResourcePermission>> GrantPermission([FromBody] GrantPermissionRequest request, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         var grantedByUserId = GetUserId();
 
         if (!request.UserId.HasValue && !request.RoleId.HasValue)
             return BadRequest("Either UserId or RoleId must be provided");
+
+        var denied = await DenyUnlessMayManageAccessAsync(
+            grantedByUserId, tenantId, request.ResourceType, request.ResourceId, request.Actions,
+            requireResourceInTenant: true, ct);
+        if (denied != null)
+            return denied;
 
         var permission = await _permissionService.GrantPermissionAsync(
             request.UserId,
@@ -202,14 +249,28 @@ public class ResourcePermissionController : ControllerBase
     }
 
     /// <summary>
-    /// Revoke permission
+    /// Revoke permission. Requires ManageAccess on the permission's resource (or SuperAdmin / tenant admin).
     /// </summary>
     [HttpDelete("{id}")]
     [ProducesResponseType(204)]
+    [ProducesResponseType(403)]
     [ProducesResponseType(404)]
-    public async Task<IActionResult> RevokePermission(Guid id)
+    public async Task<IActionResult> RevokePermission(Guid id, CancellationToken ct)
     {
         var tenantId = GetTenantId();
+        var userId = GetUserId();
+
+        // The resource comes from the stored row (looked up by tenant), never from the request.
+        var existing = await _permissionService.GetByIdAsync(id, tenantId);
+        if (existing == null)
+            return NotFound();
+
+        var denied = await DenyUnlessMayManageAccessAsync(
+            userId, tenantId, existing.ResourceType, existing.ResourceId, grantedActions: null,
+            requireResourceInTenant: false, ct);
+        if (denied != null)
+            return denied;
+
         var result = await _permissionService.RevokePermissionAsync(id, tenantId);
 
         if (!result)
@@ -219,31 +280,51 @@ public class ResourcePermissionController : ControllerBase
     }
 
     /// <summary>
-    /// Revoke all user permissions on a resource
+    /// Revoke all user permissions on a resource. Requires ManageAccess on the resource (or SuperAdmin / tenant admin).
     /// </summary>
     [HttpDelete("user/{userId}/resource/{resourceType}/{resourceId}")]
     [ProducesResponseType(typeof(int), 200)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
     public async Task<ActionResult<int>> RevokeAllUserPermissions(
         Guid userId,
         ResourceType resourceType,
-        Guid resourceId)
+        Guid resourceId,
+        CancellationToken ct)
     {
         var tenantId = GetTenantId();
+
+        var denied = await DenyUnlessMayManageAccessAsync(
+            GetUserId(), tenantId, resourceType, resourceId, grantedActions: null,
+            requireResourceInTenant: true, ct);
+        if (denied != null)
+            return denied;
+
         var count = await _permissionService.RevokeAllUserPermissionsAsync(userId, resourceType, resourceId, tenantId);
         return Ok(count);
     }
 
     /// <summary>
-    /// Revoke all role permissions on a resource
+    /// Revoke all role permissions on a resource. Requires ManageAccess on the resource (or SuperAdmin / tenant admin).
     /// </summary>
     [HttpDelete("role/{roleId}/resource/{resourceType}/{resourceId}")]
     [ProducesResponseType(typeof(int), 200)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
     public async Task<ActionResult<int>> RevokeAllRolePermissions(
         Guid roleId,
         ResourceType resourceType,
-        Guid resourceId)
+        Guid resourceId,
+        CancellationToken ct)
     {
         var tenantId = GetTenantId();
+
+        var denied = await DenyUnlessMayManageAccessAsync(
+            GetUserId(), tenantId, resourceType, resourceId, grantedActions: null,
+            requireResourceInTenant: true, ct);
+        if (denied != null)
+            return denied;
+
         var count = await _permissionService.RevokeAllRolePermissionsAsync(roleId, resourceType, resourceId, tenantId);
         return Ok(count);
     }

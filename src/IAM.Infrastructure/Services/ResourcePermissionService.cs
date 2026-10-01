@@ -384,6 +384,74 @@ public class ResourcePermissionService : IResourcePermissionService
 
     #endregion
 
+    #region Manage-access authorization (task 4717)
+
+    /// <summary>
+    /// Roles that make a user an administrator of every resource in a tenant. Matched against the
+    /// caller's active <c>UserRoles</c> rows for that tenant: role claims in a token are global role
+    /// names, not tenant-scoped, so a claim alone proves nothing about the tenant being addressed.
+    /// SuperAdmin is the only global admin and is passed in by the caller from the token.
+    /// </summary>
+    private static readonly List<string> TenantAdminRoleNames = new() { "TenantAdmin", "SystemAdmin", "BuildingOwner" };
+
+    public async Task<ManageAccessDecision> AuthorizeManageAccessAsync(
+        Guid userId,
+        bool isSuperAdmin,
+        ResourceType resourceType,
+        Guid resourceId,
+        Guid tenantId,
+        PermissionAction? grantedActions,
+        bool requireResourceInTenant,
+        CancellationToken ct = default)
+    {
+        var isAdmin = isSuperAdmin || await HasTenantAdminRoleAsync(userId, tenantId, ct);
+
+        // Effective permissions are tenant-filtered, so a resource owned by another tenant yields None
+        // here and a non-admin is refused without learning whether the id exists anywhere.
+        var effective = PermissionAction.None;
+        if (!isAdmin)
+        {
+            effective = await GetEffectivePermissionsAsync(userId, resourceType, resourceId, tenantId);
+            if (!effective.HasFlag(PermissionAction.ManageAccess))
+                return ManageAccessDecision.Forbidden;
+        }
+
+        if (requireResourceInTenant && !await ResourceExistsInTenantAsync(resourceType, resourceId, tenantId, ct))
+            return ManageAccessDecision.ResourceNotFound;
+
+        if (!isAdmin && grantedActions.HasValue && (grantedActions.Value & ~effective) != PermissionAction.None)
+            return ManageAccessDecision.ExceedsOwnPermissions;
+
+        return ManageAccessDecision.Allowed;
+    }
+
+    private async Task<bool> HasTenantAdminRoleAsync(Guid userId, Guid tenantId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return await _context.UserRoles
+            .AsNoTracking()
+            .AnyAsync(ur => ur.UserId == userId &&
+                            ur.TenantId == tenantId &&
+                            (!ur.ExpiresAt.HasValue || ur.ExpiresAt.Value > now) &&
+                            TenantAdminRoleNames.Contains(ur.Role.Name), ct);
+    }
+
+    private async Task<bool> ResourceExistsInTenantAsync(ResourceType resourceType, Guid resourceId, Guid tenantId, CancellationToken ct)
+    {
+        return resourceType switch
+        {
+            ResourceType.Location => await _context.Locations.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.TenantId == tenantId, ct),
+            ResourceType.Building => await _context.Buildings.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.TenantId == tenantId, ct),
+            ResourceType.Floor => await _context.Floors.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.TenantId == tenantId, ct),
+            ResourceType.Room => await _context.Rooms.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.TenantId == tenantId, ct),
+            ResourceType.RoomGroup => await _context.RoomGroups.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.TenantId == tenantId, ct),
+            ResourceType.IoTDevice => await _context.IoTDevices.AsNoTracking().AnyAsync(r => r.Id == resourceId && r.TenantId == tenantId, ct),
+            _ => false
+        };
+    }
+
+    #endregion
+
     #region Grant/Revoke Helpers
 
     public async Task<ResourcePermission> GrantPermissionAsync(

@@ -216,11 +216,14 @@ public class ResourcePermissionTests : IClassFixture<IAMTestWebApplicationFactor
         var hasPermissionBefore = await checkBefore.Content.ReadFromJsonAsync<bool>();
         Assert.True(hasPermissionBefore);
 
-        // Act - Revoke permission
+        // Act - Revoke permission as the admin (task 4717: revoking needs ManageAccess on the resource or an
+        // admin role - the user the permission was granted to may not revoke it themselves)
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         var revokeResponse = await _client.DeleteAsync($"/api/resourcepermission/{permission!.Id}");
         Assert.Equal(HttpStatusCode.NoContent, revokeResponse.StatusCode);
 
-        // Assert - Permission should be gone
+        // Assert - Permission should be gone, checking again as the user it was granted to
+        _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", userToken);
         var checkAfter = await _client.GetAsync(
             $"/api/resourcepermission/check?resourceType={ResourceType.IoTDevice}&resourceId={device.Id}&action={PermissionAction.View}");
         var hasPermissionAfter = await checkAfter.Content.ReadFromJsonAsync<bool>();
