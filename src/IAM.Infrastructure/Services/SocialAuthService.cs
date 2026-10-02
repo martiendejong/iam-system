@@ -230,6 +230,13 @@ public class SocialAuthService : ISocialAuthService
                 // link to or sign in as an existing account. Refused before anything is written.
                 if (existingUser != null && !externalUser.EmailVerified)
                     return RefuseUnverifiedEmailMatch(provider);
+
+                // Task 4765: the reverse also has to hold. An account whose own e-mail is not confirmed proves nothing
+                // about who holds the address either (an unverified Microsoft auto-create, or a password registration
+                // nobody confirmed, can be made for anyone's address). Linking the real owner's verified login to it
+                // would leave whoever created it signed in to the owner's account. Refused before anything is written.
+                if (existingUser != null && !existingUser.EmailConfirmed)
+                    return RefuseUnconfirmedAccountMatch(existingUser, provider);
             }
 
             if (existingUser == null)
@@ -366,6 +373,29 @@ public class SocialAuthService : ISocialAuthService
                   "account by e-mail address: sign in with your existing method and link your Microsoft account from your account settings."
                 : $"An account with this e-mail address already exists, but {name} has not verified the address. Verify it with " +
                   $"{name}, or sign in with your existing method and link your {name} account from your account settings."
+        };
+    }
+
+    /// <summary>
+    /// Refusal for a social login whose provider-verified e-mail matches an existing account that has not confirmed
+    /// its own e-mail address (task 4765). Nothing is linked and no tokens are issued; the owner confirms the address
+    /// (the verification e-mail sent at registration) and signs in again, or signs in with the existing method and
+    /// links the provider explicitly from their account settings (LinkAccountAsync).
+    /// </summary>
+    private AuthResult RefuseUnconfirmedAccountMatch(User existingUser, IdentityProvider provider)
+    {
+        _logger?.LogWarning(
+            "Social login via identity provider {ProviderId} ({ProviderName}) refused: the verified e-mail matches account " +
+            "{UserId}, whose own e-mail address is not confirmed",
+            provider.Id, provider.Name, existingUser.Id);
+
+        var name = provider.Type.ToString();
+        return new AuthResult
+        {
+            Success = false,
+            Error = "An account with this e-mail address already exists, but its e-mail address has not been confirmed yet, " +
+                    $"so it cannot be linked to your {name} sign-in. Confirm the address with the verification e-mail sent when the " +
+                    $"account was created and try again, or sign in with your existing method and link your {name} account from your account settings."
         };
     }
 

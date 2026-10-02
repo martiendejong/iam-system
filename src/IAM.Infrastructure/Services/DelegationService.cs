@@ -430,17 +430,25 @@ public class DelegationService : IDelegationService
         return constraint;
     }
 
-    public async Task<SodConstraint?> GetConstraintAsync(Guid constraintId, CancellationToken ct = default)
+    public async Task<SodConstraint?> GetConstraintAsync(DelegationActor actor, Guid constraintId, CancellationToken ct = default)
     {
-        return await _context.SodConstraints
+        var constraint = await _context.SodConstraints
             .Include(c => c.Tenant)
             .Include(c => c.RoleA)
             .Include(c => c.RoleB)
             .FirstOrDefaultAsync(c => c.Id == constraintId, ct);
+
+        if (constraint != null && !await IsAdminOfTenantAsync(actor, constraint.TenantId, ct))
+            throw new DelegationAccessDeniedException("Only an administrator of the tenant can read its segregation-of-duties rules");
+
+        return constraint;
     }
 
-    public async Task<List<SodConstraint>> GetConstraintsAsync(Guid tenantId, CancellationToken ct = default)
+    public async Task<List<SodConstraint>> GetConstraintsAsync(DelegationActor actor, Guid tenantId, CancellationToken ct = default)
     {
+        if (!await IsAdminOfTenantAsync(actor, tenantId, ct))
+            throw new DelegationAccessDeniedException("Only an administrator of the tenant can read its segregation-of-duties rules");
+
         return await _context.SodConstraints
             .Include(c => c.RoleA)
             .Include(c => c.RoleB)
@@ -484,13 +492,35 @@ public class DelegationService : IDelegationService
         return true;
     }
 
-    public async Task<List<SodViolation>> CheckSodViolationsAsync(Guid userId, CancellationToken ct = default)
+    public async Task<List<SodViolation>> CheckSodViolationsAsync(DelegationActor actor, Guid userId, CancellationToken ct = default)
     {
         // Get all roles for this user
         var userRoles = await _context.UserRoles
             .Where(ur => ur.UserId == userId)
             .Select(ur => new { ur.RoleId, ur.TenantId })
             .ToListAsync(ct);
+
+        // Task 4741: a check writes violation and audit rows, so it needs the caller's authority over the user
+        // first. Own id always; another user needs a global admin or an admin of every tenant they hold roles in.
+        if (userId != actor.UserId && !actor.IsGlobalAdmin)
+        {
+            var tenantIds = userRoles.Select(ur => ur.TenantId).Distinct().ToList();
+            var allowed = tenantIds.Count > 0 && tenantIds.All(t => t.HasValue);
+            if (allowed)
+            {
+                foreach (var tenantId in tenantIds)
+                {
+                    if (!await IsAdminOfTenantAsync(actor, tenantId!.Value, ct))
+                    {
+                        allowed = false;
+                        break;
+                    }
+                }
+            }
+
+            if (!allowed)
+                throw new DelegationAccessDeniedException("You can only check your own roles, unless you administer the user's tenant");
+        }
 
         var violations = new List<SodViolation>();
 
@@ -566,7 +596,7 @@ public class DelegationService : IDelegationService
         return violations;
     }
 
-    public async Task<List<SodViolation>> GetViolationsAsync(Guid? tenantId = null, CancellationToken ct = default)
+    public async Task<List<SodViolation>> GetViolationsAsync(DelegationActor actor, Guid? tenantId = null, CancellationToken ct = default)
     {
         var query = _context.SodViolations
             .Include(v => v.Constraint)
@@ -578,17 +608,33 @@ public class DelegationService : IDelegationService
             query = query.Where(v => v.Constraint.TenantId == tenantId.Value);
         }
 
+        // Task 4741: everything for a global admin (or an admin of the asked tenant); otherwise only violations
+        // about the caller themselves.
+        var seesAll = tenantId.HasValue
+            ? await IsAdminOfTenantAsync(actor, tenantId.Value, ct)
+            : actor.IsGlobalAdmin;
+        if (!seesAll)
+            query = query.Where(v => v.UserId == actor.UserId);
+
         return await query
             .OrderByDescending(v => v.DetectedAt)
             .ToListAsync(ct);
     }
 
-    public async Task<SodViolation> ResolveViolationAsync(Guid violationId, Guid resolvedByUserId, string resolution, CancellationToken ct = default)
+    public async Task<SodViolation> ResolveViolationAsync(DelegationActor actor, Guid violationId, string resolution, CancellationToken ct = default)
     {
+        var resolvedByUserId = actor.UserId;
         var violation = await _context.SodViolations
             .Include(v => v.Constraint)
             .FirstOrDefaultAsync(v => v.Id == violationId, ct)
             ?? throw new InvalidOperationException($"SoD violation {violationId} not found");
+
+        // Task 4741: before any change. Never the user the violation is about (even an admin), and only an admin
+        // of the violation's tenant (derived through its constraint).
+        if (violation.UserId == actor.UserId)
+            throw new DelegationAccessDeniedException("You cannot resolve a violation about yourself");
+        if (!await IsAdminOfTenantAsync(actor, violation.Constraint.TenantId, ct))
+            throw new DelegationAccessDeniedException("Only an administrator of the tenant can resolve a segregation-of-duties violation");
 
         if (violation.ResolvedAt != null)
             throw new InvalidOperationException($"SoD violation {violationId} is already resolved");

@@ -226,8 +226,19 @@ public class DelegationController : ControllerBase
     [HttpGet("/api/sod/constraints")]
     public async Task<IActionResult> GetConstraints([FromQuery] Guid tenantId, CancellationToken ct)
     {
-        var constraints = await _delegationService.GetConstraintsAsync(tenantId, ct);
-        return Ok(constraints.Select(MapConstraintToResponse));
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
+        {
+            var constraints = await _delegationService.GetConstraintsAsync(actor!, tenantId, ct);
+            return Ok(constraints.Select(MapConstraintToResponse));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -236,11 +247,22 @@ public class DelegationController : ControllerBase
     [HttpGet("/api/sod/constraints/{id:guid}")]
     public async Task<IActionResult> GetConstraint(Guid id, CancellationToken ct)
     {
-        var constraint = await _delegationService.GetConstraintAsync(id, ct);
-        if (constraint == null)
-            return NotFound(new { error = "SoD constraint not found" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
-        return Ok(MapConstraintToResponse(constraint));
+        try
+        {
+            var constraint = await _delegationService.GetConstraintAsync(actor!, id, ct);
+            if (constraint == null)
+                return NotFound(new { error = "SoD constraint not found" });
+
+            return Ok(MapConstraintToResponse(constraint));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -293,13 +315,24 @@ public class DelegationController : ControllerBase
     [HttpPost("/api/sod/check/{userId:guid}")]
     public async Task<IActionResult> CheckSodViolations(Guid userId, CancellationToken ct)
     {
-        var violations = await _delegationService.CheckSodViolationsAsync(userId, ct);
-        return Ok(new
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
         {
-            userId,
-            violationsFound = violations.Count,
-            violations = violations.Select(MapViolationToResponse)
-        });
+            var violations = await _delegationService.CheckSodViolationsAsync(actor!, userId, ct);
+            return Ok(new
+            {
+                userId,
+                violationsFound = violations.Count,
+                violations = violations.Select(MapViolationToResponse)
+            });
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -308,8 +341,19 @@ public class DelegationController : ControllerBase
     [HttpGet("/api/sod/violations")]
     public async Task<IActionResult> GetViolations([FromQuery] Guid? tenantId, CancellationToken ct)
     {
-        var violations = await _delegationService.GetViolationsAsync(tenantId, ct);
-        return Ok(violations.Select(MapViolationToResponse));
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
+        {
+            var violations = await _delegationService.GetViolationsAsync(actor!, tenantId, ct);
+            return Ok(violations.Select(MapViolationToResponse));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -318,14 +362,18 @@ public class DelegationController : ControllerBase
     [HttpPost("/api/sod/violations/{id:guid}/resolve")]
     public async Task<IActionResult> ResolveViolation(Guid id, [FromBody] ResolveSodViolationDto dto, CancellationToken ct)
     {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { error = "User ID not found in token" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
         try
         {
-            var violation = await _delegationService.ResolveViolationAsync(id, userId.Value, dto.Resolution, ct);
+            var violation = await _delegationService.ResolveViolationAsync(actor!, id, dto.Resolution, ct);
             return Ok(MapViolationToResponse(violation));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
