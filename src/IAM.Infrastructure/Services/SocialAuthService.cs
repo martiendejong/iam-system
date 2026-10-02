@@ -205,11 +205,17 @@ public class SocialAuthService : ISocialAuthService
 
         if (externalLogin != null)
         {
+            user = externalLogin.User!;
+
+            // A deactivated user must not sign in through a previously linked social identity.
+            // Checked before anything is written so a refused attempt leaves the link untouched.
+            if (!user.IsActive)
+                return RefuseInactiveUser(user, provider);
+
             // Existing linked account - update last used
             externalLogin.LastUsedAt = DateTime.UtcNow;
             externalLogin.Email = externalUser.Email;
             externalLogin.DisplayName = externalUser.DisplayName;
-            user = externalLogin.User!;
         }
         else
         {
@@ -269,6 +275,11 @@ public class SocialAuthService : ISocialAuthService
             }
             else
             {
+                // Same rule for an account matched by email: refuse before the new
+                // ExternalLogin is added, so no social link is created for a deactivated user.
+                if (!existingUser.IsActive)
+                    return RefuseInactiveUser(existingUser, provider);
+
                 user = existingUser;
             }
 
@@ -324,6 +335,23 @@ public class SocialAuthService : ISocialAuthService
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
+        };
+    }
+
+    /// <summary>
+    /// Same refusal AuthService returns to password, OTP, magic-link and passkey sign-in for a
+    /// deactivated user. Callers must return it before any mutation or SaveChanges.
+    /// </summary>
+    private AuthResult RefuseInactiveUser(User user, IdentityProvider provider)
+    {
+        _logger?.LogWarning(
+            "Social login refused for deactivated user {UserId} via identity provider {ProviderId} ({ProviderName})",
+            user.Id, provider.Id, provider.Name);
+
+        return new AuthResult
+        {
+            Success = false,
+            Error = "Account is inactive"
         };
     }
 
