@@ -23,6 +23,10 @@ namespace IAM.API.Tests.Services;
 /// (Google email_verified, GitHub verified primary, Apple email_verified claim), Microsoft never matches by e-mail,
 /// a refusal writes nothing, already linked identities and explicit linking still work, and auto-created users get
 /// EmailConfirmed only for verified addresses.
+/// Task 4765 (pre-hijack): a verified provider e-mail is also matched only to an account whose own e-mail is
+/// confirmed. An attacker can hold an account for the victim's address without proof (unverified Microsoft
+/// auto-create, or a password registration the owner never confirmed); linking the real owner's verified Google or
+/// GitHub login to it would leave the attacker signed in to the owner's account.
 /// </summary>
 public class SocialLoginVerifiedEmailTests
 {
@@ -52,9 +56,12 @@ public class SocialLoginVerifiedEmailTests
         }
     }
 
-    private static Harness CreateHarness(IdentityProviderType type, ProviderStub stub, bool autoCreate = false, string? attributeMapping = null)
+    // sameDatabaseAs: a second provider on the database of an earlier harness (task 4765: two different providers
+    // meeting on one account).
+    private static Harness CreateHarness(IdentityProviderType type, ProviderStub stub, bool autoCreate = false, string? attributeMapping = null,
+        Harness? sameDatabaseAs = null)
     {
-        var options = new DbContextOptionsBuilder<IAMDbContext>()
+        var options = sameDatabaseAs?.Options ?? new DbContextOptionsBuilder<IAMDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         var context = new IAMDbContext(options);
@@ -391,7 +398,145 @@ public class SocialLoginVerifiedEmailTests
         Assert.Equal(ProviderUserId, (await read.ExternalLogins.SingleAsync()).ProviderUserId);
     }
 
+    // ----- task 4765: a verified e-mail only meets an account whose own e-mail is confirmed --------------
+
+    [Fact]
+    public async Task PreHijack_UnverifiedMicrosoftAutoCreate_ThenVerifiedGoogleLoginWithTheSameEmail_IsRefused()
+    {
+        // The attacker signs in with Microsoft using an address of their own Entra tenant that reads victim@example.com:
+        // the account is auto-created, holds the victim's address and keeps its Microsoft link, but is not confirmed.
+        var microsoft = CreateHarness(IdentityProviderType.Microsoft, new ProviderStub(), autoCreate: true);
+        Assert.True((await microsoft.CallbackAsync()).Success);
+        Guid attackerAccountId;
+        DateTime? lastLoginAfterAttackerSignIn;
+        using (var read = microsoft.NewReadContext())
+        {
+            var attackerAccount = await read.Users.SingleAsync();
+            Assert.False(attackerAccount.EmailConfirmed);
+            attackerAccountId = attackerAccount.Id;
+            lastLoginAfterAttackerSignIn = attackerAccount.LastLoginAt;
+        }
+
+        // The real owner now signs in with Google, which verified victim@example.com.
+        var google = CreateHarness(IdentityProviderType.Google, new ProviderStub { GoogleEmailVerified = "true" }, autoCreate: true,
+            sameDatabaseAs: microsoft);
+        var result = await google.CallbackAsync();
+
+        Assert.False(result.Success);
+        Assert.Contains("not been confirmed", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(result.AccessToken);
+        Assert.Null(result.RefreshToken);
+        Assert.Null(result.User);
+
+        using var after = google.NewReadContext();
+        var link = await after.ExternalLogins.SingleAsync(); // still only the attacker's Microsoft link
+        Assert.Equal("Microsoft", link.Provider);
+        Assert.Equal(attackerAccountId, link.UserId);
+        var account = await after.Users.SingleAsync(); // no second account, nothing changed on the first
+        Assert.Equal(attackerAccountId, account.Id);
+        Assert.False(account.EmailConfirmed);
+        Assert.Equal(lastLoginAfterAttackerSignIn, account.LastLoginAt);
+        Assert.Single(await after.RefreshTokens.ToListAsync()); // only the attacker's own sign-in issued one
+    }
+
+    [Theory]
+    [InlineData(IdentityProviderType.Google)]
+    [InlineData(IdentityProviderType.GitHub)]
+    [InlineData(IdentityProviderType.Apple)]
+    public async Task VerifiedEmail_MatchingAnAccountThatIsNotEmailConfirmed_IsRefused_BeforeAnythingIsWritten(IdentityProviderType type)
+    {
+        // An account registered with a password for the victim's address that was never confirmed has the same shape.
+        var h = CreateHarness(type, VerifiedStub(type), autoCreate: true);
+        var unconfirmed = AddUser(h.Context, emailConfirmed: false);
+
+        var result = await h.CallbackAsync();
+
+        await AssertRefusedWithNothingWrittenAsync(h, result, unconfirmed, "not been confirmed");
+        Assert.Contains(type.ToString(), result.Error);
+        using var read = h.NewReadContext();
+        Assert.False((await read.Users.SingleAsync()).EmailConfirmed); // the login does not confirm the address either
+    }
+
+    [Theory]
+    [InlineData(IdentityProviderType.Google)]
+    [InlineData(IdentityProviderType.GitHub)]
+    [InlineData(IdentityProviderType.Apple)]
+    public async Task VerifiedEmail_MatchingAConfirmedAccount_StillLinksAndSignsIn(IdentityProviderType type)
+    {
+        var h = CreateHarness(type, VerifiedStub(type), autoCreate: true);
+        var user = AddUser(h.Context, emailConfirmed: true);
+
+        var result = await h.CallbackAsync();
+
+        Assert.True(result.Success);
+        Assert.Equal(user.Id, result.User!.Id);
+        Assert.NotNull(result.AccessToken);
+        using var read = h.NewReadContext();
+        var link = await read.ExternalLogins.SingleAsync();
+        Assert.Equal(user.Id, link.UserId);
+        Assert.Equal(type.ToString(), link.Provider);
+        Assert.Single(await read.Users.ToListAsync());
+    }
+
+    [Fact]
+    public async Task VerifiedEmail_MatchesTheAccountOnceItsOwnerConfirmedTheAddress()
+    {
+        var h = CreateHarness(IdentityProviderType.Google, new ProviderStub { GoogleEmailVerified = "true" });
+        var user = AddUser(h.Context, emailConfirmed: false);
+        Assert.False((await h.CallbackAsync("state-refused")).Success);
+
+        user.EmailConfirmed = true; // the owner followed the verification link
+        h.Context.SaveChanges();
+        var result = await h.CallbackAsync("state-confirmed");
+
+        Assert.True(result.Success);
+        Assert.Equal(user.Id, result.User!.Id);
+    }
+
+    [Fact]
+    public async Task UnconfirmedAccount_StillSignsInThroughItsOwnLinkedIdentity()
+    {
+        // Unverified Microsoft accounts keep working as they do today; only a different provider's e-mail match is refused.
+        var h = CreateHarness(IdentityProviderType.Microsoft, new ProviderStub());
+        var user = AddUser(h.Context, emailConfirmed: false);
+        h.Context.ExternalLogins.Add(new ExternalLogin
+        {
+            UserId = user.Id, Provider = "Microsoft", ProviderUserId = ProviderUserId, Email = Email, LastUsedAt = OldTimestamp
+        });
+        h.Context.SaveChanges();
+
+        var result = await h.CallbackAsync();
+
+        Assert.True(result.Success);
+        Assert.Equal(user.Id, result.User!.Id);
+    }
+
+    [Theory]
+    [InlineData(IdentityProviderType.Google)]
+    [InlineData(IdentityProviderType.Microsoft)]
+    [InlineData(IdentityProviderType.GitHub)]
+    public async Task ExplicitLinking_StillWorksForAnAccountThatIsNotEmailConfirmed(IdentityProviderType type)
+    {
+        // The logged-in user asks for the link themselves; no e-mail match is involved.
+        var h = CreateHarness(type, type == IdentityProviderType.Microsoft ? new ProviderStub() : VerifiedStub(type));
+        var user = AddUser(h.Context, emailConfirmed: false);
+
+        var link = await h.Service.LinkAccountAsync(user.Id, h.Provider.Id, "auth-code");
+
+        Assert.Equal(user.Id, link.UserId);
+        using var read = h.NewReadContext();
+        Assert.Equal(type.ToString(), (await read.ExternalLogins.SingleAsync()).Provider);
+    }
+
     // ----- test doubles ---------------------------------------------------------------------------------
+
+    private static ProviderStub VerifiedStub(IdentityProviderType type) => type switch
+    {
+        IdentityProviderType.Google => new ProviderStub { GoogleEmailVerified = "true" },
+        IdentityProviderType.GitHub => new ProviderStub { GitHubEmails = Emails(Email, primary: true, verified: true) },
+        IdentityProviderType.Apple => new ProviderStub { AppleIdToken = AppleToken(Email, "true") },
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, "no verified e-mail stub")
+    };
 
     private static string Emails(string address, bool primary, bool verified) =>
         $$"""[{"email":"{{address}}","primary":{{primary.ToString().ToLowerInvariant()}},"verified":{{verified.ToString().ToLowerInvariant()}}}]""";
