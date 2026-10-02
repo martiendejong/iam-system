@@ -585,6 +585,11 @@ Done: PR #158 - all 8 /api/secrets actions need SuperAdmin or an administrator (
 Verified: build clean; 19 new tests pass (5 guard mutations each fail them); full IAM.API.Tests 598 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call; admin-ui is the only client (user JWT) and needs no change; API keys and service accounts are refused on purpose.
 
+## 2026-10-02 - task 4703
+Done: PR #155 - all 13 /api/securityalerts actions need SuperAdmin or SecurityAdmin; SIEM responses are a DTO without AuthConfig (hasAuthConfig + masked, update keeps the stored credential when blank or masked); rule webhook/Slack targets and SIEM URLs go through IWebhookUrlGuard at save and at send time; rules with an automatic response are SuperAdmin-only; acknowledge reads the user id from NameIdentifier or sub.
+Verified: build clean; 32 new tests pass (5 guard mutations each fail them); full IAM.API.Tests 611 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; admin-ui change not built (no node_modules in the worktree).
+Left: deploy is Martien's call; SIEM credentials already stored stay plain JSON in the DB (vault move out of scope); SecurityAdmin editing a rule that has an auto-response and omitting it clears it.
+
 ## 2026-10-02 - task 4700
 Done: PR #156 - members list/role change/removal and invitations send/bulk/list/pending/revoke need SuperAdmin or an active BuildingOwner/BuildingManager row in the request's tenant (403 before lookups). One shared rule (TenantRoleGrantRules, by role name): platform roles SuperAdmin-only, BuildingOwner/TenantAdmin/OrganizationOwner owner-only, other-tenant custom roles refused; no self role change/removal, managers cannot touch owner-level members, last BuildingOwner protected (409). Acceptance re-checks the sender (platform role needs a SuperAdmin sender now). Service accounts keep their gate but cannot grant platform roles.
 Verified: build clean; 47 new TenantMemberManagementAuthorizationTests pass; mutation-checked (no tenant scope fails 8, no grant rule fails 17); full IAM.API.Tests 626 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
