@@ -577,7 +577,7 @@ public class RefreshTokenSessionEndingTests
     };
 
     private static SecurityAlertService CreateSecurityAlertService(IAMDbContext context) =>
-        new(context, new FakeEmailService(), new NoHttpClientFactory(), NullLogger<SecurityAlertService>.Instance);
+        new(context, new FakeEmailService(), new NoHttpClientFactory(), NullLogger<SecurityAlertService>.Instance, new NoSendUrlGuard());
 
     private static async Task<AlertRule> AddAlertRuleAsync(IAMDbContext context, string autoResponse)
     {
@@ -585,6 +585,14 @@ public class RefreshTokenSessionEndingTests
         context.AlertRules.Add(rule);
         await context.SaveChangesAsync();
         return rule;
+    }
+
+    // These tests never send alerts; the guard only has to satisfy the constructor (task 4703 added it).
+    private sealed class NoSendUrlGuard : IWebhookUrlGuard
+    {
+        public Task<string?> CheckAsync(string url, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<System.Net.IPAddress[]> ResolveAllowedAsync(string host, CancellationToken ct = default) =>
+            Task.FromResult(Array.Empty<System.Net.IPAddress>());
     }
 
     private sealed class NoHttpClientFactory : IHttpClientFactory
