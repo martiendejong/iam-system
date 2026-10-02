@@ -535,6 +535,51 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
+## 2026-10-02 - task 4712
+Done: PR #153 - delegations follow the caller's authority in DelegationService: create only as yourself (or a SuperAdmin/SystemAdmin for someone) and only for permissions the delegator holds in the tenant; wildcard grants always need approval; approve needs a different admin of the tenant (never delegator/delegate); revoke = delegator, delegate or admin; delegation reads and effective-permissions scoped to the caller; SoD constraint create/update/delete = SuperAdmin/SystemAdmin only. Expired roles no longer count as held.
+Verified: IAM.API.Tests 664 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 85 new tests (41 fail on the old code); 13 mutations of the checks each fail at least 1 test.
+Left: deploy is Martien's call; wildcard-forces-approval and TenantAdmin-only tenant authority are my assumptions (one line each to change); SoD violation resolve and SoD reads are still open, filed as task 4741.
+
+## 2026-10-02 - task 4709
+Done: PR #152 - refresh refuses inactive users (same generic error); SCIM delete/PUT/PATCH, directory-sync disable and security-alert lock_account now revoke refresh tokens, via one shared helper (RefreshTokenRevocation) that merge, erasure, admin deactivate and password reset also use; admin password change revokes; replay of a rotated token revokes all of the user's active tokens (warning + audit row). Rotation is marked by successor.CreatedAt == predecessor.RevokedAt, so no migration.
+Verified: build clean; 23 new tests (RefreshTokenSessionEndingTests) pass; each fix mutation-checked (disabling it fails its test); full IAM.API.Tests 602 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; access tokens already issued live to their expiry (5 min default). Follow-ups: portal self-service password change 4748, directory sync disables other tenants' LDAP users 4749.
+
+## 2026-10-02 - task 4711
+Done: access-request approvals count distinct approvers (new ApprovalVotes table, unique per step+user, additive migration 20261002120000; ApprovalsReceived kept and still incremented, in-flight steps keep their count and their last approver cannot double-count) and the requester can neither approve nor deny their own request (checked first, before role/SuperAdmin/named-approver).
+Verified: build clean; 14 new AccessRequestApprovalTests pass; disabling the self-check or the duplicate-check fails 7 / 3 of them; migration SQL scripted (CREATE TABLE + 2 indexes only); full IAM.API.Tests 593 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: migration must be applied before the IAM deploy (Martien call); the earlier 20260926120000 migration has no [Migration] attribute so EF does not discover it - pre-existing, not touched.
+
+## 2026-10-02 - task 4707
+Done: PR #163 - SocialAuthService only matches an existing account by e-mail when the provider verifies it: Google email_verified (bool or "true"), GitHub verified primary from /user/emails, Apple email_verified id_token claim; Microsoft never (refused with a clear message, link it explicitly instead). Refusals write nothing; linked identities and LinkAccountAsync are unchanged; auto-created users get EmailConfirmed only when verified. Apple id_token claims are now read under both claim-type spellings.
+Verified: build clean; 29 new tests (Google/GitHub/Microsoft/Apple, 6 guard mutations each fail them); 4706 stubs updated (verified e-mail, Microsoft e-mail-match cases moved); full IAM.API.Tests 606 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; follow-up task 4765 (auto-create with an unverified e-mail can still pre-create an account a later verified login matches).
+
+## 2026-10-02 - task 4710
+Done: SCIM user/group filters parse once with no recursion; unparseable, unsupported or over-limit (512 chars, 10 and-terms) filters throw ScimFilterException -> 400 invalidFilter instead of overflowing the stack or returning everyone.
+Verified: build clean; 35 new ScimFilterTests pass (bad-filter cases crash the test host with a stack overflow on develop); full IAM.API.Tests 614 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien call; known-but-unsupported attribute/operator pairs and bad values now 400 (was silently unfiltered) - integrations relying on that will see 400s. SCIM tenant scoping is 4699.
+
+## 2026-10-02 - task 4705
+Done: PR #161 - risk thresholds (GET/GET id/POST/DELETE) and the dashboard need SuperAdmin or SecurityAdmin; scores, trusted devices (list/add/remove) and manual assess only work for the caller's own user id (taken from the token, omitted = own, another id = 403) unless platform admin; device, service-account and API-key tokens are not users (403); threshold validation: 0 <= Low < Medium < High < Block, Block 1-100, RequireMfaAbove 0-99 and below Block.
+Verified: build clean; 33 new tests pass (4 of 5 guard mutations fail them; the 5th is equivalent because the Block ordering already implies the MFA cap); full IAM.API.Tests 612 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; AuthService login-time evaluation untouched and its tests still pass.
+Left: deploy is Martien's call; existing stored thresholds that violate the new rules are not changed (check the live RiskThresholds table read-only); admin-ui riskApi sends userId as before and needs no change.
+
+## 2026-10-02 - task 4698
+Done: PR #159 - every /api/directory-sync action needs SuperAdmin or an active BuildingOwner row for the config's tenant (403 before lookups; create uses the body TenantId). Group-to-role mapping to platform-wide roles (SuperAdmin, SystemAdmin, SecurityAdmin, ComplianceOfficer, EmergencyAccess, Admin, by name) is 400 at save and ignored at sync. The sync loop only touches its tenant's users (regular accounts of other tenants untouched, no phone/re-enable for them, disable-missing limited to this tenant's LDAP-managed users). ldaps:// only, public address outside SuperAdmin; bind password stored encrypted via the vault (legacy rows encrypted by the worker sweep or on first use), never returned.
+Verified: build clean; 49 new DirectorySync tests pass; 5 mutations fail 1-3 tests each (tenant check, other-tenant users, disable scope, platform mapping, plain password); full IAM.API.Tests 628 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; existing ldap:// configs stop syncing until moved to ldaps://. SuperAdmin-saved internal hosts also need DirectorySync:AllowedHosts at connect time (no schema change). Connect-time DNS is checked then re-resolved by the LDAP library (no pinning).
+
+## 2026-10-02 - task 4698 (review)
+Done: reviewed PR #159; merged develop in (4709's disable-missing token test needed the new DirectorySyncService constructor and a tenant with members - fixed); added TenantAdmin to the platform-wide role set a directory group can never be mapped to (it gates the temporal-access endpoints, which take any tenant id from the body) plus a test that fails when a role used in [Authorize(Roles)] is not classified.
+Verified: build clean; full IAM.API.Tests 738 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; the two new tests fail with TenantAdmin removed.
+Left: sync-created users with no mapped role belong to no tenant, so any tenant's sync can still adopt them (needs an ownership marker = schema change); deploy is Martien's call.
+
+## 2026-10-02 - task 4738
+Done: PR #150 - GET/PUT /api/organization-settings/{tenantId} need SuperAdmin/SystemAdmin or an active TenantAdmin UserRole for that tenant (403 before the tenant lookup; a token scoped to another tenant fails closed); PUT validates DefaultRoleId via shared DefaultRoleRules (exists, non-privileged, global or the tenant's, else 400, nothing written); bulk invites refuse an already-stored privileged/foreign default role per row. Active-TenantAdmin query extracted to TenantAdminAuthority, shared with SocialAuthService.
+Verified: build clean; 58 OrganizationSettings tests pass; full IAM.API.Tests 637 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; mutation-checked (no-op authority check fails 15, no-op default-role check fails 19).
+Left: deploy of IAM is Martien's call; on the live DB check existing OrganizationSettings rows for a privileged DefaultRoleId (read-only SELECT) - bulk invites already refuse them. BuildingOwner/BuildingManager are not tenant admins here (TenantAdmin only, as in #144).
+
 ## 2026-10-02 - task 4700
 Done: PR #156 - members list/role change/removal and invitations send/bulk/list/pending/revoke need SuperAdmin or an active BuildingOwner/BuildingManager row in the request's tenant (403 before lookups). One shared rule (TenantRoleGrantRules, by role name): platform roles SuperAdmin-only, BuildingOwner/TenantAdmin/OrganizationOwner owner-only, other-tenant custom roles refused; no self role change/removal, managers cannot touch owner-level members, last BuildingOwner protected (409). Acceptance re-checks the sender (platform role needs a SuperAdmin sender now). Service accounts keep their gate but cannot grant platform roles.
 Verified: build clean; 47 new TenantMemberManagementAuthorizationTests pass; mutation-checked (no tenant scope fails 8, no grant rule fails 17); full IAM.API.Tests 626 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
