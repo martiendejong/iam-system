@@ -61,8 +61,8 @@ class IamAdminClient:
         """List devices, optionally filtered by tenant.
 
         Args:
-            tenant_id: Filter by tenant UUID. If None, requires a
-                different listing strategy (by-type, etc.).
+            tenant_id: Filter by tenant UUID. If None, lists the devices of
+                every tenant the caller may read (all tenants for SuperAdmin).
 
         Returns:
             List of Device models.
@@ -72,11 +72,9 @@ class IamAdminClient:
                 f"/api/devices/by-tenant/{tenant_id}"
             )
         else:
-            # Fall back to statistics to discover device counts;
-            # the API requires a tenant filter for listing.
-            response = await self._client.get(
-                "/api/devices/by-tenant/00000000-0000-0000-0000-000000000000"
-            )
+            # The API limits this list to the caller's own tenants; a
+            # placeholder by-tenant id would now be refused (403).
+            response = await self._client.get("/api/devices")
 
         response.raise_for_status()
         data = response.json()
