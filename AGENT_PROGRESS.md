@@ -536,6 +536,6 @@ Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Micros
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
 ## 2026-10-02 - task 4709
-Done: in progress - draft PR; end refresh-token sessions on deactivation, admin password change and rotated-token replay.
-Verified: not yet.
-Left: implementation.
+Done: PR #152 - refresh refuses inactive users (same generic error); SCIM delete/PUT/PATCH, directory-sync disable and security-alert lock_account now revoke refresh tokens, via one shared helper (RefreshTokenRevocation) that merge, erasure, admin deactivate and password reset also use; admin password change revokes; replay of a rotated token revokes all of the user's active tokens (warning + audit row). Rotation is marked by successor.CreatedAt == predecessor.RevokedAt, so no migration.
+Verified: build clean; 23 new tests (RefreshTokenSessionEndingTests) pass; each fix mutation-checked (disabling it fails its test); full IAM.API.Tests 602 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; access tokens already issued live to their expiry (5 min default). Follow-ups: portal self-service password change 4748, directory sync disables other tenants' LDAP users 4749.
