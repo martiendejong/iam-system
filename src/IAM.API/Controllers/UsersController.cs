@@ -304,14 +304,7 @@ public class UsersController : ControllerBase
         user.UpdatedAt = DateTime.UtcNow;
 
         // Revoke all refresh tokens
-        var tokens = await _context.RefreshTokens
-            .Where(rt => rt.UserId == id && rt.RevokedAt == null)
-            .ToListAsync();
-
-        foreach (var token in tokens)
-        {
-            token.RevokedAt = DateTime.UtcNow;
-        }
+        await _context.RevokeRefreshTokensAsync(id);
 
         await _context.SaveChangesAsync();
 
@@ -511,6 +504,9 @@ public class UsersController : ControllerBase
         user.FailedLoginAttempts = 0;
         user.IsLockedOut = false;
         user.UpdatedAt = DateTime.UtcNow;
+
+        // The old password is gone, so every session opened with it ends, as on password reset.
+        await _context.RevokeRefreshTokensAsync(id);
 
         await _context.SaveChangesAsync();
 
