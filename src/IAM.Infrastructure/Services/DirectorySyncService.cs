@@ -573,7 +573,7 @@ public class DirectorySyncService : IDirectorySyncService
         await _context.SaveChangesAsync(ct);
     }
 
-    private async Task<int> DisableMissingUsersAsync(
+    internal async Task<int> DisableMissingUsersAsync(
         Guid tenantId,
         HashSet<string> directoryEmails,
         CancellationToken ct)
@@ -592,6 +592,8 @@ public class DirectorySyncService : IDirectorySyncService
 
         if (usersToDisable.Count > 0)
         {
+            // A user removed from the directory must not keep refreshing an existing session.
+            await _context.RevokeRefreshTokensAsync(usersToDisable.Select(u => u.Id), ct);
             await _context.SaveChangesAsync(ct);
         }
 

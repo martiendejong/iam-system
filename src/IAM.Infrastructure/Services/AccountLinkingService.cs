@@ -285,14 +285,7 @@ public class AccountLinkingService : IAccountLinkingService
             }
 
             // 4. Move refresh tokens (invalidate secondary's tokens)
-            var secondaryTokens = await _context.RefreshTokens
-                .Where(rt => rt.UserId == secondaryUserId)
-                .ToListAsync(ct);
-
-            foreach (var token in secondaryTokens)
-            {
-                token.RevokedAt = DateTime.UtcNow;
-            }
+            await _context.RevokeRefreshTokensAsync(secondaryUserId, ct);
 
             // 5. Deactivate secondary account
             secondaryUser.IsActive = false;

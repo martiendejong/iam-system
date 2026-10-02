@@ -281,14 +281,7 @@ public class DataRequestService : IDataRequestService
         }
 
         // Revoke all refresh tokens
-        var activeTokens = await _context.RefreshTokens
-            .Where(rt => rt.UserId == userId && rt.RevokedAt == null)
-            .ToListAsync(ct);
-
-        foreach (var token in activeTokens)
-        {
-            token.RevokedAt = DateTime.UtcNow;
-        }
+        var tokensRevoked = await _context.RevokeRefreshTokensAsync(userId, ct);
 
         // Remove credentials (passkeys) - these are authentication material, not audit data
         var credentials = await _context.Credentials
@@ -323,7 +316,7 @@ public class DataRequestService : IDataRequestService
         // Complete the request
         request.Status = DataRequestStatus.Completed;
         request.CompletedAt = DateTime.UtcNow;
-        request.Notes = $"User data anonymized. Sessions revoked: {activeSessions.Count}. Tokens revoked: {activeTokens.Count}. Credentials removed: {credentials.Count}. API keys deactivated: {apiKeys.Count}. Consents revoked: {activeConsents.Count}.";
+        request.Notes = $"User data anonymized. Sessions revoked: {activeSessions.Count}. Tokens revoked: {tokensRevoked}. Credentials removed: {credentials.Count}. API keys deactivated: {apiKeys.Count}. Consents revoked: {activeConsents.Count}.";
 
         _context.AuditLogs.Add(new AuditLog
         {
@@ -336,7 +329,7 @@ public class DataRequestService : IDataRequestService
                 processedBy,
                 anonymizedEmail = user.Email,
                 sessionsRevoked = activeSessions.Count,
-                tokensRevoked = activeTokens.Count,
+                tokensRevoked,
                 credentialsRemoved = credentials.Count,
                 apiKeysDeactivated = apiKeys.Count,
                 consentsRevoked = activeConsents.Count
