@@ -967,13 +967,20 @@ public class SocialAuthService : ISocialAuthService
 
             var principal = tokenHandler.ValidateToken(idToken, validationParams, out _);
 
+            // JwtSecurityTokenHandler maps sub/email to the long ClaimTypes names unless the process-wide inbound
+            // map was cleared, so accept both spellings.
+            string? ClaimValue(params string[] types) =>
+                principal.Claims.FirstOrDefault(c => types.Contains(c.Type))?.Value;
+
+            var email = ClaimValue("email", System.Security.Claims.ClaimTypes.Email);
+
             return new ExternalUserProfile
             {
-                ProviderUserId = principal.Claims.FirstOrDefault(c => c.Type == "sub")?.Value ?? "",
-                Email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value,
+                ProviderUserId = ClaimValue("sub", System.Security.Claims.ClaimTypes.NameIdentifier) ?? "",
+                Email = email,
                 // Apple puts email_verified in the (signature-verified) id_token, as a bool or the string "true".
-                EmailVerified = !string.IsNullOrEmpty(principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value) &&
-                    string.Equals(principal.Claims.FirstOrDefault(c => c.Type == "email_verified")?.Value, "true", StringComparison.OrdinalIgnoreCase),
+                EmailVerified = !string.IsNullOrEmpty(email) &&
+                    string.Equals(ClaimValue("email_verified"), "true", StringComparison.OrdinalIgnoreCase),
                 DisplayName = null,
                 FirstName = null,
                 LastName = null

@@ -535,5 +535,7 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
-## 2026-10-02 - task 4707 (in progress)
-Plan: SocialAuthService matches an existing account by e-mail only when the provider verifies it (Google email_verified, GitHub verified primary, Apple email_verified claim); Microsoft never; auto-created users get EmailConfirmed only when verified; explicit LinkAccountAsync unchanged.
+## 2026-10-02 - task 4707
+Done: PR #163 - SocialAuthService only matches an existing account by e-mail when the provider verifies it: Google email_verified (bool or "true"), GitHub verified primary from /user/emails, Apple email_verified id_token claim; Microsoft never (refused with a clear message, link it explicitly instead). Refusals write nothing; linked identities and LinkAccountAsync are unchanged; auto-created users get EmailConfirmed only when verified. Apple id_token claims are now read under both claim-type spellings.
+Verified: build clean; 29 new tests (Google/GitHub/Microsoft/Apple, 6 guard mutations each fail them); 4706 stubs updated (verified e-mail, Microsoft e-mail-match cases moved); full IAM.API.Tests 606 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; follow-up task 4765 (auto-create with an unverified e-mail can still pre-create an account a later verified login matches).
