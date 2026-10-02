@@ -438,6 +438,57 @@ public class SocialAuthService : ISocialAuthService
         return await query.OrderBy(p => p.Name).ToListAsync();
     }
 
+    public async Task<List<IdentityProvider>> GetIdentityProvidersForAdminAsync(
+        Guid? tenantId, IdentityProviderActor actor, CancellationToken ct = default)
+    {
+        await RequireProviderAdminAnywhereAsync(actor, ct);
+
+        var query = _context.IdentityProviders
+            .AsNoTracking()
+            .Include(p => p.Tenant)
+            .Include(p => p.DefaultRole)
+            .AsQueryable();
+
+        if (actor.IsGlobalAdmin)
+        {
+            if (tenantId.HasValue)
+                query = query.Where(p => p.TenantId == tenantId.Value || p.TenantId == null);
+        }
+        else if (tenantId.HasValue)
+        {
+            // The tenant comes from the caller's UserRoles, never from the query string alone.
+            await RequireTenantAuthorityAsync(tenantId, actor, ct);
+            query = query.Where(p => p.TenantId == tenantId.Value || p.TenantId == null);
+        }
+        else
+        {
+            var administered = await GetAdministeredTenantIdsAsync(actor, ct);
+            query = query.Where(p => p.TenantId == null || administered.Contains(p.TenantId.Value));
+        }
+
+        return await query.OrderBy(p => p.Name).ToListAsync(ct);
+    }
+
+    public async Task<IdentityProvider?> GetIdentityProviderForAdminAsync(
+        Guid id, IdentityProviderActor actor, CancellationToken ct = default)
+    {
+        // Authorize before looking the provider up, so a caller with no admin authority gets 403
+        // whether or not the id exists.
+        await RequireProviderAdminAnywhereAsync(actor, ct);
+
+        var provider = await _context.IdentityProviders
+            .AsNoTracking()
+            .Include(p => p.Tenant)
+            .Include(p => p.DefaultRole)
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
+
+        // Platform-wide providers are readable (not manageable) by any tenant admin.
+        if (provider is { TenantId: not null })
+            await RequireTenantAuthorityAsync(provider.TenantId, actor, ct);
+
+        return provider;
+    }
+
     public async Task<IdentityProvider> CreateIdentityProviderAsync(
         IdentityProvider provider, IdentityProviderActor actor, CancellationToken ct = default)
     {
@@ -552,6 +603,25 @@ public class SocialAuthService : ISocialAuthService
             throw new IdentityProviderAccessDeniedException(
                 "Only SuperAdmin, SystemAdmin or a tenant admin can manage identity providers");
         }
+    }
+
+    /// <summary>
+    /// The tenants the actor administers: active TenantAdmin rows scoped to a tenant, narrowed to the
+    /// token's tenant_id claim when it carries one.
+    /// </summary>
+    private async Task<List<Guid>> GetAdministeredTenantIdsAsync(IdentityProviderActor actor, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var query = _context.UserRoles.AsNoTracking().Where(ur =>
+            ur.UserId == actor.UserId
+            && ur.TenantId != null
+            && ur.Role.Name == TenantAdminRoleName
+            && (ur.ExpiresAt == null || ur.ExpiresAt > now));
+
+        if (actor.TenantId.HasValue)
+            query = query.Where(ur => ur.TenantId == actor.TenantId.Value);
+
+        return await query.Select(ur => ur.TenantId!.Value).Distinct().ToListAsync(ct);
     }
 
     /// <summary>
