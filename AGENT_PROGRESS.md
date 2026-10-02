@@ -554,3 +554,8 @@ Left: migration must be applied before the IAM deploy (Martien call); the earlie
 Done: PR #163 - SocialAuthService only matches an existing account by e-mail when the provider verifies it: Google email_verified (bool or "true"), GitHub verified primary from /user/emails, Apple email_verified id_token claim; Microsoft never (refused with a clear message, link it explicitly instead). Refusals write nothing; linked identities and LinkAccountAsync are unchanged; auto-created users get EmailConfirmed only when verified. Apple id_token claims are now read under both claim-type spellings.
 Verified: build clean; 29 new tests (Google/GitHub/Microsoft/Apple, 6 guard mutations each fail them); 4706 stubs updated (verified e-mail, Microsoft e-mail-match cases moved); full IAM.API.Tests 606 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call; follow-up task 4765 (auto-create with an unverified e-mail can still pre-create an account a later verified login matches).
+
+## 2026-10-02 - task 4710
+Done: SCIM user/group filters parse once with no recursion; unparseable, unsupported or over-limit (512 chars, 10 and-terms) filters throw ScimFilterException -> 400 invalidFilter instead of overflowing the stack or returning everyone.
+Verified: build clean; 35 new ScimFilterTests pass (bad-filter cases crash the test host with a stack overflow on develop); full IAM.API.Tests 614 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien call; known-but-unsupported attribute/operator pairs and bad values now 400 (was silently unfiltered) - integrations relying on that will see 400s. SCIM tenant scoping is 4699.
