@@ -108,6 +108,37 @@ public static class TestAuthenticationHelper
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
+    /// <summary>
+    /// Token shaped like DeviceAuthenticationService issues for a device: "token_type=device", the
+    /// device_id and (when given) the tenant_id, no roles (task 4708).
+    /// </summary>
+    public static string GenerateDeviceToken(string deviceId, Guid? tenantId)
+    {
+        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
+        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new Claim(ClaimTypes.NameIdentifier, deviceId),
+            new Claim("device_id", deviceId),
+            new Claim("token_type", "device")
+        };
+        if (tenantId.HasValue)
+        {
+            claims.Add(new Claim("tenant_id", tenantId.Value.ToString()));
+        }
+
+        var token = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
     public static void AddAuthorizationHeader(this HttpClient client, string token)
     {
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
