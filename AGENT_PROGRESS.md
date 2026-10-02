@@ -535,6 +535,11 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
+## 2026-10-02 - task 4699
+Done: PR #162 - SCIM user list/get/replace/patch/delete only see in-tenant users (non-expired UserRoles row, or a successful Create in the token tenant's SCIM log); anything else is 404 and list counts exclude it. Replace/patch/delete also 404 for users who hold a tenant-less or other-tenant role (expired rows count, fail closed). Moving an email (or phone) onto another account is 409 without naming it; PATCH edits are dropped on conflict. Filters/sort/paging start from the scoped query so they only narrow it.
+Verified: build clean; 21 new ScimUserTenantScopeTests pass; 5 mutations (get, list, multi-tenant guard, collision check, log-row scope) fail 1-5 tests each; full IAM.API.Tests 600 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; SCIM-provisioned users from before this fix with no log row and no role become invisible to SCIM. Group member adds still accept any user id (own task). ApplyUserFilter unchanged (PR #157 / 4710 touches it).
+
 ## 2026-10-02 - task 4712
 Done: PR #153 - delegations follow the caller's authority in DelegationService: create only as yourself (or a SuperAdmin/SystemAdmin for someone) and only for permissions the delegator holds in the tenant; wildcard grants always need approval; approve needs a different admin of the tenant (never delegator/delegate); revoke = delegator, delegate or admin; delegation reads and effective-permissions scoped to the caller; SoD constraint create/update/delete = SuperAdmin/SystemAdmin only. Expired roles no longer count as held.
 Verified: IAM.API.Tests 664 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 85 new tests (41 fail on the old code); 13 mutations of the checks each fail at least 1 test.

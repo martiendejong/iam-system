@@ -57,7 +57,8 @@ public class ScimService : IScimService
 
     public async Task<ScimUserResource?> GetUserAsync(Guid tenantId, Guid userId, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        // Only users of the token's own tenant exist as far as this token is concerned (task 4699).
+        var user = await UsersInTenant(tenantId).AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             return null;
 
@@ -66,18 +67,21 @@ public class ScimService : IScimService
 
     public async Task<ScimUserResource> ReplaceUserAsync(Guid tenantId, Guid userId, ScimUserResource scimUser, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var user = await ManageableUsersInTenant(tenantId).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             throw new InvalidOperationException("User not found");
 
         var primaryEmail = scimUser.Emails?.FirstOrDefault(e => e.Primary)?.Value
             ?? scimUser.Emails?.FirstOrDefault()?.Value
             ?? scimUser.UserName;
+        var newPhone = scimUser.PhoneNumbers?.FirstOrDefault()?.Value;
+
+        await EnsureNoCollisionAsync(user, primaryEmail, newPhone, ct);
 
         user.Email = primaryEmail;
         user.FirstName = scimUser.Name?.GivenName ?? string.Empty;
         user.LastName = scimUser.Name?.FamilyName ?? string.Empty;
-        user.PhoneNumber = scimUser.PhoneNumbers?.FirstOrDefault()?.Value;
+        user.PhoneNumber = newPhone;
         user.IsActive = scimUser.Active;
         user.UpdatedAt = DateTime.UtcNow;
 
@@ -94,13 +98,26 @@ public class ScimService : IScimService
 
     public async Task<ScimUserResource> PatchUserAsync(Guid tenantId, Guid userId, ScimPatchRequest patchRequest, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var user = await ManageableUsersInTenant(tenantId).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             throw new InvalidOperationException("User not found");
+
+        var originalEmail = user.Email;
+        var originalPhone = user.PhoneNumber;
 
         foreach (var op in patchRequest.Operations)
         {
             ApplyUserPatchOperation(user, op);
+        }
+
+        try
+        {
+            await EnsureNoCollisionAsync(user, user.Email, user.PhoneNumber, ct, originalEmail, originalPhone);
+        }
+        catch (ScimUniquenessException)
+        {
+            _context.Entry(user).State = EntityState.Detached; // drop the in-memory edits
+            throw;
         }
 
         user.UpdatedAt = DateTime.UtcNow;
@@ -118,7 +135,7 @@ public class ScimService : IScimService
 
     public async Task<bool> DeleteUserAsync(Guid tenantId, Guid userId, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var user = await ManageableUsersInTenant(tenantId).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             return false;
 
@@ -136,7 +153,8 @@ public class ScimService : IScimService
 
     public async Task<ScimListResponse<ScimUserResource>> ListUsersAsync(Guid tenantId, ScimQueryOptions options, CancellationToken ct = default)
     {
-        var query = _context.Users.AsQueryable();
+        // The tenant scope is the base of the query: the filter and sort below can only narrow it.
+        var query = UsersInTenant(tenantId).AsNoTracking();
 
         // Apply SCIM filter
         if (!string.IsNullOrWhiteSpace(options.Filter))
@@ -437,6 +455,58 @@ public class ScimService : IScimService
     }
 
     // ---- Private Helpers ----
+
+    /// <summary>
+    /// Users that belong to the tenant (task 4699): they hold a non-expired UserRoles row for it, or this
+    /// tenant's SCIM log shows a successful Create for them (SCIM-provisioned users have no role yet).
+    /// Users have no tenant column; everything else behaves as if it does not exist for this token.
+    /// </summary>
+    private IQueryable<User> UsersInTenant(Guid tenantId)
+    {
+        var now = DateTime.UtcNow;
+        return _context.Users.Where(u =>
+            _context.UserRoles.Any(ur => ur.UserId == u.Id && ur.TenantId == tenantId
+                && (ur.ExpiresAt == null || ur.ExpiresAt > now))
+            || _context.ScimProvisioningLogs.Any(l => l.TenantId == tenantId
+                && l.ResourceType == "User" && l.Operation == "Create" && l.Status == "Success"
+                && l.ResourceId == u.Id));
+    }
+
+    /// <summary>
+    /// In-tenant users SCIM may change or deactivate: not anyone who also holds a role with no tenant or in
+    /// another tenant (platform admins and multi-tenant users are never changed through one tenant's token).
+    /// Fails closed: an expired role still counts.
+    /// </summary>
+    private IQueryable<User> ManageableUsersInTenant(Guid tenantId) =>
+        UsersInTenant(tenantId).Where(u =>
+            !_context.UserRoles.Any(ur => ur.UserId == u.Id && (ur.TenantId == null || ur.TenantId != tenantId)));
+
+    /// <summary>
+    /// An email (or phone number) cannot be moved onto another account: magic-link and OTP login find the
+    /// account by it. The error never says whose it is.
+    /// </summary>
+    private async Task EnsureNoCollisionAsync(
+        User user, string? newEmail, string? newPhone, CancellationToken ct,
+        string? originalEmail = null, string? originalPhone = null)
+    {
+        originalEmail ??= user.Email;
+        originalPhone ??= user.PhoneNumber;
+
+        var email = newEmail?.Trim();
+        if (!string.IsNullOrEmpty(email) && !string.Equals(email, originalEmail?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            var lowered = email.ToLowerInvariant();
+            if (await _context.Users.AnyAsync(u => u.Id != user.Id && u.Email.ToLower() == lowered, ct))
+                throw new ScimUniquenessException("The email address is already in use");
+        }
+
+        var phone = newPhone?.Trim();
+        if (!string.IsNullOrEmpty(phone) && !string.Equals(phone, originalPhone?.Trim(), StringComparison.Ordinal))
+        {
+            if (await _context.Users.AnyAsync(u => u.Id != user.Id && u.PhoneNumber == phone, ct))
+                throw new ScimUniquenessException("The phone number is already in use");
+        }
+    }
 
     private ScimUserResource MapUserToScimResource(User user)
     {

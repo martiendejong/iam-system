@@ -31,7 +31,10 @@ public class ScimFilterTests
                      ("cat@other.org", "Cat", false)
                  })
         {
-            context.Users.Add(new User { Email = email, FirstName = first, LastName = "T", PasswordHash = "x", IsActive = active });
+            var user = new User { Email = email, FirstName = first, LastName = "T", PasswordHash = "x", IsActive = active };
+            context.Users.Add(user);
+            // SCIM only sees users of its own tenant (task 4699): a successful Create in the log puts them in scope.
+            context.ScimProvisioningLogs.Add(new ScimProvisioningLog { TenantId = TenantId, Operation = "Create", ResourceType = "User", ResourceId = user.Id, Status = "Success", CreatedAt = DateTime.UtcNow });
         }
         context.Groups.Add(new Group { Name = "Admins", TenantId = TenantId, IsActive = true });
         context.Groups.Add(new Group { Name = "Staff", TenantId = TenantId, IsActive = true });
