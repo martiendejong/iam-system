@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using IAM.Core;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -283,13 +284,53 @@ public class AuthService : IAuthService
                     .ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash);
 
-        if (storedToken == null || !storedToken.IsActive)
+        if (storedToken == null)
         {
-            return new AuthResult
+            return InvalidRefreshToken();
+        }
+
+        if (storedToken.IsRevoked)
+        {
+            // REPLAY DETECTION: a token spent by rotation is only ever held by the party that got
+            // its successor, so seeing it again means the secret was copied. Which of the two
+            // parties is the thief is unknowable here, so end every session of the user.
+            // Tokens revoked for other reasons (logout, password reset, deactivation) are not
+            // a theft signal - a stale browser may legitimately still send one of those.
+            if (await _context.IsRotatedAsync(storedToken))
             {
-                Success = false,
-                Error = "Invalid or expired refresh token"
-            };
+                var revoked = await _context.RevokeRefreshTokensAsync(storedToken.UserId);
+
+                _context.AuditLogs.Add(new AuditLog
+                {
+                    UserId = storedToken.UserId,
+                    Action = "RefreshTokenReplayDetected",
+                    Resource = "User",
+                    Details = JsonSerializer.Serialize(new { refreshTokenId = storedToken.Id, revokedTokens = revoked }),
+                    IpAddress = ipAddress,
+                    UserAgent = userAgent
+                });
+                await _context.SaveChangesAsync();
+
+                _logger.LogWarning(
+                    "Rotated refresh token replayed; all sessions of the user ended. UserId: {UserId}, " +
+                    "TokenId: {TokenId}, RevokedTokens: {RevokedTokens}, ReplayIP: {ReplayIp}, ReplayUA: {ReplayUA}",
+                    storedToken.UserId, storedToken.Id, revoked, ipAddress, userAgent);
+            }
+
+            return InvalidRefreshToken();
+        }
+
+        if (storedToken.IsExpired)
+        {
+            return InvalidRefreshToken();
+        }
+
+        // A deactivated or locked user must not keep minting access tokens. Same generic error as
+        // any other bad token (no account-state oracle), and nothing is written so a user who is
+        // reactivated later is not penalised for this attempt.
+        if (!storedToken.User.IsActive)
+        {
+            return InvalidRefreshToken();
         }
 
         // ANOMALY DETECTION: Check if device fingerprint changed
@@ -311,9 +352,6 @@ public class AuthService : IAuthService
                 storedToken.IpAddress, ipAddress,
                 storedToken.UserAgent, userAgent);
         }
-
-        // SINGLE-USE TOKENS: Revoke the old refresh token immediately
-        storedToken.RevokedAt = DateTime.UtcNow;
 
         // Resolve this organization's configured token lifetime (falls back to today's
         // defaults when the user has no tenant or the tenant has no Token Configuration)
@@ -343,6 +381,10 @@ public class AuthService : IAuthService
             UserAgent = userAgent ?? storedToken.UserAgent,    // Use new UA or fall back to original
             RememberMe = storedToken.RememberMe                // Carry the choice forward through rotation
         };
+
+        // SINGLE-USE TOKENS: Revoke the old refresh token immediately; Rotate also records
+        // that this revocation was a rotation, which is what replay detection above relies on.
+        RefreshTokenRevocation.Rotate(storedToken, newRefreshTokenEntity);
 
         _context.RefreshTokens.Add(newRefreshTokenEntity);
         await _context.SaveChangesAsync();
@@ -636,18 +678,19 @@ public class AuthService : IAuthService
         user.PasswordResetTokenExpiry = null;
 
         // Revoke all refresh tokens
-        var tokens = await _context.RefreshTokens
-            .Where(rt => rt.UserId == user.Id && rt.RevokedAt == null)
-            .ToListAsync();
-
-        foreach (var t in tokens)
-        {
-            t.RevokedAt = DateTime.UtcNow;
-        }
+        await _context.RevokeRefreshTokensAsync(user.Id);
 
         await _context.SaveChangesAsync();
         return true;
     }
+
+    // One message for every way a refresh token can be unusable (unknown, revoked, rotated,
+    // expired, owner inactive) so the response never reveals which one it was.
+    private static AuthResult InvalidRefreshToken() => new()
+    {
+        Success = false,
+        Error = "Invalid or expired refresh token"
+    };
 
     private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null)
     {
