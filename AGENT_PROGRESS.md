@@ -535,5 +535,7 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
-## 2026-10-02 - task 4704 (in progress)
-Plan: SecretsVaultController enforces SuperAdmin or tenant admin of the secret tenant on all 8 actions (SecretsAccessResolver, UserRoles based), list filtered, global secrets SuperAdmin only, idp-client-secret-* entries locked against changes.
+## 2026-10-02 - task 4704
+Done: PR #158 - all 8 /api/secrets actions need SuperAdmin or an administrator (TenantAdmin/BuildingOwner/BuildingManager UserRoles row) of the secret's own tenant (SecretsAccessResolver; privilege checked before lookup); global secrets are SuperAdmin only; list is filtered to manageable secrets; create for a foreign/global tenant is refused; idp-client-secret-* entries cannot be updated, rotated or deleted (or created/renamed to) through the API; the service is untouched so SocialAuthService and SecretRotationWorker keep working.
+Verified: build clean; 19 new tests pass (5 guard mutations each fail them); full IAM.API.Tests 598 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; admin-ui is the only client (user JWT) and needs no change; API keys and service accounts are refused on purpose.
