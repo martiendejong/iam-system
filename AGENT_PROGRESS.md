@@ -535,5 +535,7 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
-## 2026-10-02 - task 4705 (in progress)
-Plan: RiskAssessmentController - thresholds and dashboard SuperAdmin/SecurityAdmin only; scores, devices and assess only for the caller own user id (from the token) unless platform admin; threshold validation rejects values that can never trigger.
+## 2026-10-02 - task 4705
+Done: PR #161 - risk thresholds (GET/GET id/POST/DELETE) and the dashboard need SuperAdmin or SecurityAdmin; scores, trusted devices (list/add/remove) and manual assess only work for the caller's own user id (taken from the token, omitted = own, another id = 403) unless platform admin; device, service-account and API-key tokens are not users (403); threshold validation: 0 <= Low < Medium < High < Block, Block 1-100, RequireMfaAbove 0-99 and below Block.
+Verified: build clean; 33 new tests pass (4 of 5 guard mutations fail them; the 5th is equivalent because the Block ordering already implies the MFA cap); full IAM.API.Tests 612 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; AuthService login-time evaluation untouched and its tests still pass.
+Left: deploy is Martien's call; existing stored thresholds that violate the new rules are not changed (check the live RiskThresholds table read-only); admin-ui riskApi sends userId as before and needs no change.
