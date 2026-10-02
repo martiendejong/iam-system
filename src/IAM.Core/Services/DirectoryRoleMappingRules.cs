@@ -20,6 +20,10 @@ public enum DirectoryRoleProblem
 /// </summary>
 public static class DirectoryRoleMappingRules
 {
+    // Role claims carry the role NAME only, so a name that unlocks an [Authorize(Roles = ...)] endpoint unlocks it
+    // platform-wide whatever tenant the UserRole row names. "TenantAdmin" is included for that reason: it gates
+    // the temporal-access grant endpoints, which take any tenant id from the body. Only the tenant roles
+    // (BuildingOwner, BuildingManager) are left grantable; a test keeps this set in step with the API's attributes.
     public static readonly IReadOnlySet<string> PlatformRoleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "SuperAdmin",
@@ -27,7 +31,15 @@ public static class DirectoryRoleMappingRules
         "SecurityAdmin",
         "ComplianceOfficer",
         "EmergencyAccess",
+        "TenantAdmin",
         "Admin",
+    };
+
+    /// <summary>The roles the API authorizes on that a directory group may still be mapped to: the tenant's own roles.</summary>
+    public static readonly IReadOnlySet<string> GrantableTenantRoleNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "BuildingOwner",
+        "BuildingManager",
     };
 
     public static DirectoryRoleProblem Check(Role? role, Guid tenantId)

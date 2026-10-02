@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using IAM.API.Controllers;
+using IAM.API.Tests.Services;
 using IAM.Core;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -280,17 +281,31 @@ public class RefreshTokenSessionEndingTests
     public async Task DirectorySync_DisablingMissingUsers_RevokesOnlyTheirRefreshTokens()
     {
         var context = CreateContext();
-        var sync = new DirectorySyncService(context, NullLogger<DirectorySyncService>.Instance);
+        var vaultConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["SecretsVault:MasterKey"] = Convert.ToBase64String(new byte[32]) })
+            .Build();
+        var sync = new DirectorySyncService(
+            context, NullLogger<DirectorySyncService>.Instance, new FakeLdapDirectoryClient(),
+            new SecretsVaultService(context, vaultConfig, NullLogger<SecretsVaultService>.Instance),
+            new FakeHostResolver(), vaultConfig);
+
+        // Task 4698: disable-missing only reaches LDAP-managed users that are members of the syncing tenant.
+        var tenantId = Guid.NewGuid();
+        var memberRole = new Role { Id = Guid.NewGuid(), Name = "Resident", Permissions = "[]" };
+        context.Roles.Add(memberRole);
         var removed = await AddUserAsync(context, "ldap-removed", passwordHash: "LDAP_MANAGED");
         var stillListed = await AddUserAsync(context, "ldap-listed", passwordHash: "LDAP_MANAGED");
         var local = await AddUserAsync(context, "local-user"); // not directory-managed
+        foreach (var member in new[] { removed, stillListed, local })
+            context.UserRoles.Add(new UserRole { UserId = member.Id, RoleId = memberRole.Id, TenantId = tenantId, GrantedAt = DateTime.UtcNow });
+        await context.SaveChangesAsync();
         await AddTokenAsync(context, removed.Id);
         await AddTokenAsync(context, removed.Id);
         await AddTokenAsync(context, stillListed.Id);
         await AddTokenAsync(context, local.Id);
 
         var disabled = await sync.DisableMissingUsersAsync(
-            Guid.NewGuid(), new HashSet<string> { stillListed.Email }, CancellationToken.None);
+            tenantId, new HashSet<string> { stillListed.Email }, CancellationToken.None);
 
         Assert.Equal(1, disabled);
         Assert.False((await context.Users.FindAsync(removed.Id))!.IsActive);

@@ -1,8 +1,10 @@
+using System.Reflection;
 using System.Text.Json;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using IAM.Infrastructure.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -475,6 +477,51 @@ public class DirectorySyncTenantScopeTests
             GroupToRoleMapping = JsonSerializer.Serialize(new Dictionary<string, Guid> { ["cn=g"] = ok.Id })
         });
         Assert.NotEqual(Guid.Empty, created.Id);
+    }
+
+    [Fact]
+    public void RoleMappingRules_RefuseEveryRoleTheApiAuthorizesOn_ExceptTheTenantRoles()
+    {
+        // A role name that unlocks an [Authorize(Roles = ...)] endpoint unlocks it platform-wide (claims carry the
+        // name only). When someone adds a new role to an attribute this fails until it is classified in
+        // DirectoryRoleMappingRules (platform-wide -> PlatformRoleNames, tenant role -> GrantableTenantRoleNames).
+        var authorizedRoles = typeof(Program).Assembly.GetTypes()
+            .SelectMany(t => new MemberInfo[] { t }.Concat(t.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)))
+            .SelectMany(m => m.GetCustomAttributes<AuthorizeAttribute>(inherit: false))
+            .Where(a => !string.IsNullOrWhiteSpace(a.Roles))
+            .SelectMany(a => a.Roles!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.NotEmpty(authorizedRoles);
+        var unclassified = authorizedRoles
+            .Where(r => !DirectoryRoleMappingRules.PlatformRoleNames.Contains(r)
+                        && !DirectoryRoleMappingRules.GrantableTenantRoleNames.Contains(r))
+            .ToList();
+        Assert.True(unclassified.Count == 0,
+            "Roles used in [Authorize(Roles)] but not classified for directory sync: " + string.Join(", ", unclassified));
+
+        var tenant = Guid.NewGuid();
+        foreach (var name in authorizedRoles.Except(DirectoryRoleMappingRules.GrantableTenantRoleNames, StringComparer.OrdinalIgnoreCase))
+        {
+            Assert.Equal(DirectoryRoleProblem.PlatformRole,
+                DirectoryRoleMappingRules.Check(new Role { Name = name, TenantId = tenant }, tenant));
+        }
+    }
+
+    [Fact]
+    public async Task CreateConfig_RejectsAMappingToACustomTenantAdminRole()
+    {
+        var rig = CreateRig();
+        var a = AddTenant(rig.Db);
+        var tenantAdmin = AddRole(rig.Db, "TenantAdmin", tenantId: a.Id);
+
+        await Assert.ThrowsAsync<DirectorySyncValidationException>(() => rig.Service.CreateConfigAsync(
+            new DirectorySyncConfig
+            {
+                TenantId = a.Id, Name = "x", LdapUrl = Ldaps, AttributeMapping = "{}",
+                GroupToRoleMapping = JsonSerializer.Serialize(new Dictionary<string, Guid> { ["cn=g"] = tenantAdmin.Id })
+            }, callerIsSuperAdmin: true));
     }
 
     [Fact]
