@@ -35,6 +35,22 @@ public interface ISocialAuthService
     Task<List<IdentityProvider>> GetIdentityProvidersAsync(Guid? tenantId = null);
 
     /// <summary>
+    /// Admin listing (task 4739): full configuration, never the client secret. A global admin sees every
+    /// provider (optionally one tenant's plus platform-wide ones); a tenant admin sees their administered
+    /// tenants' providers plus platform-wide ones, and asking for another tenant is refused.
+    /// </summary>
+    /// <exception cref="IdentityProviderAccessDeniedException">The actor is not an admin, or asked for a tenant they do not administer.</exception>
+    Task<List<IdentityProvider>> GetIdentityProvidersForAdminAsync(Guid? tenantId, IdentityProviderActor actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Admin view of one provider (task 4739); queries one row. Authorization runs before the lookup for
+    /// callers with no admin authority at all, and after it for the row's own tenant.
+    /// </summary>
+    /// <returns>Null when the provider does not exist.</returns>
+    /// <exception cref="IdentityProviderAccessDeniedException">The actor may not read this provider.</exception>
+    Task<IdentityProvider?> GetIdentityProviderForAdminAsync(Guid id, IdentityProviderActor actor, CancellationToken ct = default);
+
+    /// <summary>
     /// Create a new identity provider configuration. Only a global admin (SuperAdmin/SystemAdmin)
     /// may create a platform-wide provider; a tenant admin may create one for their own tenant.
     /// </summary>

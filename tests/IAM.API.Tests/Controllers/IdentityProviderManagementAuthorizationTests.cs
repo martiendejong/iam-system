@@ -753,10 +753,11 @@ public class IdentityProviderManagementAuthorizationTests : IClassFixture<IAMTes
     }
 
     [Fact]
-    public async Task AdminListing_StillWorksForAnyAuthenticatedUser()
+    public async Task AdminListing_IsForbiddenForAPlainUser()
     {
+        // Task 4739: reading provider configuration is admin-only (was open to any authenticated user).
         var response = await ClientAs(Guid.NewGuid(), new[] { "User" }).GetAsync("/api/identity-providers");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 }

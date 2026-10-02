@@ -53,12 +53,25 @@ public class IdentityProvidersController : ControllerBase
         StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
 
     /// <summary>
-    /// List all identity providers, optionally filtered by tenant
+    /// List identity providers, optionally filtered by tenant. SuperAdmin/SystemAdmin see all; a tenant
+    /// admin sees their tenants' providers plus platform-wide ones (read-only); everyone else gets 403.
     /// </summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] Guid? tenantId = null)
+    public async Task<IActionResult> GetAll([FromQuery] Guid? tenantId = null, CancellationToken ct = default)
     {
-        var providers = await _socialAuthService.GetIdentityProvidersAsync(tenantId);
+        var actor = TryGetActor();
+        if (actor == null)
+            return Unauthorized();
+
+        List<IdentityProvider> providers;
+        try
+        {
+            providers = await _socialAuthService.GetIdentityProvidersForAdminAsync(tenantId, actor, ct);
+        }
+        catch (IdentityProviderAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
 
         return Ok(providers.Select(p => new
         {
@@ -104,13 +117,25 @@ public class IdentityProvidersController : ControllerBase
     }
 
     /// <summary>
-    /// Get an identity provider by ID
+    /// Get an identity provider by ID. Same audience as the list: admins, or a tenant admin for their
+    /// own tenant's or a platform-wide provider.
     /// </summary>
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetById(Guid id)
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct = default)
     {
-        var providers = await _socialAuthService.GetIdentityProvidersAsync();
-        var provider = providers.FirstOrDefault(p => p.Id == id);
+        var actor = TryGetActor();
+        if (actor == null)
+            return Unauthorized();
+
+        IdentityProvider? provider;
+        try
+        {
+            provider = await _socialAuthService.GetIdentityProviderForAdminAsync(id, actor, ct);
+        }
+        catch (IdentityProviderAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
 
         if (provider == null)
         {
