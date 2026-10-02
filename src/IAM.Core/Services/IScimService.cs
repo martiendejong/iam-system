@@ -34,6 +34,17 @@ public interface IScimService
     Task<List<ScimProvisioningLog>> GetProvisioningLogsAsync(Guid tenantId, int skip = 0, int take = 50, CancellationToken ct = default);
 }
 
+/// <summary>
+/// An email address or phone number is already used by another account (task 4699); controllers answer 409
+/// without naming the other account.
+/// </summary>
+public class ScimUniquenessException : InvalidOperationException
+{
+    public ScimUniquenessException(string message) : base(message)
+    {
+    }
+}
+
 // ---- SCIM DTO models ----
 
 public class ScimUserResource
