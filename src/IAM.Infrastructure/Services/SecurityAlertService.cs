@@ -448,6 +448,8 @@ public class SecurityAlertService : ISecurityAlertService
                 case "lock_account":
                     user.IsActive = false;
                     user.UpdatedAt = DateTime.UtcNow;
+                    // Locking an account that keeps refreshing its tokens locks nothing.
+                    await _context.RevokeRefreshTokensAsync(userId, ct);
                     _logger.LogWarning("Auto-response: Account locked for user {UserId}", userId);
                     break;
 

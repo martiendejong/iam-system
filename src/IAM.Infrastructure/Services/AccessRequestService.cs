@@ -243,10 +243,20 @@ public class AccessRequestService : IAccessRequestService
             .FirstOrDefault()
             ?? throw new InvalidOperationException("No pending approval steps found");
 
-        // Verify the approver is authorized for this step
-        await VerifyApproverAuthorizationAsync(currentStep, approverId, ct);
+        // Verify the approver is authorized for this step (never the requester)
+        await VerifyApproverAuthorizationAsync(request, currentStep, approverId, ct);
+
+        // Each person counts once per step
+        if (await HasAlreadyApprovedAsync(currentStep, approverId, ct))
+            throw new InvalidOperationException("You have already approved this step");
 
         // Record the approval
+        _context.ApprovalVotes.Add(new ApprovalVote
+        {
+            ApprovalStepId = currentStep.Id,
+            UserId = approverId,
+            Comment = comment
+        });
         currentStep.ApprovalsReceived++;
         currentStep.DecidedByUserId = approverId;
         currentStep.Comment = comment;
@@ -298,7 +308,17 @@ public class AccessRequestService : IAccessRequestService
             })
         });
 
-        await _context.SaveChangesAsync(ct);
+        try
+        {
+            await _context.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost a race with a concurrent identical approval: the unique (step, user) index held.
+            if (await VoteExistsAsync(currentStep.Id, approverId, ct))
+                throw new InvalidOperationException("You have already approved this step");
+            throw;
+        }
 
         // Notify requester if fully approved
         if (request.Status == AccessRequestStatus.Approved)
@@ -326,8 +346,8 @@ public class AccessRequestService : IAccessRequestService
             .FirstOrDefault()
             ?? throw new InvalidOperationException("No pending approval steps found");
 
-        // Verify the approver is authorized for this step
-        await VerifyApproverAuthorizationAsync(currentStep, approverId, ct);
+        // Verify the approver is authorized for this step (never the requester)
+        await VerifyApproverAuthorizationAsync(request, currentStep, approverId, ct);
 
         // Denial at any step immediately denies the entire request
         currentStep.Status = ApprovalStepStatus.Denied;
@@ -575,8 +595,13 @@ public class AccessRequestService : IAccessRequestService
         }
     }
 
-    private async Task VerifyApproverAuthorizationAsync(ApprovalStep step, Guid approverId, CancellationToken ct)
+    private async Task VerifyApproverAuthorizationAsync(AccessRequest request, ApprovalStep step, Guid approverId, CancellationToken ct)
     {
+        // Segregation of duties: checked before any role/SuperAdmin/named-approver shortcut,
+        // and shared by approve and deny.
+        if (request.RequesterId == approverId)
+            throw new InvalidOperationException("You cannot approve or deny your own access request");
+
         if (step.ApproverId.HasValue && step.ApproverId.Value == approverId)
             return;
 
@@ -599,6 +624,19 @@ public class AccessRequestService : IAccessRequestService
 
         throw new InvalidOperationException("You are not authorized to approve or deny this step");
     }
+
+    private async Task<bool> HasAlreadyApprovedAsync(ApprovalStep step, Guid approverId, CancellationToken ct)
+    {
+        if (await VoteExistsAsync(step.Id, approverId, ct))
+            return true;
+
+        // In-flight steps from before per-person votes existed: their earlier approvals are only a
+        // counter, but the last approver is still recorded and must not be counted a second time.
+        return step.ApprovalsReceived > 0 && step.DecidedByUserId == approverId;
+    }
+
+    private Task<bool> VoteExistsAsync(Guid stepId, Guid approverId, CancellationToken ct) =>
+        _context.ApprovalVotes.AnyAsync(v => v.ApprovalStepId == stepId && v.UserId == approverId, ct);
 
     private async Task NotifyApproversAsync(AccessRequest request, CancellationToken ct)
     {

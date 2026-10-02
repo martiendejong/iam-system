@@ -535,6 +535,21 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
+## 2026-10-02 - task 4712
+Done: PR #153 - delegations follow the caller's authority in DelegationService: create only as yourself (or a SuperAdmin/SystemAdmin for someone) and only for permissions the delegator holds in the tenant; wildcard grants always need approval; approve needs a different admin of the tenant (never delegator/delegate); revoke = delegator, delegate or admin; delegation reads and effective-permissions scoped to the caller; SoD constraint create/update/delete = SuperAdmin/SystemAdmin only. Expired roles no longer count as held.
+Verified: IAM.API.Tests 664 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 85 new tests (41 fail on the old code); 13 mutations of the checks each fail at least 1 test.
+Left: deploy is Martien's call; wildcard-forces-approval and TenantAdmin-only tenant authority are my assumptions (one line each to change); SoD violation resolve and SoD reads are still open, filed as task 4741.
+
+## 2026-10-02 - task 4709
+Done: PR #152 - refresh refuses inactive users (same generic error); SCIM delete/PUT/PATCH, directory-sync disable and security-alert lock_account now revoke refresh tokens, via one shared helper (RefreshTokenRevocation) that merge, erasure, admin deactivate and password reset also use; admin password change revokes; replay of a rotated token revokes all of the user's active tokens (warning + audit row). Rotation is marked by successor.CreatedAt == predecessor.RevokedAt, so no migration.
+Verified: build clean; 23 new tests (RefreshTokenSessionEndingTests) pass; each fix mutation-checked (disabling it fails its test); full IAM.API.Tests 602 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; access tokens already issued live to their expiry (5 min default). Follow-ups: portal self-service password change 4748, directory sync disables other tenants' LDAP users 4749.
+
+## 2026-10-02 - task 4711
+Done: access-request approvals count distinct approvers (new ApprovalVotes table, unique per step+user, additive migration 20261002120000; ApprovalsReceived kept and still incremented, in-flight steps keep their count and their last approver cannot double-count) and the requester can neither approve nor deny their own request (checked first, before role/SuperAdmin/named-approver).
+Verified: build clean; 14 new AccessRequestApprovalTests pass; disabling the self-check or the duplicate-check fails 7 / 3 of them; migration SQL scripted (CREATE TABLE + 2 indexes only); full IAM.API.Tests 593 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: migration must be applied before the IAM deploy (Martien call); the earlier 20260926120000 migration has no [Migration] attribute so EF does not discover it - pre-existing, not touched.
+
 ## 2026-10-02 - task 4710
 Done: SCIM user/group filters parse once with no recursion; unparseable, unsupported or over-limit (512 chars, 10 and-terms) filters throw ScimFilterException -> 400 invalidFilter instead of overflowing the stack or returning everyone.
 Verified: build clean; 35 new ScimFilterTests pass (bad-filter cases crash the test host with a stack overflow on develop); full IAM.API.Tests 614 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
