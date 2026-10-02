@@ -627,25 +627,60 @@ public class ScimService : IScimService
         }
     }
 
+    private const int MaxFilterLength = 512;
+    private const int MaxFilterTerms = 10;
+
+    private static readonly Regex FilterTermRegex = new(
+        @"^(\w+(?:\.\w+)?)\s+(eq|co|sw|pr|gt|lt|ge|le)\s*(?:""([^""]*)""|(\S+))?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Splits a SCIM filter into its single "attribute operator value" terms. A filter that is one
+    /// term is used as is; otherwise it is split on " and " exactly once (no recursion), and every
+    /// part must itself be a term. Anything else is rejected, never ignored.
+    /// </summary>
+    private static List<Match> ParseFilterTerms(string filter)
+    {
+        var trimmed = filter.Trim();
+        if (trimmed.Length > MaxFilterLength)
+            throw new ScimFilterException($"Filter is longer than {MaxFilterLength} characters");
+
+        var whole = FilterTermRegex.Match(trimmed);
+        if (whole.Success)
+            return new List<Match> { whole };
+
+        var parts = Regex.Split(trimmed, @"\s+and\s+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        if (parts.Length < 2)
+            throw new ScimFilterException("Filter is not a valid 'attribute operator value' expression");
+        if (parts.Length > MaxFilterTerms)
+            throw new ScimFilterException($"Filter has more than {MaxFilterTerms} 'and' terms");
+
+        var terms = new List<Match>(parts.Length);
+        foreach (var part in parts)
+        {
+            var m = FilterTermRegex.Match(part.Trim());
+            if (!m.Success)
+                throw new ScimFilterException("Filter contains a term that is not a valid 'attribute operator value' expression");
+            terms.Add(m);
+        }
+        return terms;
+    }
+
+    private static ScimFilterException UnsupportedFilter(string attribute, string op, string? why = null) =>
+        new($"Filter '{attribute} {op}' is not supported{(why == null ? "" : ": " + why)}");
+
     private IQueryable<User> ApplyUserFilter(IQueryable<User> query, string filter)
     {
-        // Parse SCIM filter expressions: attribute operator value
-        // Supported operators: eq, co, sw, pr, gt, lt
-        var match = Regex.Match(filter.Trim(),
-            @"^(\w+(?:\.\w+)?)\s+(eq|co|sw|pr|gt|lt|ge|le)\s*(?:""([^""]*)""|(\S+))?$",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
+        // Supported operators: eq, co, sw, pr, gt, lt, ge, le (per attribute, see ApplyUserFilterTerm)
+        foreach (var term in ParseFilterTerms(filter))
         {
-            // Try compound filter with "and"
-            var andParts = Regex.Split(filter, @"\s+and\s+", RegexOptions.IgnoreCase);
-            foreach (var part in andParts)
-            {
-                query = ApplyUserFilter(query, part.Trim());
-            }
-            return query;
+            query = ApplyUserFilterTerm(query, term);
         }
+        return query;
+    }
 
+    private static IQueryable<User> ApplyUserFilterTerm(IQueryable<User> query, Match match)
+    {
         var attribute = match.Groups[1].Value.ToLowerInvariant();
         var op = match.Groups[2].Value.ToLowerInvariant();
         var value = match.Groups[3].Success ? match.Groups[3].Value : match.Groups[4].Value;
@@ -675,29 +710,31 @@ public class ScimService : IScimService
 
             ("active", "eq") => bool.TryParse(value, out var isActive)
                 ? query.Where(u => u.IsActive == isActive)
-                : query,
+                : throw UnsupportedFilter(attribute, op, "value must be true or false"),
 
             ("externalid", "eq") => query, // ExternalId not stored on User, return all
-            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(u => u.Id == id) : query,
+            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(u => u.Id == id) : throw UnsupportedFilter(attribute, op, "value must be a GUID"),
 
-            ("meta.created", "gt") => DateTime.TryParse(value, out var gt) ? query.Where(u => u.CreatedAt > gt) : query,
-            ("meta.created", "lt") => DateTime.TryParse(value, out var lt) ? query.Where(u => u.CreatedAt < lt) : query,
-            ("meta.created", "ge") => DateTime.TryParse(value, out var ge) ? query.Where(u => u.CreatedAt >= ge) : query,
-            ("meta.created", "le") => DateTime.TryParse(value, out var le) ? query.Where(u => u.CreatedAt <= le) : query,
+            ("meta.created", "gt") => DateTime.TryParse(value, out var gt) ? query.Where(u => u.CreatedAt > gt) : throw UnsupportedFilter(attribute, op, "value must be a date"),
+            ("meta.created", "lt") => DateTime.TryParse(value, out var lt) ? query.Where(u => u.CreatedAt < lt) : throw UnsupportedFilter(attribute, op, "value must be a date"),
+            ("meta.created", "ge") => DateTime.TryParse(value, out var ge) ? query.Where(u => u.CreatedAt >= ge) : throw UnsupportedFilter(attribute, op, "value must be a date"),
+            ("meta.created", "le") => DateTime.TryParse(value, out var le) ? query.Where(u => u.CreatedAt <= le) : throw UnsupportedFilter(attribute, op, "value must be a date"),
 
-            _ => query // Unknown filter, return unfiltered
+            _ => throw UnsupportedFilter(attribute, op) // never fall back to an unfiltered list
         };
     }
 
     private IQueryable<Group> ApplyGroupFilter(IQueryable<Group> query, string filter)
     {
-        var match = Regex.Match(filter.Trim(),
-            @"^(\w+(?:\.\w+)?)\s+(eq|co|sw|pr)\s*(?:""([^""]*)""|(\S+))?$",
-            RegexOptions.IgnoreCase);
+        foreach (var term in ParseFilterTerms(filter))
+        {
+            query = ApplyGroupFilterTerm(query, term);
+        }
+        return query;
+    }
 
-        if (!match.Success)
-            return query;
-
+    private static IQueryable<Group> ApplyGroupFilterTerm(IQueryable<Group> query, Match match)
+    {
         var attribute = match.Groups[1].Value.ToLowerInvariant();
         var op = match.Groups[2].Value.ToLowerInvariant();
         var value = match.Groups[3].Success ? match.Groups[3].Value : match.Groups[4].Value;
@@ -707,8 +744,8 @@ public class ScimService : IScimService
             ("displayname", "eq") => query.Where(g => g.Name == value),
             ("displayname", "co") => query.Where(g => g.Name.Contains(value)),
             ("displayname", "sw") => query.Where(g => g.Name.StartsWith(value)),
-            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(g => g.Id == id) : query,
-            _ => query
+            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(g => g.Id == id) : throw UnsupportedFilter(attribute, op, "value must be a GUID"),
+            _ => throw UnsupportedFilter(attribute, op)
         };
     }
 
