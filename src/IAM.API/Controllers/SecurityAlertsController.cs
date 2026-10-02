@@ -221,7 +221,7 @@ public class SecurityAlertsController : ControllerBase
     [HttpPost("{id:guid}/acknowledge")]
     public async Task<ActionResult<SecurityAlert>> AcknowledgeAlert(Guid id, CancellationToken ct = default)
     {
-        var userIdClaim = User.FindFirst("sub")?.Value;
+        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
         if (!Guid.TryParse(userIdClaim, out var userId))
             return Unauthorized("User ID not found in token");
 

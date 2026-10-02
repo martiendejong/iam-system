@@ -535,5 +535,7 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
-## 2026-10-02 - task 4703 (in progress)
-Plan: SecurityAlertsController needs SuperAdmin/SecurityAdmin; SIEM responses drop AuthConfig (write-only, kept on update); webhook/Slack/SIEM URLs checked with IWebhookUrlGuard at save and send; auto-response rules SuperAdmin only.
+## 2026-10-02 - task 4703
+Done: PR #155 - all 13 /api/securityalerts actions need SuperAdmin or SecurityAdmin; SIEM responses are a DTO without AuthConfig (hasAuthConfig + masked, update keeps the stored credential when blank or masked); rule webhook/Slack targets and SIEM URLs go through IWebhookUrlGuard at save and at send time; rules with an automatic response are SuperAdmin-only; acknowledge reads the user id from NameIdentifier or sub.
+Verified: build clean; 32 new tests pass (5 guard mutations each fail them); full IAM.API.Tests 611 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; admin-ui change not built (no node_modules in the worktree).
+Left: deploy is Martien's call; SIEM credentials already stored stay plain JSON in the DB (vault move out of scope); SecurityAdmin editing a rule that has an auto-response and omitting it clears it.
