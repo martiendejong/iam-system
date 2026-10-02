@@ -220,10 +220,20 @@ public class SocialAuthService : ISocialAuthService
         else
         {
             // No linked account - try to find user by email or auto-create
-            var existingUser = await _context.Users
-                .Include(u => u.UserRoles)
-                    .ThenInclude(ur => ur.Role)
-                .FirstOrDefaultAsync(u => u.Email == externalUser.Email);
+            User? existingUser = null;
+            if (!string.IsNullOrEmpty(externalUser.Email))
+            {
+                existingUser = await _context.Users
+                    .Include(u => u.UserRoles)
+                        .ThenInclude(ur => ur.Role)
+                    .FirstOrDefaultAsync(u => u.Email == externalUser.Email);
+
+                // Task 4707: an e-mail address the provider does not vouch for proves nothing (a Microsoft
+                // mail/userPrincipalName can be set freely in an attacker's own Entra tenant), so it must never
+                // link to or sign in as an existing account. Refused before anything is written.
+                if (existingUser != null && !externalUser.EmailVerified)
+                    return RefuseUnverifiedEmailMatch(provider);
+            }
 
             if (existingUser == null)
             {
@@ -243,7 +253,7 @@ public class SocialAuthService : ISocialAuthService
                     PasswordHash = BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString(), workFactor: 12),
                     FirstName = externalUser.FirstName ?? "",
                     LastName = externalUser.LastName ?? "",
-                    EmailConfirmed = true, // Trust the email from the provider
+                    EmailConfirmed = externalUser.EmailVerified, // only when the provider verified the address
                     IsActive = true
                 };
 
@@ -335,6 +345,30 @@ public class SocialAuthService : ISocialAuthService
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
+        };
+    }
+
+    /// <summary>
+    /// Refusal for a social login whose e-mail matches an existing account but is not verified by the provider
+    /// (always the case for Microsoft, which gives no verified signal). The user can still sign in with their
+    /// existing method and link the provider explicitly from their account settings (LinkAccountAsync).
+    /// </summary>
+    private AuthResult RefuseUnverifiedEmailMatch(IdentityProvider provider)
+    {
+        _logger?.LogWarning(
+            "Social login via identity provider {ProviderId} ({ProviderName}) refused: the e-mail matches an existing " +
+            "account but the provider does not verify it",
+            provider.Id, provider.Name);
+
+        var name = provider.Type.ToString();
+        return new AuthResult
+        {
+            Success = false,
+            Error = provider.Type == IdentityProviderType.Microsoft
+                ? "An account with this e-mail address already exists. Microsoft sign-in cannot be matched to an existing " +
+                  "account by e-mail address: sign in with your existing method and link your Microsoft account from your account settings."
+                : $"An account with this e-mail address already exists, but {name} has not verified the address. Verify it with " +
+                  $"{name}, or sign in with your existing method and link your {name} account from your account settings."
         };
     }
 
@@ -762,16 +796,43 @@ public class SocialAuthService : ISocialAuthService
     private ExternalUserProfile ParseGoogleProfile(JsonElement data, IdentityProvider provider)
     {
         var mapping = GetAttributeMapping(provider);
+        var email = GetMappedValue(data, mapping, "email", "email");
 
         return new ExternalUserProfile
         {
             ProviderUserId = GetMappedValue(data, mapping, "sub", "sub") ?? "",
-            Email = GetMappedValue(data, mapping, "email", "email"),
+            Email = email,
+            // Read from the provider response, never defaulted: missing or false means unverified.
+            EmailVerified = !string.IsNullOrEmpty(email) && !HasCustomEmailMapping(mapping) && ReadBool(data, "email_verified"),
             DisplayName = GetMappedValue(data, mapping, "displayName", "name"),
             FirstName = GetMappedValue(data, mapping, "firstName", "given_name"),
             LastName = GetMappedValue(data, mapping, "lastName", "family_name")
         };
     }
+
+    /// <summary>
+    /// A JSON boolean, or the string "true"/"false" some providers use. Missing or anything else is false.
+    /// </summary>
+    private static bool ReadBool(JsonElement data, string name)
+    {
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty(name, out var value))
+            return false;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.String => string.Equals(value.GetString(), "true", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// The provider's verified flag describes its standard e-mail claim; if an admin mapped the e-mail
+    /// attribute to some other claim, nothing vouches for that value.
+    /// </summary>
+    private static bool HasCustomEmailMapping(Dictionary<string, string> mapping) =>
+        mapping.TryGetValue("email", out var mapped) && !string.IsNullOrWhiteSpace(mapped) &&
+        !string.Equals(mapped, "email", StringComparison.Ordinal);
 
     private ExternalUserProfile ParseMicrosoftProfile(JsonElement data, IdentityProvider provider)
     {
@@ -782,6 +843,9 @@ public class SocialAuthService : ISocialAuthService
             ProviderUserId = GetMappedValue(data, mapping, "sub", "id") ?? "",
             Email = GetMappedValue(data, mapping, "email", "mail")
                     ?? GetMappedValue(data, mapping, "email", "userPrincipalName"),
+            // Microsoft Graph gives no verified-e-mail signal, and mail/userPrincipalName can be set freely in an
+            // attacker's own Entra tenant (IAM uses the multi-tenant "common" endpoint): never verified.
+            EmailVerified = false,
             DisplayName = GetMappedValue(data, mapping, "displayName", "displayName"),
             FirstName = GetMappedValue(data, mapping, "firstName", "givenName"),
             LastName = GetMappedValue(data, mapping, "lastName", "surname")
@@ -795,12 +859,19 @@ public class SocialAuthService : ISocialAuthService
         var displayName = GetMappedValue(data, mapping, "displayName", "name")
                           ?? GetMappedValue(data, mapping, "displayName", "login");
 
-        // GitHub may not return email in the user endpoint; fetch from /user/emails
+        // The public profile e-mail carries no verified flag; /user/emails does. The primary address and its
+        // verified flag decide; without a primary entry the profile e-mail is used but counts as unverified.
         var email = GetMappedValue(data, mapping, "email", "email");
-        if (string.IsNullOrEmpty(email))
+        var emailVerified = false;
+        var primary = await FetchGitHubPrimaryEmailAsync(accessToken);
+        if (!string.IsNullOrEmpty(primary.Email))
         {
-            email = await FetchGitHubPrimaryEmailAsync(accessToken);
+            email = primary.Email;
+            emailVerified = primary.Verified;
         }
+
+        if (HasCustomEmailMapping(mapping))
+            emailVerified = false;
 
         // GitHub doesn't have separate first/last name fields
         var nameParts = (displayName ?? "").Split(' ', 2);
@@ -809,13 +880,14 @@ public class SocialAuthService : ISocialAuthService
         {
             ProviderUserId = data.TryGetProperty("id", out var idProp) ? idProp.ToString() : "",
             Email = email,
+            EmailVerified = emailVerified && !string.IsNullOrEmpty(email),
             DisplayName = displayName,
             FirstName = nameParts.Length > 0 ? nameParts[0] : "",
             LastName = nameParts.Length > 1 ? nameParts[1] : ""
         };
     }
 
-    private async Task<string?> FetchGitHubPrimaryEmailAsync(string accessToken)
+    private async Task<(string? Email, bool Verified)> FetchGitHubPrimaryEmailAsync(string accessToken)
     {
         var client = _httpClientFactory.CreateClient("SocialAuth");
         var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user/emails");
@@ -824,23 +896,26 @@ public class SocialAuthService : ISocialAuthService
 
         var response = await client.SendAsync(request);
         if (!response.IsSuccessStatusCode)
-            return null;
+            return (null, false);
 
         var responseJson = await response.Content.ReadAsStringAsync();
         var emails = JsonSerializer.Deserialize<JsonElement>(responseJson);
 
         if (emails.ValueKind != JsonValueKind.Array)
-            return null;
+            return (null, false);
 
         foreach (var emailEntry in emails.EnumerateArray())
         {
-            if (emailEntry.TryGetProperty("primary", out var primaryProp) && primaryProp.GetBoolean())
+            if (emailEntry.ValueKind == JsonValueKind.Object && ReadBool(emailEntry, "primary"))
             {
-                return emailEntry.TryGetProperty("email", out var emailProp) ? emailProp.GetString() : null;
+                var address = emailEntry.TryGetProperty("email", out var emailProp) && emailProp.ValueKind == JsonValueKind.String
+                    ? emailProp.GetString()
+                    : null;
+                return (address, ReadBool(emailEntry, "verified"));
             }
         }
 
-        return null;
+        return (null, false);
     }
 
     // Apple JWKS key cache (static so it survives across DI-scoped instances).
@@ -892,10 +967,20 @@ public class SocialAuthService : ISocialAuthService
 
             var principal = tokenHandler.ValidateToken(idToken, validationParams, out _);
 
+            // JwtSecurityTokenHandler maps sub/email to the long ClaimTypes names unless the process-wide inbound
+            // map was cleared, so accept both spellings.
+            string? ClaimValue(params string[] types) =>
+                principal.Claims.FirstOrDefault(c => types.Contains(c.Type))?.Value;
+
+            var email = ClaimValue("email", System.Security.Claims.ClaimTypes.Email);
+
             return new ExternalUserProfile
             {
-                ProviderUserId = principal.Claims.FirstOrDefault(c => c.Type == "sub")?.Value ?? "",
-                Email = principal.Claims.FirstOrDefault(c => c.Type == "email")?.Value,
+                ProviderUserId = ClaimValue("sub", System.Security.Claims.ClaimTypes.NameIdentifier) ?? "",
+                Email = email,
+                // Apple puts email_verified in the (signature-verified) id_token, as a bool or the string "true".
+                EmailVerified = !string.IsNullOrEmpty(email) &&
+                    string.Equals(ClaimValue("email_verified"), "true", StringComparison.OrdinalIgnoreCase),
                 DisplayName = null,
                 FirstName = null,
                 LastName = null
@@ -1045,6 +1130,9 @@ internal class ExternalUserProfile
 {
     public string ProviderUserId { get; set; } = "";
     public string? Email { get; set; }
+
+    /// <summary>True only when the provider itself says the e-mail address is verified (task 4707).</summary>
+    public bool EmailVerified { get; set; }
     public string? DisplayName { get; set; }
     public string? FirstName { get; set; }
     public string? LastName { get; set; }
