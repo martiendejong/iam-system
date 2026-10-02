@@ -164,8 +164,10 @@ public class InvitationService : IInvitationService
         Guid tenantId,
         Guid invitedByUserId,
         bool callerIsSuperAdmin,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool callerIsTenantOwner = false)
     {
+        var grantor = new TenantGrantor(callerIsSuperAdmin, callerIsSuperAdmin || callerIsTenantOwner);
         var result = new BulkInviteResult();
         var entryList = entries.ToList();
         result.TotalProcessed = entryList.Count;
@@ -222,16 +224,18 @@ public class InvitationService : IInvitationService
                     continue;
                 }
 
-                if (!callerIsSuperAdmin)
+                // The same grant rule as the single invitation and the member role change (task 4700).
+                var targetRole = tenantRoles.FirstOrDefault(r => r.Id == roleId);
+                if (targetRole != null)
                 {
-                    var targetRole = tenantRoles.FirstOrDefault(r => r.Id == roleId);
-                    if (targetRole != null && targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+                    var problem = TenantRoleGrantRules.Check(targetRole, tenantId, grantor);
+                    if (problem != RoleGrantProblem.None)
                     {
                         result.Errors.Add(new BulkInviteError
                         {
                             Row = i + 1,
                             Email = entry.Email,
-                            Error = "Only a SuperAdmin can grant the SuperAdmin role"
+                            Error = TenantRoleGrantRules.Describe(problem, targetRole.Name)
                         });
                         result.Failed++;
                         continue;
@@ -287,6 +291,24 @@ public class InvitationService : IInvitationService
             invitation.Status = "Expired";
             await _context.SaveChangesAsync(ct);
             return new InvitationAcceptResult { Success = false, Error = "Invitation has expired" };
+        }
+
+        // Acceptance cannot bypass the grant rule (task 4700): an invitation created before the rule existed (or by
+        // someone who has since lost the authority) must not hand out a platform-wide role. Platform-wide roles
+        // need a sender who is a SuperAdmin right now; a role of another tenant is never assigned.
+        var senderIsSuperAdmin = await _context.UserRoles.AnyAsync(ur =>
+            ur.UserId == invitation.InvitedByUserId
+            && ur.Role.Name == "SuperAdmin"
+            && (ur.ExpiresAt == null || ur.ExpiresAt > DateTime.UtcNow), ct);
+        var acceptProblem = TenantRoleGrantRules.Check(invitation.Role, invitation.TenantId, new TenantGrantor(senderIsSuperAdmin, true));
+        if (acceptProblem != RoleGrantProblem.None)
+        {
+            invitation.Status = "Revoked";
+            await _context.SaveChangesAsync(ct);
+            _logger.LogWarning(
+                "Invitation {InvitationId} for {Email} revoked at acceptance: role {RoleName} may not be granted by its sender ({Problem})",
+                invitation.Id, invitation.Email, invitation.Role.Name, acceptProblem);
+            return new InvitationAcceptResult { Success = false, Error = "This invitation can no longer be accepted" };
         }
 
         // Check if user already exists
