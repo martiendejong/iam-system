@@ -25,9 +25,6 @@ public class SocialAuthService : ISocialAuthService
     // Non-prefixed values are treated as plaintext (migration compatibility).
     private const string EncryptedPrefix = "enc:";
 
-    // Role name that makes a user an admin of the tenant its UserRole row is scoped to.
-    private const string TenantAdminRoleName = "TenantAdmin";
-
     // State entries expire after 10 minutes (one full OAuth round-trip budget).
     private static readonly TimeSpan StateEntryTtl = TimeSpan.FromMinutes(10);
 
@@ -537,17 +534,7 @@ public class SocialAuthService : ISocialAuthService
         if (actor.IsGlobalAdmin)
             return;
 
-        var now = DateTime.UtcNow;
-        var query = _context.UserRoles.Where(ur =>
-            ur.UserId == actor.UserId
-            && ur.TenantId != null
-            && ur.Role.Name == TenantAdminRoleName
-            && (ur.ExpiresAt == null || ur.ExpiresAt > now));
-
-        if (actor.TenantId.HasValue)
-            query = query.Where(ur => ur.TenantId == actor.TenantId.Value);
-
-        if (!await query.AnyAsync(ct))
+        if (!await TenantAdminAuthority.IsAdminOfAnyTenantAsync(_context, actor.UserId, actor.TenantId, ct))
         {
             throw new IdentityProviderAccessDeniedException(
                 "Only SuperAdmin, SystemAdmin or a tenant admin can manage identity providers");
@@ -575,14 +562,7 @@ public class SocialAuthService : ISocialAuthService
             throw new IdentityProviderAccessDeniedException("Token is scoped to a different tenant");
         }
 
-        var now = DateTime.UtcNow;
-        var isTenantAdmin = await _context.UserRoles.AnyAsync(ur =>
-            ur.UserId == actor.UserId
-            && ur.TenantId == tenantId.Value
-            && ur.Role.Name == TenantAdminRoleName
-            && (ur.ExpiresAt == null || ur.ExpiresAt > now), ct);
-
-        if (!isTenantAdmin)
+        if (!await TenantAdminAuthority.IsAdminOfTenantAsync(_context, actor.UserId, tenantId.Value, ct))
         {
             throw new IdentityProviderAccessDeniedException(
                 "Only SuperAdmin, SystemAdmin or an admin of the provider's tenant can manage it");
@@ -601,19 +581,18 @@ public class SocialAuthService : ISocialAuthService
         if (!defaultRoleId.HasValue)
             return;
 
-        var role = await _context.Roles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == defaultRoleId.Value, ct)
-            ?? throw new IdentityProviderValidationException("Default role not found");
+        var role = await _context.Roles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == defaultRoleId.Value, ct);
 
-        if (PrivilegedRoles.IsPrivileged(role))
+        switch (DefaultRoleRules.Check(role, tenantId))
         {
-            throw new IdentityProviderValidationException(
-                $"Default role '{role.Name}' is a privileged role and cannot be assigned to auto-created users");
-        }
-
-        if (role.TenantId.HasValue && role.TenantId != tenantId)
-        {
-            throw new IdentityProviderValidationException(
-                "Default role belongs to a different tenant than the identity provider");
+            case DefaultRoleProblem.NotFound:
+                throw new IdentityProviderValidationException("Default role not found");
+            case DefaultRoleProblem.Privileged:
+                throw new IdentityProviderValidationException(
+                    $"Default role '{role!.Name}' is a privileged role and cannot be assigned to auto-created users");
+            case DefaultRoleProblem.OtherTenant:
+                throw new IdentityProviderValidationException(
+                    "Default role belongs to a different tenant than the identity provider");
         }
     }
 

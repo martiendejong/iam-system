@@ -179,6 +179,25 @@ public class InvitationService : IInvitationService
         var orgSettings = await _context.Set<OrganizationSettings>()
             .FirstOrDefaultAsync(os => os.TenantId == tenantId, ct);
 
+        // The stored default role is only used while it still passes the rule the settings API enforces
+        // (exists, non-privileged, global or this tenant's). A row written before that rule existed, or
+        // straight into the database, may hold an admin role or another tenant's role (task 4738).
+        string? defaultRoleError = null;
+        if (orgSettings?.DefaultRoleId != null)
+        {
+            var storedDefaultRole = await _context.Roles.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == orgSettings.DefaultRoleId.Value, ct);
+
+            defaultRoleError = DefaultRoleRules.Check(storedDefaultRole, tenantId) switch
+            {
+                DefaultRoleProblem.NotFound => "The organization's default role no longer exists",
+                DefaultRoleProblem.Privileged =>
+                    $"The organization's default role '{storedDefaultRole!.Name}' is a privileged role and cannot be assigned by bulk invitation",
+                DefaultRoleProblem.OtherTenant => "The organization's default role belongs to another tenant",
+                _ => null
+            };
+        }
+
         for (var i = 0; i < entryList.Count; i++)
         {
             var entry = entryList[i];
@@ -208,6 +227,18 @@ public class InvitationService : IInvitationService
                 }
                 else if (orgSettings?.DefaultRoleId != null)
                 {
+                    if (defaultRoleError != null)
+                    {
+                        result.Errors.Add(new BulkInviteError
+                        {
+                            Row = i + 1,
+                            Email = entry.Email,
+                            Error = defaultRoleError
+                        });
+                        result.Failed++;
+                        continue;
+                    }
+
                     roleId = orgSettings.DefaultRoleId.Value;
                 }
                 else
