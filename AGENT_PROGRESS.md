@@ -535,5 +535,7 @@ Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
-## 2026-10-02 - task 4726 (in progress)
-Plan: shared TenantAccessResolver (users via UserRoles, API keys via scope + CanAccessTenant, device/service-account tokens refused) gating all 9 /api/devices actions; ProvisionedByUserId from the caller.
+## 2026-10-02 - task 4726
+Done: PR #151 - new ITenantAccessResolver (users via UserRoles rows, API keys via scope + CanAccessTenant, device and service-account tokens refused, tenant_id claim pins the tenant) gates all 9 /api/devices actions: reads need membership (foreign device 404, foreign tenant in the URL 403, lists limited to the caller's tenants), register/update/deactivate need SuperAdmin or a TenantAdmin/BuildingOwner/BuildingManager row in the stored device's tenant (register checks before the duplicate-id check); ProvisionedByUserId comes from the caller. Python SDK list_devices() without a tenant now calls GET /api/devices.
+Verified: build clean; 34 new tests (HTTP matrix + API-key controller tests) pass and 6 mutations of the guards each fail them; full IAM.API.Tests 613 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; Python SDK admin tests 5 passed.
+Left: deploy of IAM is Martien's call. Task 4708 (telemetry hub/REST) should reuse ITenantAccessResolver and add the device-token-acts-on-itself case itself (the resolver refuses device tokens on purpose).

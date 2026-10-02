@@ -59,6 +59,9 @@ class FakeAdminServer:
             self.devices[internal_id] = record
             return httpx.Response(200, json=record)
 
+        if path == "/api/devices" and method == "GET":
+            return httpx.Response(200, json=list(self.devices.values()))
+
         if path == f"/api/devices/by-tenant/tenant-1" and method == "GET":
             items = [d for d in self.devices.values() if d["tenantId"] == "tenant-1"]
             return httpx.Response(200, json=items)
@@ -140,6 +143,26 @@ async def test_register_device_and_list_by_tenant():
         devices = await admin.list_devices(tenant_id="tenant-1")
         assert len(devices) == 1
         assert devices[0].device_id == "sensor-001"
+    finally:
+        await admin.close()
+
+
+@pytest.mark.asyncio
+async def test_list_devices_without_tenant_uses_the_callers_own_list():
+    server = FakeAdminServer()
+    admin = make_admin_client(server)
+    try:
+        await admin.register_device(
+            device_id="sensor-002",
+            name="Hall Sensor",
+            device_type="sensor",
+            tenant_id="tenant-1",
+            resource_path="tenants/tenant-1/devices/sensor-002",
+            authentication_method="hmac",
+        )
+
+        devices = await admin.list_devices()
+        assert [d.device_id for d in devices] == ["sensor-002"]
     finally:
         await admin.close()
 
