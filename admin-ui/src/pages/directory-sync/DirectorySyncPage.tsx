@@ -503,7 +503,7 @@ export default function DirectorySyncPage() {
                           type="text"
                           value={formData.ldapUrl}
                           onChange={(e) => setFormData({ ...formData, ldapUrl: e.target.value })}
-                          placeholder="ldap://dc.example.com:389 or ldaps://dc.example.com:636"
+                          placeholder="ldaps://dc.example.com:636"
                           className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                         />
                       </div>
