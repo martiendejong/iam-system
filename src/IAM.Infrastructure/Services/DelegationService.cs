@@ -26,6 +26,7 @@ public class DelegationService : IDelegationService
     // ─── Delegations ─────────────────────────────────────────
 
     public async Task<Delegation> CreateDelegationAsync(
+        DelegationActor actor,
         Guid delegatorUserId,
         Guid delegateUserId,
         Guid tenantId,
@@ -36,14 +37,33 @@ public class DelegationService : IDelegationService
         bool requiresApproval = false,
         CancellationToken ct = default)
     {
+        // A delegation is the delegator's own authority being handed on: only they (or a global admin on
+        // their behalf) may create it, and a tenant-scoped token carries no authority in another tenant.
+        if (delegatorUserId != actor.UserId && !actor.IsGlobalAdmin)
+            throw new DelegationAccessDeniedException("You can only delegate your own permissions");
+
+        if (!actor.IsGlobalAdmin && actor.TenantId.HasValue && actor.TenantId.Value != tenantId)
+            throw new DelegationAccessDeniedException("Token is scoped to a different tenant");
+
         if (delegatorUserId == delegateUserId)
             throw new InvalidOperationException("A user cannot delegate permissions to themselves");
 
         if (validUntil <= validFrom)
             throw new InvalidOperationException("ValidUntil must be after ValidFrom");
 
+        permissions = (permissions ?? new List<string>())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
         if (permissions.Count == 0)
             throw new InvalidOperationException("At least one permission must be delegated");
+
+        await EnsureDelegatorHoldsAsync(delegatorUserId, tenantId, permissions, ct);
+
+        // Blanket authority is never self-service: the caller-chosen flag can only add approval, not remove it.
+        requiresApproval |= permissions.Any(DelegationPermissions.IsWildcard);
 
         var delegation = new Delegation
         {
@@ -75,8 +95,10 @@ public class DelegationService : IDelegationService
                 permissions,
                 validFrom,
                 validUntil,
-                requiresApproval
-            })
+                requiresApproval,
+                // Only present when an admin created it on someone else's behalf, so the audit row says who did.
+                createdByUserId = delegatorUserId == actor.UserId ? (Guid?)null : actor.UserId
+            }, OmitNullOptions)
         });
 
         await _context.SaveChangesAsync(ct);
@@ -90,22 +112,32 @@ public class DelegationService : IDelegationService
         return delegation;
     }
 
-    public async Task<Delegation?> GetDelegationAsync(Guid delegationId, CancellationToken ct = default)
+    public async Task<Delegation?> GetDelegationAsync(DelegationActor actor, Guid delegationId, CancellationToken ct = default)
     {
-        return await _context.Delegations
+        var delegation = await _context.Delegations
             .Include(d => d.DelegatorUser)
             .Include(d => d.DelegateUser)
             .Include(d => d.Tenant)
             .FirstOrDefaultAsync(d => d.Id == delegationId, ct);
+
+        if (delegation != null && !IsParticipant(actor, delegation) && !await IsAdminOfTenantAsync(actor, delegation.TenantId, ct))
+            throw new DelegationAccessDeniedException("You can only view delegations you are part of");
+
+        return delegation;
     }
 
-    public async Task<List<Delegation>> GetDelegationsAsync(Guid tenantId, CancellationToken ct = default)
+    public async Task<List<Delegation>> GetDelegationsAsync(DelegationActor actor, Guid tenantId, CancellationToken ct = default)
     {
-        return await _context.Delegations
+        var query = _context.Delegations
             .Include(d => d.DelegatorUser)
             .Include(d => d.DelegateUser)
             .Include(d => d.Tenant)
-            .Where(d => d.TenantId == tenantId)
+            .Where(d => d.TenantId == tenantId);
+
+        if (!await IsAdminOfTenantAsync(actor, tenantId, ct))
+            query = query.Where(d => d.DelegatorUserId == actor.UserId || d.DelegateUserId == actor.UserId);
+
+        return await query
             .OrderByDescending(d => d.CreatedAt)
             .ToListAsync(ct);
     }
@@ -126,14 +158,40 @@ public class DelegationService : IDelegationService
             .ToListAsync(ct);
     }
 
-    public async Task<Delegation> ApproveDelegationAsync(Guid delegationId, Guid approverUserId, CancellationToken ct = default)
+    public async Task<Delegation> ApproveDelegationAsync(DelegationActor actor, Guid delegationId, CancellationToken ct = default)
     {
+        var approverUserId = actor.UserId;
+
         var delegation = await _context.Delegations
             .FirstOrDefaultAsync(d => d.Id == delegationId, ct)
             ?? throw new InvalidOperationException($"Delegation {delegationId} not found");
 
+        // Four eyes: neither party can approve their own delegation, and the approver must be an admin.
+        if (IsParticipant(actor, delegation))
+            throw new DelegationAccessDeniedException("The delegator and the delegate cannot approve their own delegation");
+
+        if (!await IsAdminOfTenantAsync(actor, delegation.TenantId, ct))
+            throw new DelegationAccessDeniedException("Only an administrator of the tenant can approve a delegation");
+
         if (delegation.Status != DelegationStatus.PendingApproval)
             throw new InvalidOperationException($"Delegation {delegationId} is not pending approval");
+
+        // A pending delegation may predate the authority checks, or the delegator may have lost the
+        // permissions since: approving must never activate authority the delegator does not hold.
+        List<string> delegated;
+        try
+        {
+            delegated = JsonSerializer.Deserialize<List<string>>(delegation.Permissions) ?? new List<string>();
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException($"Delegation {delegationId} has unreadable permissions");
+        }
+
+        var notHeld = await FindNotHeldAsync(delegation.DelegatorUserId, delegation.TenantId, delegated, ct);
+        if (notHeld.Count > 0)
+            throw new InvalidOperationException(
+                $"The delegator no longer holds: {string.Join(", ", notHeld)}");
 
         delegation.Status = DelegationStatus.Active;
         delegation.IsActive = true;
@@ -163,11 +221,16 @@ public class DelegationService : IDelegationService
         return delegation;
     }
 
-    public async Task<Delegation> RevokeDelegationAsync(Guid delegationId, Guid revokedByUserId, CancellationToken ct = default)
+    public async Task<Delegation> RevokeDelegationAsync(DelegationActor actor, Guid delegationId, CancellationToken ct = default)
     {
+        var revokedByUserId = actor.UserId;
+
         var delegation = await _context.Delegations
             .FirstOrDefaultAsync(d => d.Id == delegationId, ct)
             ?? throw new InvalidOperationException($"Delegation {delegationId} not found");
+
+        if (!IsParticipant(actor, delegation) && !await IsAdminOfTenantAsync(actor, delegation.TenantId, ct))
+            throw new DelegationAccessDeniedException("Only the delegator, the delegate or an administrator can revoke a delegation");
 
         delegation.Revoke(revokedByUserId);
 
@@ -253,6 +316,14 @@ public class DelegationService : IDelegationService
         }
 
         return allPermissions.OrderBy(p => p).ToList();
+    }
+
+    public async Task<List<string>> GetEffectivePermissionsAsync(DelegationActor actor, Guid userId, Guid tenantId, CancellationToken ct = default)
+    {
+        if (userId != actor.UserId && !await IsAdminOfTenantAsync(actor, tenantId, ct))
+            throw new DelegationAccessDeniedException("You can only view your own effective permissions");
+
+        return await GetEffectivePermissionsAsync(userId, tenantId, ct);
     }
 
     public async Task<int> ExpireDelegationsAsync(CancellationToken ct = default)
@@ -545,6 +616,51 @@ public class DelegationService : IDelegationService
     }
 
     // ─── Private Helpers ─────────────────────────────────────
+
+    private static readonly JsonSerializerOptions OmitNullOptions = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private static bool IsParticipant(DelegationActor actor, Delegation delegation) =>
+        delegation.DelegatorUserId == actor.UserId || delegation.DelegateUserId == actor.UserId;
+
+    /// <summary>
+    /// True for a global admin, or for an active TenantAdmin UserRole scoped to exactly this tenant. Role
+    /// claims are global names and password-login tokens carry no tenant_id, so tenant authority comes from
+    /// the caller's UserRoles rows; a tenant-scoped token only carries it for its own tenant.
+    /// </summary>
+    private async Task<bool> IsAdminOfTenantAsync(DelegationActor actor, Guid tenantId, CancellationToken ct)
+    {
+        if (actor.IsGlobalAdmin)
+            return true;
+
+        if (actor.TenantId.HasValue && actor.TenantId.Value != tenantId)
+            return false;
+
+        var now = DateTime.UtcNow;
+        return await _context.UserRoles
+            .AsNoTracking()
+            .AnyAsync(ur => ur.UserId == actor.UserId
+                && ur.TenantId == tenantId
+                && (ur.ExpiresAt == null || ur.ExpiresAt > now)
+                && ur.Role.Name == ApiKeyIssueRules.TenantAdminRoleName, ct);
+    }
+
+    private async Task EnsureDelegatorHoldsAsync(Guid delegatorUserId, Guid tenantId, List<string> permissions, CancellationToken ct)
+    {
+        var notHeld = await FindNotHeldAsync(delegatorUserId, tenantId, permissions, ct);
+        if (notHeld.Count > 0)
+            throw new DelegationAccessDeniedException(
+                $"The delegator does not hold these permissions in this tenant: {string.Join(", ", notHeld)}");
+    }
+
+    /// <summary>The requested permissions the user does not currently hold (own roles or delegated) in the tenant.</summary>
+    private async Task<List<string>> FindNotHeldAsync(Guid userId, Guid tenantId, IEnumerable<string> requested, CancellationToken ct)
+    {
+        var held = await GetEffectivePermissionsAsync(userId, tenantId, ct);
+        return requested.Where(p => !DelegationPermissions.Covers(held, p)).ToList();
+    }
 
     private async Task PublishEventAsync(string eventType, Delegation delegation, CancellationToken ct)
     {
