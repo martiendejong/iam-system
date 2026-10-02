@@ -1095,18 +1095,16 @@ public class DelegationAuthorityTests : IClassFixture<IAMTestWebApplicationFacto
     }
 
     [Fact]
-    public async Task SodConstraint_ListGetCheckAndViolations_StayReadableForAPlainUser()
+    public async Task SodConstraint_ListAndGet_AreNoLongerReadableForAPlainUser_ButOwnCheckAndOwnViolationsStillWork()
     {
+        // Task 4741: rule reads are admin-of-tenant only; checking yourself and seeing your own violations stay open.
         var (tenant, roleA, roleB) = await TenantWithTwoRolesAsync();
         var constraint = await SeedConstraintAsync(tenant, roleA, roleB);
         var user = await CreateUserAsync();
         var client = ClientAs(user.Id);
 
-        var list = await client.GetAsync($"/api/sod/constraints?tenantId={tenant.Id}");
-        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
-        Assert.Single((await ReadAsync(list)).EnumerateArray());
-
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/sod/constraints/{constraint.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync($"/api/sod/constraints?tenantId={tenant.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync($"/api/sod/constraints/{constraint.Id}")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/sod/check/{user.Id}", null)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/sod/violations?tenantId={tenant.Id}")).StatusCode);
     }
