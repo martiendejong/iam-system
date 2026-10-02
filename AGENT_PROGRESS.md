@@ -536,6 +536,6 @@ Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Micros
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
 
 ## 2026-10-02 - task 4738
-Done: in progress - GET/PUT /api/organization-settings/{tenantId} admin-only (own tenant), default role validated, bulk invite checks the stored default role.
-Verified: not yet.
-Left: implementation, tests, review.
+Done: PR #150 - GET/PUT /api/organization-settings/{tenantId} need SuperAdmin/SystemAdmin or an active TenantAdmin UserRole for that tenant (403 before the tenant lookup; a token scoped to another tenant fails closed); PUT validates DefaultRoleId via shared DefaultRoleRules (exists, non-privileged, global or the tenant's, else 400, nothing written); bulk invites refuse an already-stored privileged/foreign default role per row. Active-TenantAdmin query extracted to TenantAdminAuthority, shared with SocialAuthService.
+Verified: build clean; 58 OrganizationSettings tests pass; full IAM.API.Tests 637 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; mutation-checked (no-op authority check fails 15, no-op default-role check fails 19).
+Left: deploy of IAM is Martien's call; on the live DB check existing OrganizationSettings rows for a privileged DefaultRoleId (read-only SELECT) - bulk invites already refuse them. BuildingOwner/BuildingManager are not tenant admins here (TenantAdmin only, as in #144).
