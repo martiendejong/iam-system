@@ -614,3 +614,8 @@ Left: deploy of IAM is Martien's call. Task 4708 (telemetry hub/REST) should reu
 Done: GET /api/identity-providers and /{id} now admin-only: SuperAdmin/SystemAdmin read all; a TenantAdmin (active UserRole, tenant_id claim narrows) reads their tenants' providers plus platform-wide ones, another tenant's = 403; plain users 403 whatever the id. New actor-aware service reads (GET by id queries one row); /public and its service method untouched; response shape unchanged.
 Verified: build clean; 18 new IdentityProviderReadAuthorizationTests + the flipped AdminListing test pass (10 of the 18 fail on the old source); full IAM.API.Tests 597 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call. Branched from develop, not stacked on #150 (own private tenant-admin helper in SocialAuthService, same as #144's).
+
+## 2026-10-02 - task 4765
+Done: in progress - refuse a verified social login whose e-mail matches an account that is not e-mail confirmed (pre-hijack of the real owner).
+Verified: not yet.
+Left: everything.
