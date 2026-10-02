@@ -270,6 +270,35 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.ToTable("ApprovalSteps", (string)null);
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.ApprovalVote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ApprovalStepId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("ApprovalStepId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("ApprovalVotes", (string)null);
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.AuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5087,6 +5116,27 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("ApproverRole");
 
                     b.Navigation("DecidedByUser");
+
+                    b.Navigation("Votes");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.ApprovalVote", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.ApprovalStep", "ApprovalStep")
+                        .WithMany("Votes")
+                        .HasForeignKey("ApprovalStepId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IAM.Core.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ApprovalStep");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.AuditLog", b =>
