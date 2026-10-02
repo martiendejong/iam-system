@@ -615,6 +615,11 @@ Done: GET /api/identity-providers and /{id} now admin-only: SuperAdmin/SystemAdm
 Verified: build clean; 18 new IdentityProviderReadAuthorizationTests + the flipped AdminListing test pass (10 of the 18 fail on the old source); full IAM.API.Tests 597 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call. Branched from develop, not stacked on #150 (own private tenant-admin helper in SocialAuthService, same as #144's).
 
+## 2026-10-02 - task 4764
+Done: SCIM group create, replace and patch(add) only add users of the token's own tenant (UsersInTenant from 4699, one shared InTenantUserIdsAsync); foreign ids are skipped like unknown ids; group get/list/response builders list only in-tenant members, so already stored foreign memberships are hidden.
+Verified: build clean; 9 new ScimGroupMemberTenantScopeTests (7 fail on unchanged develop); Scim filter 71 passed; full IAM.API.Tests 1122 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Foreign membership rows already stored are hidden, not deleted.
+
 ## 2026-10-02 - task 4741
 Done: PR #167 - SoD violation resolve = global admin or admin of the violation's tenant, never the affected user (even an admin); violations list = all for a global admin (no tenant) or admin of the asked tenant, otherwise only your own; check for another user needs a global admin or an admin of every tenant the user holds roles in (own id always works); constraint list/get = admin of the tenant only. All checks in DelegationService (actor parameter), controller only builds the actor and maps 403; refusals happen before any write.
 Verified: build clean; 26 SodAuthority tests (13 fail on unchanged develop), DelegationAuthority + SodAuthority 111 passed; full IAM.API.Tests 1139 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped. The old 4712 "SoD reads stay open for a plain user" test was flipped on purpose.
