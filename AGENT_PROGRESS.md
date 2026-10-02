@@ -614,3 +614,8 @@ Left: deploy of IAM is Martien's call. Task 4708 (telemetry hub/REST) should reu
 Done: GET /api/identity-providers and /{id} now admin-only: SuperAdmin/SystemAdmin read all; a TenantAdmin (active UserRole, tenant_id claim narrows) reads their tenants' providers plus platform-wide ones, another tenant's = 403; plain users 403 whatever the id. New actor-aware service reads (GET by id queries one row); /public and its service method untouched; response shape unchanged.
 Verified: build clean; 18 new IdentityProviderReadAuthorizationTests + the flipped AdminListing test pass (10 of the 18 fail on the old source); full IAM.API.Tests 597 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call. Branched from develop, not stacked on #150 (own private tenant-admin helper in SocialAuthService, same as #144's).
+
+## 2026-10-02 - task 4764
+Done: SCIM group create, replace and patch(add) only add users of the token's own tenant (UsersInTenant from 4699, one shared InTenantUserIdsAsync); foreign ids are skipped like unknown ids; group get/list/response builders list only in-tenant members, so already stored foreign memberships are hidden.
+Verified: build clean; 9 new ScimGroupMemberTenantScopeTests (7 fail on unchanged develop); Scim filter 71 passed; full IAM.API.Tests 1122 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Foreign membership rows already stored are hidden, not deleted.

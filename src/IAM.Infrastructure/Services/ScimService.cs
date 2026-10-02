@@ -213,24 +213,17 @@ public class ScimService : IScimService
         _context.Groups.Add(group);
         await _context.SaveChangesAsync(ct);
 
-        // Add members if provided
+        // Add members if provided: only users of this tenant, others are skipped like unknown ids (task 4764)
         if (scimGroup.Members?.Any() == true)
         {
-            foreach (var member in scimGroup.Members)
+            foreach (var memberId in await InTenantMemberIdsAsync(tenantId, scimGroup.Members, ct))
             {
-                if (Guid.TryParse(member.Value, out var memberId))
+                _context.GroupMemberships.Add(new GroupMembership
                 {
-                    var userExists = await _context.Users.AnyAsync(u => u.Id == memberId, ct);
-                    if (userExists)
-                    {
-                        _context.GroupMemberships.Add(new GroupMembership
-                        {
-                            GroupId = group.Id,
-                            UserId = memberId,
-                            Role = "member"
-                        });
-                    }
-                }
+                    GroupId = group.Id,
+                    UserId = memberId,
+                    Role = "member"
+                });
             }
             await _context.SaveChangesAsync(ct);
         }
@@ -238,7 +231,7 @@ public class ScimService : IScimService
         await LogProvisioningAsync(tenantId, "Create", "Group", scimGroup.ExternalId, group.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
 
-        return await BuildScimGroupResource(group, ct);
+        return await BuildScimGroupResource(tenantId, group, ct);
     }
 
     public async Task<ScimGroupResource?> GetGroupAsync(Guid tenantId, Guid groupId, CancellationToken ct = default)
@@ -251,7 +244,7 @@ public class ScimService : IScimService
         if (group == null)
             return null;
 
-        return BuildScimGroupResourceFromLoaded(group);
+        return BuildScimGroupResourceFromLoaded(group, await InTenantUserIdsAsync(tenantId, group.Members.Select(m => m.UserId), ct));
     }
 
     public async Task<ScimGroupResource> ReplaceGroupAsync(Guid tenantId, Guid groupId, ScimGroupResource scimGroup, CancellationToken ct = default)
@@ -271,28 +264,21 @@ public class ScimService : IScimService
 
         if (scimGroup.Members?.Any() == true)
         {
-            foreach (var member in scimGroup.Members)
+            foreach (var memberId in await InTenantMemberIdsAsync(tenantId, scimGroup.Members, ct))
             {
-                if (Guid.TryParse(member.Value, out var memberId))
+                _context.GroupMemberships.Add(new GroupMembership
                 {
-                    var userExists = await _context.Users.AnyAsync(u => u.Id == memberId, ct);
-                    if (userExists)
-                    {
-                        _context.GroupMemberships.Add(new GroupMembership
-                        {
-                            GroupId = group.Id,
-                            UserId = memberId,
-                            Role = "member"
-                        });
-                    }
-                }
+                    GroupId = group.Id,
+                    UserId = memberId,
+                    Role = "member"
+                });
             }
         }
 
         await LogProvisioningAsync(tenantId, "Update", "Group", scimGroup.ExternalId, group.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
 
-        return await BuildScimGroupResource(group, ct);
+        return await BuildScimGroupResource(tenantId, group, ct);
     }
 
     public async Task<ScimGroupResource> PatchGroupAsync(Guid tenantId, Guid groupId, ScimPatchRequest patchRequest, CancellationToken ct = default)
@@ -306,7 +292,7 @@ public class ScimService : IScimService
 
         foreach (var op in patchRequest.Operations)
         {
-            await ApplyGroupPatchOperationAsync(group, op, ct);
+            await ApplyGroupPatchOperationAsync(tenantId, group, op, ct);
         }
 
         group.UpdatedAt = DateTime.UtcNow;
@@ -314,7 +300,7 @@ public class ScimService : IScimService
         await LogProvisioningAsync(tenantId, "Update", "Group", null, group.Id, "Success", $"PATCH: {patchRequest.Operations.Count} operations", ct);
         await _context.SaveChangesAsync(ct);
 
-        return await BuildScimGroupResource(group, ct);
+        return await BuildScimGroupResource(tenantId, group, ct);
     }
 
     public async Task<bool> DeleteGroupAsync(Guid tenantId, Guid groupId, CancellationToken ct = default)
@@ -370,12 +356,14 @@ public class ScimService : IScimService
             .Take(count)
             .ToListAsync(ct);
 
+        var inTenantMembers = await InTenantUserIdsAsync(tenantId, groups.SelectMany(g => g.Members).Select(m => m.UserId), ct);
+
         return new ScimListResponse<ScimGroupResource>
         {
             TotalResults = totalResults,
             StartIndex = startIndex,
             ItemsPerPage = groups.Count,
-            Resources = groups.Select(BuildScimGroupResourceFromLoaded).ToList()
+            Resources = groups.Select(g => BuildScimGroupResourceFromLoaded(g, inTenantMembers)).ToList()
         };
     }
 
@@ -540,7 +528,33 @@ public class ScimService : IScimService
         };
     }
 
-    private ScimGroupResource BuildScimGroupResourceFromLoaded(Group group)
+    /// <summary>
+    /// The ids among the candidates that are users of the tenant (task 4764): the one in-tenant rule behind every
+    /// group member write and every group response. Everything else is treated as if it did not exist.
+    /// </summary>
+    private async Task<HashSet<Guid>> InTenantUserIdsAsync(Guid tenantId, IEnumerable<Guid> candidateIds, CancellationToken ct)
+    {
+        var ids = candidateIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new HashSet<Guid>();
+
+        return (await UsersInTenant(tenantId).Where(u => ids.Contains(u.Id)).Select(u => u.Id).ToListAsync(ct)).ToHashSet();
+    }
+
+    /// <summary>Member ids of a SCIM group body that are in-tenant users; malformed, unknown and foreign ids are skipped.</summary>
+    private async Task<List<Guid>> InTenantMemberIdsAsync(Guid tenantId, IEnumerable<ScimMember> members, CancellationToken ct)
+    {
+        var parsed = members
+            .Select(m => Guid.TryParse(m.Value, out var id) ? id : (Guid?)null)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+        var allowed = await InTenantUserIdsAsync(tenantId, parsed, ct);
+        return parsed.Where(allowed.Contains).ToList();
+    }
+
+    private ScimGroupResource BuildScimGroupResourceFromLoaded(Group group, HashSet<Guid> inTenantUserIds)
     {
         return new ScimGroupResource
         {
@@ -548,7 +562,7 @@ public class ScimService : IScimService
             Id = group.Id.ToString(),
             DisplayName = group.Name,
             Members = group.Members
-                .Where(m => m.IsActive)
+                .Where(m => m.IsActive && inTenantUserIds.Contains(m.UserId))
                 .Select(m => new ScimMember
                 {
                     Value = m.UserId.ToString(),
@@ -567,14 +581,15 @@ public class ScimService : IScimService
         };
     }
 
-    private async Task<ScimGroupResource> BuildScimGroupResource(Group group, CancellationToken ct)
+    private async Task<ScimGroupResource> BuildScimGroupResource(Guid tenantId, Group group, CancellationToken ct)
     {
         var fullGroup = await _context.Groups
             .Include(g => g.Members.Where(m => m.IsActive))
                 .ThenInclude(m => m.User)
             .FirstOrDefaultAsync(g => g.Id == group.Id, ct);
 
-        return BuildScimGroupResourceFromLoaded(fullGroup ?? group);
+        var loaded = fullGroup ?? group;
+        return BuildScimGroupResourceFromLoaded(loaded, await InTenantUserIdsAsync(tenantId, loaded.Members.Select(m => m.UserId), ct));
     }
 
     private void ApplyUserPatchOperation(User user, ScimPatchOperation op)
@@ -638,7 +653,7 @@ public class ScimService : IScimService
         }
     }
 
-    private async Task ApplyGroupPatchOperationAsync(Group group, ScimPatchOperation op, CancellationToken ct)
+    private async Task ApplyGroupPatchOperationAsync(Guid tenantId, Group group, ScimPatchOperation op, CancellationToken ct)
     {
         var path = op.Path?.ToLowerInvariant()?.Trim();
         var valueStr = op.Value?.ToString() ?? string.Empty;
@@ -655,7 +670,8 @@ public class ScimService : IScimService
             case "add":
                 if (path == "members")
                 {
-                    var members = TryParseMembers(op.Value);
+                    // Only users of this tenant can be added; other ids are skipped like unknown ids (task 4764)
+                    var members = await InTenantUserIdsAsync(tenantId, TryParseMembers(op.Value), ct);
                     foreach (var memberId in members)
                     {
                         var exists = await _context.GroupMemberships
