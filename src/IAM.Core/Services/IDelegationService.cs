@@ -89,14 +89,16 @@ public interface IDelegationService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Get a SoD constraint by ID.
+    /// Get a SoD constraint by ID. Only a global admin or an admin of the constraint's tenant may read it
+    /// (rules reveal the organisation's role-conflict structure); anyone else gets
+    /// <see cref="DelegationAccessDeniedException"/> (task 4741).
     /// </summary>
-    Task<SodConstraint?> GetConstraintAsync(Guid constraintId, CancellationToken ct = default);
+    Task<SodConstraint?> GetConstraintAsync(DelegationActor actor, Guid constraintId, CancellationToken ct = default);
 
     /// <summary>
-    /// Get all SoD constraints for a tenant.
+    /// Get all SoD constraints for a tenant. Global admin or admin of that tenant only (task 4741).
     /// </summary>
-    Task<List<SodConstraint>> GetConstraintsAsync(Guid tenantId, CancellationToken ct = default);
+    Task<List<SodConstraint>> GetConstraintsAsync(DelegationActor actor, Guid tenantId, CancellationToken ct = default);
 
     /// <summary>
     /// Update a SoD constraint.
@@ -109,18 +111,22 @@ public interface IDelegationService
     Task<bool> DeleteConstraintAsync(Guid constraintId, CancellationToken ct = default);
 
     /// <summary>
-    /// Check for SoD violations for a specific user.
-    /// Returns any violations found based on the user's current roles.
+    /// Check for SoD violations for a specific user (task 4741). Your own id always works; another user needs a
+    /// global admin, or an admin of every tenant the user holds roles in (a user with a tenant-less role or no
+    /// roles at all needs a global admin). Otherwise <see cref="DelegationAccessDeniedException"/>, before any write.
     /// </summary>
-    Task<List<SodViolation>> CheckSodViolationsAsync(Guid userId, CancellationToken ct = default);
+    Task<List<SodViolation>> CheckSodViolationsAsync(DelegationActor actor, Guid userId, CancellationToken ct = default);
 
     /// <summary>
-    /// Get all SoD violations for a tenant.
+    /// Get SoD violations (task 4741). Without a tenant: all of them for a global admin, otherwise only the
+    /// caller's own. With a tenant: all of that tenant's for a global admin or an admin of the tenant, otherwise
+    /// only the caller's own in that tenant. Never anyone else's.
     /// </summary>
-    Task<List<SodViolation>> GetViolationsAsync(Guid? tenantId = null, CancellationToken ct = default);
+    Task<List<SodViolation>> GetViolationsAsync(DelegationActor actor, Guid? tenantId = null, CancellationToken ct = default);
 
     /// <summary>
-    /// Resolve a SoD violation.
+    /// Resolve a SoD violation (task 4741). Only a global admin or an admin of the violation's tenant, and never
+    /// the user the violation is about (even an admin): <see cref="DelegationAccessDeniedException"/>, before any write.
     /// </summary>
-    Task<SodViolation> ResolveViolationAsync(Guid violationId, Guid resolvedByUserId, string resolution, CancellationToken ct = default);
+    Task<SodViolation> ResolveViolationAsync(DelegationActor actor, Guid violationId, string resolution, CancellationToken ct = default);
 }
