@@ -258,10 +258,14 @@ public class DelegationService : IDelegationService
 
     public async Task<List<string>> GetEffectivePermissionsAsync(Guid userId, Guid tenantId, CancellationToken ct = default)
     {
-        // Get direct role permissions
+        // Get direct role permissions (a time-limited role past its ExpiresAt no longer counts: it would
+        // otherwise let a lapsed contractor role be delegated onward, task 4712)
+        var roleNow = DateTime.UtcNow;
         var directPermissions = await _context.UserRoles
             .Include(ur => ur.Role)
-            .Where(ur => ur.UserId == userId && (ur.TenantId == tenantId || ur.TenantId == null))
+            .Where(ur => ur.UserId == userId
+                && (ur.TenantId == tenantId || ur.TenantId == null)
+                && (ur.ExpiresAt == null || ur.ExpiresAt > roleNow))
             .Select(ur => ur.Role.Permissions)
             .ToListAsync(ct);
 
