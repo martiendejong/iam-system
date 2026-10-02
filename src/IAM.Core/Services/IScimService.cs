@@ -137,3 +137,12 @@ public class ScimError
     public int Status { get; set; }
     public string? ScimType { get; set; }
 }
+
+/// <summary>
+/// A SCIM filter that cannot be parsed or is not supported. The controller answers 400 with
+/// scimType "invalidFilter"; it is never swallowed into an unfiltered result.
+/// </summary>
+public class ScimFilterException : Exception
+{
+    public ScimFilterException(string message) : base(message) { }
+}

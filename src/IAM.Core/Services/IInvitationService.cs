@@ -25,7 +25,8 @@ public interface IInvitationService
         Guid tenantId,
         Guid invitedByUserId,
         bool callerIsSuperAdmin,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool callerIsTenantOwner = false);
 
     /// <summary>
     /// Accept an invitation by token - creates/links user and assigns tenant + role

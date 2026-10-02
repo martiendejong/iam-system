@@ -153,9 +153,9 @@ public class SocialLoginInactiveUserTests
         Assert.Equal("Old Name", storedLink.DisplayName);
     }
 
+    // Microsoft never matches an account by e-mail (task 4707, see SocialLoginVerifiedEmailTests).
     [Theory]
     [InlineData(IdentityProviderType.Google)]
-    [InlineData(IdentityProviderType.Microsoft)]
     [InlineData(IdentityProviderType.GitHub)]
     public async Task Callback_DeactivatedUserMatchedOnlyByEmail_IsRefusedAndNoExternalLoginIsCreated(IdentityProviderType type)
     {
@@ -227,9 +227,9 @@ public class SocialLoginInactiveUserTests
         Assert.Equal(UserEmail, storedLink.Email);
     }
 
+    // Microsoft never matches an account by e-mail (task 4707, see SocialLoginVerifiedEmailTests).
     [Theory]
     [InlineData(IdentityProviderType.Google)]
-    [InlineData(IdentityProviderType.Microsoft)]
     [InlineData(IdentityProviderType.GitHub)]
     public async Task Callback_ActiveUserMatchedByEmail_SignsInAndLinksTheSocialIdentity(IdentityProviderType type)
     {
@@ -342,12 +342,17 @@ file class StubProviderHandler(IdentityProviderType type, string email) : HttpMe
         {
             json = """{"access_token":"stub-access-token","token_type":"Bearer"}""";
         }
+        else if (url.Contains("/user/emails", StringComparison.Ordinal))
+        {
+            // GitHub: the primary address is verified (task 4707 only matches accounts by verified e-mail).
+            json = $$"""[{"email":"{{email}}","primary":true,"verified":true,"visibility":"private"}]""";
+        }
         else
         {
             json = type switch
             {
                 IdentityProviderType.Google =>
-                    $$"""{"sub":"4706","email":"{{email}}","name":"Lee Ver","given_name":"Lee","family_name":"Ver"}""",
+                    $$"""{"sub":"4706","email":"{{email}}","email_verified":true,"name":"Lee Ver","given_name":"Lee","family_name":"Ver"}""",
                 IdentityProviderType.Microsoft =>
                     $$"""{"id":"4706","mail":"{{email}}","displayName":"Lee Ver","givenName":"Lee","surname":"Ver"}""",
                 IdentityProviderType.GitHub =>
