@@ -11,9 +11,13 @@ public interface IDelegationService
     // ─── Delegations ─────────────────────────────────────────
 
     /// <summary>
-    /// Create a new delegation from one user to another.
+    /// Create a new delegation from one user to another. Authority is enforced here (task 4712): only the
+    /// delegator themselves, or a global admin on their behalf, may create it, and only for permissions the
+    /// delegator holds in the tenant. Throws <see cref="DelegationAccessDeniedException"/> otherwise.
+    /// A delegation granting a wildcard permission always requires approval, whatever the flag says.
     /// </summary>
     Task<Delegation> CreateDelegationAsync(
+        DelegationActor actor,
         Guid delegatorUserId,
         Guid delegateUserId,
         Guid tenantId,
@@ -25,14 +29,16 @@ public interface IDelegationService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Get a delegation by ID.
+    /// Get a delegation by ID. Readable by its delegator, its delegate, a global admin and an admin of its
+    /// tenant; anyone else gets <see cref="DelegationAccessDeniedException"/>.
     /// </summary>
-    Task<Delegation?> GetDelegationAsync(Guid delegationId, CancellationToken ct = default);
+    Task<Delegation?> GetDelegationAsync(DelegationActor actor, Guid delegationId, CancellationToken ct = default);
 
     /// <summary>
-    /// Get all delegations for a tenant.
+    /// Get the delegations of a tenant. Global admins and admins of that tenant see all of them; everyone
+    /// else only the ones they are the delegator or delegate of.
     /// </summary>
-    Task<List<Delegation>> GetDelegationsAsync(Guid tenantId, CancellationToken ct = default);
+    Task<List<Delegation>> GetDelegationsAsync(DelegationActor actor, Guid tenantId, CancellationToken ct = default);
 
     /// <summary>
     /// Get active (currently effective) delegations for a delegate user.
@@ -40,20 +46,28 @@ public interface IDelegationService
     Task<List<Delegation>> GetActiveDelegationsForUserAsync(Guid delegateUserId, CancellationToken ct = default);
 
     /// <summary>
-    /// Approve a pending delegation.
+    /// Approve a pending delegation. The approver must be a global admin or an admin of the delegation's
+    /// tenant, and never its delegator or delegate. The delegator must still hold the permissions.
     /// </summary>
-    Task<Delegation> ApproveDelegationAsync(Guid delegationId, Guid approverUserId, CancellationToken ct = default);
+    Task<Delegation> ApproveDelegationAsync(DelegationActor actor, Guid delegationId, CancellationToken ct = default);
 
     /// <summary>
-    /// Revoke a delegation.
+    /// Revoke a delegation. Allowed for its delegator, its delegate, a global admin and an admin of its tenant.
     /// </summary>
-    Task<Delegation> RevokeDelegationAsync(Guid delegationId, Guid revokedByUserId, CancellationToken ct = default);
+    Task<Delegation> RevokeDelegationAsync(DelegationActor actor, Guid delegationId, CancellationToken ct = default);
 
     /// <summary>
     /// Get effective permissions for a user including delegated permissions.
     /// Returns the union of direct role permissions and delegated permissions.
+    /// This is the unchecked computation; callers acting for a request use the actor overload.
     /// </summary>
     Task<List<string>> GetEffectivePermissionsAsync(Guid userId, Guid tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Effective permissions of <paramref name="userId"/> for a request: a user may read their own; reading
+    /// another user's needs a global admin or an admin of the tenant.
+    /// </summary>
+    Task<List<string>> GetEffectivePermissionsAsync(DelegationActor actor, Guid userId, Guid tenantId, CancellationToken ct = default);
 
     /// <summary>
     /// Expire all delegations that have passed their ValidUntil deadline.

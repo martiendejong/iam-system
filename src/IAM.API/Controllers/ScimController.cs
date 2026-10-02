@@ -49,8 +49,15 @@ public class ScimController : ControllerBase
             ExcludedAttributes = excludedAttributes
         };
 
-        var result = await _scimService.ListUsersAsync(tenantId!.Value, options);
-        return Ok(result);
+        try
+        {
+            var result = await _scimService.ListUsersAsync(tenantId!.Value, options);
+            return Ok(result);
+        }
+        catch (ScimFilterException ex)
+        {
+            return BadRequest(new ScimError { Status = 400, Detail = ex.Message, ScimType = "invalidFilter" });
+        }
     }
 
     /// <summary>
@@ -201,8 +208,15 @@ public class ScimController : ControllerBase
             SortOrder = sortOrder
         };
 
-        var result = await _scimService.ListGroupsAsync(tenantId!.Value, options);
-        return Ok(result);
+        try
+        {
+            var result = await _scimService.ListGroupsAsync(tenantId!.Value, options);
+            return Ok(result);
+        }
+        catch (ScimFilterException ex)
+        {
+            return BadRequest(new ScimError { Status = 400, Detail = ex.Message, ScimType = "invalidFilter" });
+        }
     }
 
     /// <summary>

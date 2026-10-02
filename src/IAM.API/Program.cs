@@ -93,6 +93,7 @@ builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
 builder.Services.AddScoped<IAccountLinkingService, AccountLinkingService>();
 builder.Services.AddScoped<IInvitationService, InvitationService>();
+builder.Services.AddScoped<ILdapDirectoryClient, LdapDirectoryClient>();
 builder.Services.AddScoped<IDirectorySyncService, DirectorySyncService>();
 builder.Services.AddScoped<IAccessRequestService, AccessRequestService>();
 builder.Services.AddScoped<IScimService, ScimService>();
