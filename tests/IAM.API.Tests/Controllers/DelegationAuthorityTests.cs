@@ -526,7 +526,7 @@ public class DelegationAuthorityTests : IClassFixture<IAMTestWebApplicationFacto
     }
 
     [Fact]
-    public async Task Create_ByAServiceAccountToken_IsForbidden()
+    public async Task ServiceAccountToken_IsForbidden_OnCreateAndList()
     {
         var tenant = await CreateTenantAsync();
         var delegatee = await CreateUserAsync();
@@ -538,6 +538,9 @@ public class DelegationAuthorityTests : IClassFixture<IAMTestWebApplicationFacto
             "/api/delegations", DelegationBody(tenant.Id, delegatee.Id, new[] { "users:create" }));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        // The create above is also refused by the held-permission check; reads show the token type itself is refused.
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync($"/api/delegations?tenantId={tenant.Id}")).StatusCode);
     }
 
     [Fact]
