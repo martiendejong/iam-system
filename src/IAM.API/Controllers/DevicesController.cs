@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using IAM.API.Authorization;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,18 +12,46 @@ namespace IAM.API.Controllers;
 public class DevicesController : ControllerBase
 {
     private readonly IDeviceService _deviceService;
+    private readonly ITenantAccessResolver _access;
 
-    public DevicesController(IDeviceService deviceService)
+    public DevicesController(IDeviceService deviceService, ITenantAccessResolver access)
     {
         _deviceService = deviceService;
+        _access = access;
     }
+
+    // Task 4726. Devices carry credentials (an HMAC secret at registration) and permissions that feed the device
+    // authorization and telemetry command checks, so every action is checked against the caller's tenants:
+    // reading needs membership of the device's tenant, changing needs SuperAdmin or a building-management role
+    // (TenantAdmin/BuildingOwner/BuildingManager UserRoles row) in it. Device and service-account tokens get 403.
+    // The tenant of an existing device always comes from the stored row, never from the request body.
+
+    private ObjectResult ForbiddenChange() =>
+        StatusCode(StatusCodes.Status403Forbidden,
+            new { error = "Only SuperAdmin or a building owner/manager of the device's tenant can change devices." });
+
+    private ObjectResult ForbiddenRead() =>
+        StatusCode(StatusCodes.Status403Forbidden,
+            new { error = "You do not have access to the devices of this tenant." });
+
+    private Guid? CallerUserId() =>
+        Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub"), out var id) ? id : null;
 
     /// <summary>
     /// Register a new IoT device
     /// </summary>
     [HttpPost]
-    public async Task<IActionResult> RegisterDevice([FromBody] RegisterDeviceRequest request)
+    public async Task<IActionResult> RegisterDevice([FromBody] RegisterDeviceRequest request, CancellationToken ct = default)
     {
+        // Authorize before anything else: the duplicate-id check in the service would otherwise tell an
+        // unauthorized caller which device ids exist in other tenants.
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManage(request.TenantId))
+            return ForbiddenChange();
+
+        // The audit field comes from the caller, never from the body.
+        request.ProvisionedByUserId = CallerUserId();
+
         var result = await _deviceService.RegisterDeviceAsync(request);
 
         if (!result.Success)
@@ -50,9 +80,13 @@ public class DevicesController : ControllerBase
     /// List all devices
     /// </summary>
     [HttpGet]
-    public async Task<IActionResult> GetDevices()
+    public async Task<IActionResult> GetDevices(CancellationToken ct = default)
     {
-        var devices = await _deviceService.GetAllDevicesAsync();
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return ForbiddenRead();
+
+        var devices = await _deviceService.GetAllDevicesAsync(access.ReadableTenants);
 
         return Ok(devices.Select(d => new
         {
@@ -72,10 +106,15 @@ public class DevicesController : ControllerBase
     /// Get device by internal ID
     /// </summary>
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetDevice(Guid id)
+    public async Task<IActionResult> GetDevice(Guid id, CancellationToken ct = default)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return ForbiddenRead();
+
+        // A device of a tenant the caller cannot read is reported exactly like an unknown one.
         var device = await _deviceService.GetDeviceAsync(id);
-        if (device == null)
+        if (device == null || !access.CanRead(device.TenantId))
         {
             return NotFound(new { error = "Device not found" });
         }
@@ -119,10 +158,14 @@ public class DevicesController : ControllerBase
     /// Get device by human-readable device ID
     /// </summary>
     [HttpGet("by-device-id/{deviceId}")]
-    public async Task<IActionResult> GetDeviceByDeviceId(string deviceId)
+    public async Task<IActionResult> GetDeviceByDeviceId(string deviceId, CancellationToken ct = default)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return ForbiddenRead();
+
         var device = await _deviceService.GetDeviceByDeviceIdAsync(deviceId);
-        if (device == null)
+        if (device == null || !access.CanRead(device.TenantId))
         {
             return NotFound(new { error = "Device not found" });
         }
@@ -150,8 +193,12 @@ public class DevicesController : ControllerBase
     /// List devices by tenant
     /// </summary>
     [HttpGet("by-tenant/{tenantId:guid}")]
-    public async Task<IActionResult> GetDevicesByTenant(Guid tenantId)
+    public async Task<IActionResult> GetDevicesByTenant(Guid tenantId, CancellationToken ct = default)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanRead(tenantId))
+            return ForbiddenRead();
+
         var devices = await _deviceService.GetDevicesByTenantAsync(tenantId);
 
         return Ok(devices.Select(d => new
@@ -172,9 +219,14 @@ public class DevicesController : ControllerBase
     /// List devices by type (optionally filtered by tenant)
     /// </summary>
     [HttpGet("by-type/{deviceType}")]
-    public async Task<IActionResult> GetDevicesByType(string deviceType, [FromQuery] Guid? tenantId = null)
+    public async Task<IActionResult> GetDevicesByType(string deviceType, [FromQuery] Guid? tenantId = null, CancellationToken ct = default)
     {
-        var devices = await _deviceService.GetDevicesByTypeAsync(deviceType, tenantId);
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused || (tenantId.HasValue && !access.CanRead(tenantId.Value)))
+            return ForbiddenRead();
+
+        // Without a tenant the list covers only the caller's tenants (null = every tenant, SuperAdmin only).
+        var devices = await _deviceService.GetDevicesByTypeAsync(deviceType, tenantId, access.ReadableTenants);
 
         return Ok(devices.Select(d => new
         {
@@ -195,8 +247,13 @@ public class DevicesController : ControllerBase
     /// Update a device
     /// </summary>
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> UpdateDevice(Guid id, [FromBody] UpdateDeviceRequest request)
+    public async Task<IActionResult> UpdateDevice(Guid id, [FromBody] UpdateDeviceRequest request, CancellationToken ct = default)
     {
+        // Covers IsActive too: a PUT can re-activate a deactivated device, so it needs the same gate as deactivate.
+        var denied = await CheckMayChangeAsync(id, ct);
+        if (denied != null)
+            return denied;
+
         var result = await _deviceService.UpdateDeviceAsync(id, request);
 
         if (!result.Success)
@@ -219,8 +276,12 @@ public class DevicesController : ControllerBase
     /// Deactivate a device (revokes all certificates)
     /// </summary>
     [HttpPost("{id:guid}/deactivate")]
-    public async Task<IActionResult> DeactivateDevice(Guid id)
+    public async Task<IActionResult> DeactivateDevice(Guid id, CancellationToken ct = default)
     {
+        var denied = await CheckMayChangeAsync(id, ct);
+        if (denied != null)
+            return denied;
+
         var success = await _deviceService.DeactivateDeviceAsync(id);
         if (!success)
         {
@@ -234,9 +295,13 @@ public class DevicesController : ControllerBase
     /// Get device statistics (optionally filtered by tenant)
     /// </summary>
     [HttpGet("statistics")]
-    public async Task<IActionResult> GetStatistics([FromQuery] Guid? tenantId = null)
+    public async Task<IActionResult> GetStatistics([FromQuery] Guid? tenantId = null, CancellationToken ct = default)
     {
-        var stats = await _deviceService.GetStatisticsAsync(tenantId);
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused || (tenantId.HasValue && !access.CanRead(tenantId.Value)))
+            return ForbiddenRead();
+
+        var stats = await _deviceService.GetStatisticsAsync(tenantId, access.ReadableTenants);
 
         return Ok(new
         {
@@ -247,5 +312,23 @@ public class DevicesController : ControllerBase
             hmacDevices = stats.HmacDevices,
             devicesByType = stats.DevicesByType
         });
+    }
+
+    /// <summary>
+    /// Gate for update and deactivate. The privilege check runs BEFORE the lookup, so a caller who manages nothing
+    /// gets 403 for any id (no existence oracle); then the stored device's tenant must be one the caller manages.
+    /// Returns the error result, or null when the change is allowed.
+    /// </summary>
+    private async Task<ObjectResult?> CheckMayChangeAsync(Guid id, CancellationToken ct)
+    {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return ForbiddenChange();
+
+        var tenantId = await _deviceService.GetDeviceTenantIdAsync(id);
+        if (tenantId == null)
+            return NotFound(new { error = "Device not found" });
+
+        return access.CanManage(tenantId.Value) ? null : ForbiddenChange();
     }
 }

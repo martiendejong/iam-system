@@ -139,6 +139,40 @@ public static class TestAuthenticationHelper
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
+    /// <summary>
+    /// Token shaped exactly like DeviceAuthenticationService.GenerateDeviceAccessToken issues: sub is the
+    /// device's internal id (a GUID, so it parses like a user id), plus tenant_id, device_id and
+    /// "token_type=device", and NO role claims (task 4726).
+    /// </summary>
+    public static string GenerateDeviceToken(Guid deviceInternalId, string deviceId, Guid tenantId, params string[] permissions)
+    {
+        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
+        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new Claim("sub", deviceInternalId.ToString()),
+            new Claim("device_id", deviceId),
+            new Claim("device_type", "sensor"),
+            new Claim("tenant_id", tenantId.ToString()),
+            new Claim("token_type", "device")
+        };
+        foreach (var permission in permissions)
+        {
+            claims.Add(new Claim("permission", permission));
+        }
+
+        var token = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
     public static void AddAuthorizationHeader(this HttpClient client, string token)
     {
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using IAM.API.Controllers;
+using IAM.API.Tests.Services;
 using IAM.Core;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -73,6 +74,14 @@ public class RefreshTokenSessionEndingTests
         context.Users.Add(user);
         await context.SaveChangesAsync();
         return user;
+    }
+
+    /// <summary>Puts the user in the tenant for SCIM (task 4699): a successful Create in the tenant's SCIM log.</summary>
+    private static async Task InScimTenantAsync(IAMDbContext context, Guid tenantId, params User[] users)
+    {
+        foreach (var u in users)
+            context.ScimProvisioningLogs.Add(new ScimProvisioningLog { TenantId = tenantId, Operation = "Create", ResourceType = "User", ResourceId = u.Id, Status = "Success", CreatedAt = DateTime.UtcNow });
+        await context.SaveChangesAsync();
     }
 
     private static async Task<string> LoginAsync(AuthService auth, User user, bool rememberMe = false)
@@ -214,10 +223,12 @@ public class RefreshTokenSessionEndingTests
         var scim = new ScimService(context);
         var user = await AddUserAsync(context, "scim-delete");
         var other = await AddUserAsync(context, "scim-other");
+        var tenant = Guid.NewGuid();
+        await InScimTenantAsync(context, tenant, user, other);
         await AddTokenAsync(context, user.Id);
         await AddTokenAsync(context, other.Id);
 
-        Assert.True(await scim.DeleteUserAsync(Guid.NewGuid(), user.Id));
+        Assert.True(await scim.DeleteUserAsync(tenant, user.Id));
 
         Assert.False((await context.Users.FindAsync(user.Id))!.IsActive);
         Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
@@ -232,9 +243,11 @@ public class RefreshTokenSessionEndingTests
         var context = CreateContext();
         var scim = new ScimService(context);
         var user = await AddUserAsync(context, "scim-patch");
+        var tenant = Guid.NewGuid();
+        await InScimTenantAsync(context, tenant, user);
         await AddTokenAsync(context, user.Id);
 
-        await scim.PatchUserAsync(Guid.NewGuid(), user.Id, ActivePatch(value));
+        await scim.PatchUserAsync(tenant, user.Id, ActivePatch(value));
 
         Assert.False((await context.Users.FindAsync(user.Id))!.IsActive);
         Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
@@ -246,10 +259,12 @@ public class RefreshTokenSessionEndingTests
         var context = CreateContext();
         var scim = new ScimService(context);
         var user = await AddUserAsync(context, "scim-keep");
+        var tenant = Guid.NewGuid();
+        await InScimTenantAsync(context, tenant, user);
         await AddTokenAsync(context, user.Id);
 
-        await scim.PatchUserAsync(Guid.NewGuid(), user.Id, ActivePatch("True"));
-        await scim.PatchUserAsync(Guid.NewGuid(), user.Id, new ScimPatchRequest
+        await scim.PatchUserAsync(tenant, user.Id, ActivePatch("True"));
+        await scim.PatchUserAsync(tenant, user.Id, new ScimPatchRequest
         {
             Operations = { new ScimPatchOperation { Op = "replace", Path = "name.givenName", Value = "Renamed" } }
         });
@@ -265,11 +280,13 @@ public class RefreshTokenSessionEndingTests
         var scim = new ScimService(context);
         var stays = await AddUserAsync(context, "scim-put-stays");
         var leaves = await AddUserAsync(context, "scim-put-leaves");
+        var tenant = Guid.NewGuid();
+        await InScimTenantAsync(context, tenant, stays, leaves);
         await AddTokenAsync(context, stays.Id);
         await AddTokenAsync(context, leaves.Id);
 
-        await scim.ReplaceUserAsync(Guid.NewGuid(), stays.Id, new ScimUserResource { UserName = stays.Email, Active = true });
-        await scim.ReplaceUserAsync(Guid.NewGuid(), leaves.Id, new ScimUserResource { UserName = leaves.Email, Active = false });
+        await scim.ReplaceUserAsync(tenant, stays.Id, new ScimUserResource { UserName = stays.Email, Active = true });
+        await scim.ReplaceUserAsync(tenant, leaves.Id, new ScimUserResource { UserName = leaves.Email, Active = false });
 
         Assert.Equal(1, await ActiveTokenCountAsync(context, stays.Id));
         Assert.False((await context.Users.FindAsync(leaves.Id))!.IsActive);
@@ -280,17 +297,31 @@ public class RefreshTokenSessionEndingTests
     public async Task DirectorySync_DisablingMissingUsers_RevokesOnlyTheirRefreshTokens()
     {
         var context = CreateContext();
-        var sync = new DirectorySyncService(context, NullLogger<DirectorySyncService>.Instance);
+        var vaultConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["SecretsVault:MasterKey"] = Convert.ToBase64String(new byte[32]) })
+            .Build();
+        var sync = new DirectorySyncService(
+            context, NullLogger<DirectorySyncService>.Instance, new FakeLdapDirectoryClient(),
+            new SecretsVaultService(context, vaultConfig, NullLogger<SecretsVaultService>.Instance),
+            new FakeHostResolver(), vaultConfig);
+
+        // Task 4698: disable-missing only reaches LDAP-managed users that are members of the syncing tenant.
+        var tenantId = Guid.NewGuid();
+        var memberRole = new Role { Id = Guid.NewGuid(), Name = "Resident", Permissions = "[]" };
+        context.Roles.Add(memberRole);
         var removed = await AddUserAsync(context, "ldap-removed", passwordHash: "LDAP_MANAGED");
         var stillListed = await AddUserAsync(context, "ldap-listed", passwordHash: "LDAP_MANAGED");
         var local = await AddUserAsync(context, "local-user"); // not directory-managed
+        foreach (var member in new[] { removed, stillListed, local })
+            context.UserRoles.Add(new UserRole { UserId = member.Id, RoleId = memberRole.Id, TenantId = tenantId, GrantedAt = DateTime.UtcNow });
+        await context.SaveChangesAsync();
         await AddTokenAsync(context, removed.Id);
         await AddTokenAsync(context, removed.Id);
         await AddTokenAsync(context, stillListed.Id);
         await AddTokenAsync(context, local.Id);
 
         var disabled = await sync.DisableMissingUsersAsync(
-            Guid.NewGuid(), new HashSet<string> { stillListed.Email }, CancellationToken.None);
+            tenantId, new HashSet<string> { stillListed.Email }, CancellationToken.None);
 
         Assert.Equal(1, disabled);
         Assert.False((await context.Users.FindAsync(removed.Id))!.IsActive);
@@ -562,7 +593,7 @@ public class RefreshTokenSessionEndingTests
     };
 
     private static SecurityAlertService CreateSecurityAlertService(IAMDbContext context) =>
-        new(context, new FakeEmailService(), new NoHttpClientFactory(), NullLogger<SecurityAlertService>.Instance);
+        new(context, new FakeEmailService(), new NoHttpClientFactory(), NullLogger<SecurityAlertService>.Instance, new NoSendUrlGuard());
 
     private static async Task<AlertRule> AddAlertRuleAsync(IAMDbContext context, string autoResponse)
     {
@@ -570,6 +601,14 @@ public class RefreshTokenSessionEndingTests
         context.AlertRules.Add(rule);
         await context.SaveChangesAsync();
         return rule;
+    }
+
+    // These tests never send alerts; the guard only has to satisfy the constructor (task 4703 added it).
+    private sealed class NoSendUrlGuard : IWebhookUrlGuard
+    {
+        public Task<string?> CheckAsync(string url, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<System.Net.IPAddress[]> ResolveAllowedAsync(string host, CancellationToken ct = default) =>
+            Task.FromResult(Array.Empty<System.Net.IPAddress>());
     }
 
     private sealed class NoHttpClientFactory : IHttpClientFactory
