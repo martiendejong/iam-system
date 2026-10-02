@@ -555,6 +555,11 @@ Done: PR #163 - SocialAuthService only matches an existing account by e-mail whe
 Verified: build clean; 29 new tests (Google/GitHub/Microsoft/Apple, 6 guard mutations each fail them); 4706 stubs updated (verified e-mail, Microsoft e-mail-match cases moved); full IAM.API.Tests 606 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call; follow-up task 4765 (auto-create with an unverified e-mail can still pre-create an account a later verified login matches).
 
+## 2026-10-02 - task 4710
+Done: SCIM user/group filters parse once with no recursion; unparseable, unsupported or over-limit (512 chars, 10 and-terms) filters throw ScimFilterException -> 400 invalidFilter instead of overflowing the stack or returning everyone.
+Verified: build clean; 35 new ScimFilterTests pass (bad-filter cases crash the test host with a stack overflow on develop); full IAM.API.Tests 614 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien call; known-but-unsupported attribute/operator pairs and bad values now 400 (was silently unfiltered) - integrations relying on that will see 400s. SCIM tenant scoping is 4699.
+
 ## 2026-10-02 - task 4698
 Done: PR #159 - every /api/directory-sync action needs SuperAdmin or an active BuildingOwner row for the config's tenant (403 before lookups; create uses the body TenantId). Group-to-role mapping to platform-wide roles (SuperAdmin, SystemAdmin, SecurityAdmin, ComplianceOfficer, EmergencyAccess, Admin, by name) is 400 at save and ignored at sync. The sync loop only touches its tenant's users (regular accounts of other tenants untouched, no phone/re-enable for them, disable-missing limited to this tenant's LDAP-managed users). ldaps:// only, public address outside SuperAdmin; bind password stored encrypted via the vault (legacy rows encrypted by the worker sweep or on first use), never returned.
 Verified: build clean; 49 new DirectorySync tests pass; 5 mutations fail 1-3 tests each (tenant check, other-tenant users, disable scope, platform mapping, plain password); full IAM.API.Tests 628 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
