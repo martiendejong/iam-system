@@ -96,10 +96,25 @@ public class DeviceService : IDeviceService
             .FirstOrDefaultAsync(d => d.DeviceId == deviceId);
     }
 
-    public async Task<IEnumerable<Device>> GetAllDevicesAsync()
+    public async Task<Guid?> GetDeviceTenantIdAsync(Guid id)
     {
         return await _context.Devices
-            .Include(d => d.Tenant)
+            .AsNoTracking()
+            .Where(d => d.Id == id)
+            .Select(d => (Guid?)d.TenantId)
+            .FirstOrDefaultAsync();
+    }
+
+    public async Task<IEnumerable<Device>> GetAllDevicesAsync(IReadOnlyCollection<Guid>? tenantScope = null)
+    {
+        var query = _context.Devices.AsNoTracking().Include(d => d.Tenant).AsQueryable();
+        if (tenantScope != null)
+        {
+            var tenants = tenantScope.ToList();
+            query = query.Where(d => tenants.Contains(d.TenantId));
+        }
+
+        return await query
             .OrderBy(d => d.DeviceType)
             .ThenBy(d => d.Name)
             .ToListAsync();
@@ -115,7 +130,7 @@ public class DeviceService : IDeviceService
             .ToListAsync();
     }
 
-    public async Task<IEnumerable<Device>> GetDevicesByTypeAsync(string deviceType, Guid? tenantId = null)
+    public async Task<IEnumerable<Device>> GetDevicesByTypeAsync(string deviceType, Guid? tenantId = null, IReadOnlyCollection<Guid>? tenantScope = null)
     {
         var query = _context.Devices
             .Include(d => d.Tenant)
@@ -124,6 +139,12 @@ public class DeviceService : IDeviceService
         if (tenantId.HasValue)
         {
             query = query.Where(d => d.TenantId == tenantId.Value);
+        }
+
+        if (tenantScope != null)
+        {
+            var tenants = tenantScope.ToList();
+            query = query.Where(d => tenants.Contains(d.TenantId));
         }
 
         return await query
@@ -191,12 +212,18 @@ public class DeviceService : IDeviceService
         return true;
     }
 
-    public async Task<DeviceStatistics> GetStatisticsAsync(Guid? tenantId = null)
+    public async Task<DeviceStatistics> GetStatisticsAsync(Guid? tenantId = null, IReadOnlyCollection<Guid>? tenantScope = null)
     {
         var query = _context.Devices.AsQueryable();
         if (tenantId.HasValue)
         {
             query = query.Where(d => d.TenantId == tenantId.Value);
+        }
+
+        if (tenantScope != null)
+        {
+            var tenants = tenantScope.ToList();
+            query = query.Where(d => tenants.Contains(d.TenantId));
         }
 
         var devices = await query.ToListAsync();

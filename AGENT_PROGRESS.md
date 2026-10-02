@@ -595,6 +595,11 @@ Done: PR #156 - members list/role change/removal and invitations send/bulk/list/
 Verified: build clean; 47 new TenantMemberManagementAuthorizationTests pass; mutation-checked (no tenant scope fails 8, no grant rule fails 17); full IAM.API.Tests 626 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call. Not stacked on #151/#150 (own helpers; InvitationService bulk-invite region may need a trivial merge with #150). Open: TenantAdmin/OrganizationOwner treated as owner-level (not in the ticket's list).
 
+## 2026-10-02 - task 4726
+Done: PR #151 - new ITenantAccessResolver (users via UserRoles rows, API keys via scope + CanAccessTenant, device and service-account tokens refused, tenant_id claim pins the tenant) gates all 9 /api/devices actions: reads need membership (foreign device 404, foreign tenant in the URL 403, lists limited to the caller's tenants), register/update/deactivate need SuperAdmin or a TenantAdmin/BuildingOwner/BuildingManager row in the stored device's tenant (register checks before the duplicate-id check); ProvisionedByUserId comes from the caller. Python SDK list_devices() without a tenant now calls GET /api/devices.
+Verified: build clean; 34 new tests (HTTP matrix + API-key controller tests) pass and 6 mutations of the guards each fail them; full IAM.API.Tests 613 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; Python SDK admin tests 5 passed.
+Left: deploy of IAM is Martien's call. Task 4708 (telemetry hub/REST) should reuse ITenantAccessResolver and add the device-token-acts-on-itself case itself (the resolver refuses device tokens on purpose).
+
 ## 2026-10-02 - task 4739
 Done: GET /api/identity-providers and /{id} now admin-only: SuperAdmin/SystemAdmin read all; a TenantAdmin (active UserRole, tenant_id claim narrows) reads their tenants' providers plus platform-wide ones, another tenant's = 403; plain users 403 whatever the id. New actor-aware service reads (GET by id queries one row); /public and its service method untouched; response shape unchanged.
 Verified: build clean; 18 new IdentityProviderReadAuthorizationTests + the flipped AdminListing test pass (10 of the 18 fail on the old source); full IAM.API.Tests 597 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.

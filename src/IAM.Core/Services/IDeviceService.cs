@@ -7,13 +7,15 @@ public interface IDeviceService
     Task<DeviceResult> RegisterDeviceAsync(RegisterDeviceRequest request);
     Task<Device?> GetDeviceAsync(Guid id);
     Task<Device?> GetDeviceByDeviceIdAsync(string deviceId);
-    Task<IEnumerable<Device>> GetAllDevicesAsync();
+    Task<Guid?> GetDeviceTenantIdAsync(Guid id);
+    /// <param name="tenantScope">Tenants to limit the list to; null = every tenant (SuperAdmin only).</param>
+    Task<IEnumerable<Device>> GetAllDevicesAsync(IReadOnlyCollection<Guid>? tenantScope = null);
     Task<IEnumerable<Device>> GetDevicesByTenantAsync(Guid tenantId);
-    Task<IEnumerable<Device>> GetDevicesByTypeAsync(string deviceType, Guid? tenantId = null);
+    Task<IEnumerable<Device>> GetDevicesByTypeAsync(string deviceType, Guid? tenantId = null, IReadOnlyCollection<Guid>? tenantScope = null);
     Task<DeviceResult> UpdateDeviceAsync(Guid id, UpdateDeviceRequest request);
     Task<bool> DeactivateDeviceAsync(Guid id);
     Task<bool> UpdateDeviceStatusAsync(string deviceId, bool isOnline, string? ipAddress = null);
-    Task<DeviceStatistics> GetStatisticsAsync(Guid? tenantId = null);
+    Task<DeviceStatistics> GetStatisticsAsync(Guid? tenantId = null, IReadOnlyCollection<Guid>? tenantScope = null);
 }
 
 public class RegisterDeviceRequest
