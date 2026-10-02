@@ -81,6 +81,11 @@ public class ScimService : IScimService
         user.IsActive = scimUser.Active;
         user.UpdatedAt = DateTime.UtcNow;
 
+        if (!user.IsActive)
+        {
+            await _context.RevokeRefreshTokensAsync(user.Id, ct);
+        }
+
         await LogProvisioningAsync(tenantId, "Update", "User", scimUser.ExternalId, user.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
 
@@ -100,6 +105,11 @@ public class ScimService : IScimService
 
         user.UpdatedAt = DateTime.UtcNow;
 
+        if (!user.IsActive)
+        {
+            await _context.RevokeRefreshTokensAsync(user.Id, ct);
+        }
+
         await LogProvisioningAsync(tenantId, "Update", "User", null, user.Id, "Success", $"PATCH: {patchRequest.Operations.Count} operations", ct);
         await _context.SaveChangesAsync(ct);
 
@@ -115,6 +125,8 @@ public class ScimService : IScimService
         // Soft delete: deactivate the user rather than removing data
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
+
+        await _context.RevokeRefreshTokensAsync(user.Id, ct);
 
         await LogProvisioningAsync(tenantId, "Delete", "User", null, user.Id, "Success", "Soft delete (deactivated)", ct);
         await _context.SaveChangesAsync(ct);
