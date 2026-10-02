@@ -17,6 +17,7 @@ public class SecurityAlertService : ISecurityAlertService
     private readonly IEmailService _emailService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SecurityAlertService> _logger;
+    private readonly IWebhookUrlGuard _urlGuard;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -28,8 +29,10 @@ public class SecurityAlertService : ISecurityAlertService
         IAMDbContext context,
         IEmailService emailService,
         IHttpClientFactory httpClientFactory,
-        ILogger<SecurityAlertService> logger)
+        ILogger<SecurityAlertService> logger,
+        IWebhookUrlGuard urlGuard)
     {
+        _urlGuard = urlGuard;
         _context = context;
         _emailService = emailService;
         _httpClientFactory = httpClientFactory;
@@ -527,6 +530,9 @@ public class SecurityAlertService : ISecurityAlertService
                                     autoResponse = alert.AutoResponseAction
                                 }, JsonOptions);
 
+                                if (!await IsTargetAllowedAsync(channel.Target, "alert webhook"))
+                                    break;
+
                                 var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
                                 await client.PostAsync(channel.Target, content);
                             }
@@ -554,6 +560,9 @@ public class SecurityAlertService : ISecurityAlertService
                                         }
                                     }
                                 }, JsonOptions);
+
+                                if (!await IsTargetAllowedAsync(channel.Target, "alert Slack webhook"))
+                                    break;
 
                                 var slackContent = new StringContent(slackPayload, System.Text.Encoding.UTF8, "application/json");
                                 await slackClient.PostAsync(channel.Target, slackContent);
@@ -612,7 +621,9 @@ public class SecurityAlertService : ISecurityAlertService
         integration.Name = updated.Name;
         integration.Type = updated.Type;
         integration.EndpointUrl = updated.EndpointUrl;
-        integration.AuthConfig = updated.AuthConfig;
+        // Credentials are write-only: an update that omits them keeps the stored value (task 4703).
+        if (!string.IsNullOrWhiteSpace(updated.AuthConfig))
+            integration.AuthConfig = updated.AuthConfig;
         integration.Format = updated.Format;
         integration.EventFilter = updated.EventFilter;
         integration.IsActive = updated.IsActive;
@@ -659,6 +670,9 @@ public class SecurityAlertService : ISecurityAlertService
 
             try
             {
+                if (!await IsTargetAllowedAsync(siem.EndpointUrl, $"SIEM export {siem.Name}", ct))
+                    continue;
+
                 var client = _httpClientFactory.CreateClient("WebhookDelivery");
 
                 // Build SIEM-formatted payload
@@ -682,6 +696,20 @@ public class SecurityAlertService : ISecurityAlertService
                 _logger.LogError(ex, "Failed to export event to SIEM {SiemName}", siem.Name);
             }
         }
+    }
+
+    /// <summary>
+    /// Send-time SSRF check (task 4703): a stored target that is, or now resolves to, an internal address is
+    /// skipped and logged. The WebhookDelivery client also refuses such addresses at connection time.
+    /// </summary>
+    private async Task<bool> IsTargetAllowedAsync(string url, string what, CancellationToken ct = default)
+    {
+        var blocked = await _urlGuard.CheckAsync(url, ct);
+        if (blocked == null)
+            return true;
+
+        _logger.LogWarning("Skipped {Target}: {Reason}", what, blocked);
+        return false;
     }
 
     private string BuildSiemPayload(SiemIntegration siem, string eventType, object payload)

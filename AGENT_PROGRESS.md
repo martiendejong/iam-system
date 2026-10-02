@@ -534,3 +534,6 @@ Left: deploy is Martien call; existing subscriptions with internal URLs now fail
 Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user ("Account is inactive", as AuthService does) before any write, on both the linked-identity and the email-match branch; no tokens, RefreshToken, LastLoginAt, ExternalLogin.LastUsedAt change or new ExternalLogin. SocialAuthController already answers 400 with no cookie on a failed result. Lockout deliberately not enforced.
 Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
+
+## 2026-10-02 - task 4703 (in progress)
+Plan: SecurityAlertsController needs SuperAdmin/SecurityAdmin; SIEM responses drop AuthConfig (write-only, kept on update); webhook/Slack/SIEM URLs checked with IWebhookUrlGuard at save and send; auto-response rules SuperAdmin only.
