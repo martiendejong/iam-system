@@ -636,7 +636,7 @@ public class SocialAuthService : ISocialAuthService
         var query = _context.UserRoles.AsNoTracking().Where(ur =>
             ur.UserId == actor.UserId
             && ur.TenantId != null
-            && ur.Role.Name == TenantAdminRoleName
+            && ur.Role.Name == TenantAdminAuthority.RoleName
             && (ur.ExpiresAt == null || ur.ExpiresAt > now));
 
         if (actor.TenantId.HasValue)
