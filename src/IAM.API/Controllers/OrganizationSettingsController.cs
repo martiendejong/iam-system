@@ -1,6 +1,9 @@
+using System.Security.Claims;
 using System.Text.Json;
 using IAM.Core.Entities;
+using IAM.Core.Services;
 using IAM.Infrastructure.Data;
+using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -20,14 +23,56 @@ public class OrganizationSettingsController : ControllerBase
     }
 
     /// <summary>
-    /// Get organization settings for a tenant
+    /// Authority over one tenant's settings (task 4738): SuperAdmin/SystemAdmin, or an active TenantAdmin
+    /// UserRole scoped to exactly that tenant. A token that carries a tenant_id claim for another tenant
+    /// confers nothing, and a malformed claim or subject fails closed. Runs before any settings or tenant
+    /// lookup, so a caller without authority gets the same answer whether or not the tenant exists.
+    /// Returns null when the caller may proceed, otherwise the response to send.
+    /// </summary>
+    private async Task<IActionResult?> RequireTenantAdminAsync(Guid tenantId, CancellationToken ct)
+    {
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+            return Unauthorized();
+
+        Guid? tokenTenantId = null;
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var parsedTenantId))
+                return Unauthorized();
+            tokenTenantId = parsedTenantId;
+        }
+
+        if (User.IsInRole("SuperAdmin") || User.IsInRole("SystemAdmin"))
+            return null;
+
+        if (tokenTenantId.HasValue && tokenTenantId.Value != tenantId)
+            return Forbidden("Token is scoped to a different tenant");
+
+        if (!await TenantAdminAuthority.IsAdminOfTenantAsync(_context, userId, tenantId, ct))
+            return Forbidden("Only SuperAdmin, SystemAdmin or an admin of this tenant can access its organization settings");
+
+        return null;
+    }
+
+    private ObjectResult Forbidden(string message) =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = message });
+
+    /// <summary>
+    /// Get organization settings for a tenant. SuperAdmin/SystemAdmin, or an admin of that tenant.
     /// </summary>
     [HttpGet("{tenantId}")]
-    public async Task<IActionResult> GetSettings(Guid tenantId)
+    public async Task<IActionResult> GetSettings(Guid tenantId, CancellationToken ct)
     {
+        var denied = await RequireTenantAdminAsync(tenantId, ct);
+        if (denied != null)
+            return denied;
+
         var settings = await _context.Set<OrganizationSettings>()
+            .AsNoTracking()
             .Include(os => os.DefaultRole)
-            .FirstOrDefaultAsync(os => os.TenantId == tenantId);
+            .FirstOrDefaultAsync(os => os.TenantId == tenantId, ct);
 
         if (settings == null)
         {
@@ -60,30 +105,47 @@ public class OrganizationSettingsController : ControllerBase
     }
 
     /// <summary>
-    /// Create or update organization settings for a tenant
+    /// Create or update organization settings for a tenant. SuperAdmin/SystemAdmin, or an admin of that
+    /// tenant. The default role (handed to role-less bulk invitations) must exist, be non-privileged, and
+    /// be global or owned by the tenant; otherwise 400 and nothing is changed.
     /// </summary>
     [HttpPut("{tenantId}")]
-    public async Task<IActionResult> UpdateSettings(Guid tenantId, [FromBody] UpdateOrganizationSettingsRequest request)
+    public async Task<IActionResult> UpdateSettings(
+        Guid tenantId, [FromBody] UpdateOrganizationSettingsRequest request, CancellationToken ct)
     {
+        var denied = await RequireTenantAdminAsync(tenantId, ct);
+        if (denied != null)
+            return denied;
+
         // Validate tenant exists
-        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == tenantId);
+        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == tenantId, ct);
         if (!tenantExists)
         {
             return NotFound(new { error = "Tenant not found" });
         }
 
-        // Validate default role exists if specified
+        // Validate the default role before anything is written
         if (request.DefaultRoleId.HasValue)
         {
-            var roleExists = await _context.Roles.AnyAsync(r => r.Id == request.DefaultRoleId.Value);
-            if (!roleExists)
+            var role = await _context.Roles.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == request.DefaultRoleId.Value, ct);
+
+            switch (DefaultRoleRules.Check(role, tenantId))
             {
-                return BadRequest(new { error = "Default role not found" });
+                case DefaultRoleProblem.NotFound:
+                    return BadRequest(new { error = "Default role not found" });
+                case DefaultRoleProblem.Privileged:
+                    return BadRequest(new
+                    {
+                        error = $"Default role '{role!.Name}' is a privileged role and cannot be the default role of an organization"
+                    });
+                case DefaultRoleProblem.OtherTenant:
+                    return BadRequest(new { error = "Default role belongs to a different tenant" });
             }
         }
 
         var settings = await _context.Set<OrganizationSettings>()
-            .FirstOrDefaultAsync(os => os.TenantId == tenantId);
+            .FirstOrDefaultAsync(os => os.TenantId == tenantId, ct);
 
         if (settings == null)
         {
@@ -122,10 +184,10 @@ public class OrganizationSettingsController : ControllerBase
         }
 
         settings.UpdatedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         // Reload with navigation properties
-        await _context.Entry(settings).Reference(s => s.DefaultRole).LoadAsync();
+        await _context.Entry(settings).Reference(s => s.DefaultRole).LoadAsync(ct);
 
         return Ok(new
         {

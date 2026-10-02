@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using Hazina.Security.ApiKeys;
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -19,6 +22,81 @@ public class RiskAssessmentController : ControllerBase
         _logger = logger;
     }
 
+    // Task 4705. Thresholds decide when a login needs MFA or is blocked, so threshold management and the dashboard are
+    // limited to the platform security roles. Scores, trusted devices and manual assessments are per-user data: a caller
+    // may only act on their own user id (taken from the token; the request value must match or be omitted), anything
+    // else needs a platform security role. Login-time evaluation (AuthService) uses the service directly and is unchanged.
+
+    private const string PlatformSecurityRoles = "SuperAdmin,SecurityAdmin";
+
+    private bool IsPlatformSecurityAdmin() => User.IsInRole("SuperAdmin") || User.IsInRole("SecurityAdmin");
+
+    /// <summary>The signed-in user's id, or null for tokens that are not a user (API key, device, service account).</summary>
+    private Guid? CallerUserId()
+    {
+        // An API key carries its issuing user's id, but it is a credential of its own, not that user.
+        if (User.IsApiKey() || User.FindFirst(ServiceAccountAuthorization.TokenTypeClaim) != null)
+            return null;
+
+        return Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub"), out var id)
+            ? id
+            : null;
+    }
+
+    private ObjectResult Forbidden(string error = "You can only access your own risk data; acting on another user needs a platform security role.") =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error });
+
+    /// <summary>
+    /// Resolves which user an action applies to. A platform security admin may name any user (or default to
+    /// themselves); everyone else gets their own id from the token, and naming a different user is 403.
+    /// Returns the error result, or null with <paramref name="target"/> set.
+    /// </summary>
+    private ObjectResult? ResolveTargetUser(Guid? requested, out Guid target)
+    {
+        target = Guid.Empty;
+        var caller = CallerUserId();
+        var wanted = requested == Guid.Empty ? null : requested;
+
+        if (IsPlatformSecurityAdmin() && !(User.IsApiKey() || User.FindFirst(ServiceAccountAuthorization.TokenTypeClaim) != null))
+        {
+            var admin = wanted ?? caller;
+            if (admin == null)
+                return StatusCode(StatusCodes.Status400BadRequest, new { error = "UserId is required" });
+            target = admin.Value;
+            return null;
+        }
+
+        if (caller == null || (wanted != null && wanted != caller))
+            return Forbidden();
+
+        target = caller.Value;
+        return null;
+    }
+
+    /// <summary>
+    /// Thresholds that could never trigger (or would reorder the actions) would switch risk-based protection off.
+    /// Scores run 0-100; a login is blocked at score &gt;= Block and steps up to MFA at score &gt; RequireMfaAbove, so
+    /// RequireMfaAbove must be 0-99 and below Block, and Block must be 1-100.
+    /// </summary>
+    internal static string? ValidateThresholds(UpsertThresholdRequest r)
+    {
+        if (r.LowThreshold < 0 || r.LowThreshold >= r.MediumThreshold ||
+            r.MediumThreshold >= r.HighThreshold ||
+            r.HighThreshold >= r.BlockThreshold)
+            return "Thresholds must be in ascending order: 0 <= Low < Medium < High < Block";
+
+        if (r.BlockThreshold < 1 || r.BlockThreshold > 100)
+            return "BlockThreshold must be between 1 and 100 (a higher value can never block a login)";
+
+        if (r.RequireMfaAbove < 0 || r.RequireMfaAbove > 99)
+            return "RequireMfaAbove must be between 0 and 99 (scores never exceed 100, so a higher value can never require MFA)";
+
+        if (r.RequireMfaAbove >= r.BlockThreshold)
+            return "RequireMfaAbove must be below BlockThreshold";
+
+        return null;
+    }
+
     // ===========================================
     // Dashboard & Scores
     // ===========================================
@@ -27,6 +105,7 @@ public class RiskAssessmentController : ControllerBase
     /// Get risk dashboard data: heatmap, distribution, and summary statistics.
     /// </summary>
     [HttpGet("dashboard")]
+    [Authorize(Roles = PlatformSecurityRoles)]
     public async Task<ActionResult<RiskDashboardData>> GetDashboard(
         [FromQuery] Guid? tenantId,
         [FromQuery] int days = 30,
@@ -51,7 +130,16 @@ public class RiskAssessmentController : ControllerBase
         [FromQuery] int take = 50,
         CancellationToken cancellationToken = default)
     {
-        var scores = await _riskService.GetRiskScoresAsync(userId, startDate, endDate, skip, take, cancellationToken);
+        // Platform security admins may list everyone's scores (userId omitted) or one user's; others only their own.
+        Guid? scopeUser = userId;
+        if (!IsPlatformSecurityAdmin() || userId.HasValue)
+        {
+            if (ResolveTargetUser(userId, out var target) is { } denied)
+                return denied;
+            scopeUser = target;
+        }
+
+        var scores = await _riskService.GetRiskScoresAsync(scopeUser, startDate, endDate, skip, take, cancellationToken);
         return Ok(scores);
     }
 
@@ -63,14 +151,14 @@ public class RiskAssessmentController : ControllerBase
         [FromBody] AssessRiskRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request.UserId == Guid.Empty)
-            return BadRequest("UserId is required");
+        if (ResolveTargetUser(request.UserId, out var assessUser) is { } denied)
+            return denied;
 
         if (string.IsNullOrWhiteSpace(request.IpAddress))
             return BadRequest("IpAddress is required");
 
         var result = await _riskService.AssessLoginRiskAsync(
-            request.UserId,
+            assessUser,
             request.IpAddress,
             request.UserAgent,
             request.DeviceFingerprint,
@@ -87,6 +175,7 @@ public class RiskAssessmentController : ControllerBase
     /// Get all risk threshold configurations.
     /// </summary>
     [HttpGet("thresholds")]
+    [Authorize(Roles = PlatformSecurityRoles)]
     public async Task<ActionResult<List<RiskThreshold>>> GetThresholds(
         [FromQuery] Guid? tenantId,
         CancellationToken cancellationToken = default)
@@ -99,6 +188,7 @@ public class RiskAssessmentController : ControllerBase
     /// Get a single risk threshold by ID.
     /// </summary>
     [HttpGet("thresholds/{id:guid}")]
+    [Authorize(Roles = PlatformSecurityRoles)]
     public async Task<ActionResult<RiskThreshold>> GetThreshold(
         Guid id,
         CancellationToken cancellationToken = default)
@@ -112,19 +202,13 @@ public class RiskAssessmentController : ControllerBase
     /// Create or update a risk threshold configuration.
     /// </summary>
     [HttpPost("thresholds")]
+    [Authorize(Roles = PlatformSecurityRoles)]
     public async Task<ActionResult<RiskThreshold>> UpsertThreshold(
         [FromBody] UpsertThresholdRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request.LowThreshold >= request.MediumThreshold ||
-            request.MediumThreshold >= request.HighThreshold ||
-            request.HighThreshold >= request.BlockThreshold)
-        {
-            return BadRequest("Thresholds must be in ascending order: Low < Medium < High < Block");
-        }
-
-        if (request.RequireMfaAbove < 0 || request.RequireMfaAbove > 100)
-            return BadRequest("RequireMfaAbove must be between 0 and 100");
+        if (ValidateThresholds(request) is { } invalid)
+            return BadRequest(invalid);
 
         var threshold = new RiskThreshold
         {
@@ -146,6 +230,7 @@ public class RiskAssessmentController : ControllerBase
     /// Delete a risk threshold configuration.
     /// </summary>
     [HttpDelete("thresholds/{id:guid}")]
+    [Authorize(Roles = PlatformSecurityRoles)]
     public async Task<ActionResult> DeleteThreshold(
         Guid id,
         CancellationToken cancellationToken = default)
@@ -167,7 +252,10 @@ public class RiskAssessmentController : ControllerBase
         Guid userId,
         CancellationToken cancellationToken = default)
     {
-        var devices = await _riskService.GetTrustedDevicesAsync(userId, cancellationToken);
+        if (ResolveTargetUser(userId, out var owner) is { } denied)
+            return denied;
+
+        var devices = await _riskService.GetTrustedDevicesAsync(owner, cancellationToken);
         return Ok(devices);
     }
 
@@ -179,8 +267,8 @@ public class RiskAssessmentController : ControllerBase
         [FromBody] TrustDeviceRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request.UserId == Guid.Empty)
-            return BadRequest("UserId is required");
+        if (ResolveTargetUser(request.UserId, out var deviceOwner) is { } denied)
+            return denied;
 
         if (string.IsNullOrWhiteSpace(request.DeviceFingerprint))
             return BadRequest("DeviceFingerprint is required");
@@ -189,7 +277,7 @@ public class RiskAssessmentController : ControllerBase
             return BadRequest("Name is required");
 
         var device = await _riskService.TrustDeviceAsync(
-            request.UserId,
+            deviceOwner,
             request.DeviceFingerprint,
             request.Name,
             cancellationToken);
@@ -203,13 +291,13 @@ public class RiskAssessmentController : ControllerBase
     [HttpDelete("devices/{id:guid}")]
     public async Task<ActionResult> RemoveTrustedDevice(
         Guid id,
-        [FromQuery] Guid userId,
+        [FromQuery] Guid? userId,
         CancellationToken cancellationToken = default)
     {
-        if (userId == Guid.Empty)
-            return BadRequest("UserId query parameter is required");
+        if (ResolveTargetUser(userId, out var owner) is { } denied)
+            return denied;
 
-        var removed = await _riskService.RemoveTrustedDeviceAsync(id, userId, cancellationToken);
+        var removed = await _riskService.RemoveTrustedDeviceAsync(id, owner, cancellationToken);
         if (!removed) return NotFound();
         return NoContent();
     }
@@ -221,6 +309,7 @@ public class RiskAssessmentController : ControllerBase
 
 public class AssessRiskRequest
 {
+    /// <summary>Omit (or send the caller's own id) to assess yourself; another user needs a platform security role.</summary>
     public Guid UserId { get; set; }
     public string IpAddress { get; set; } = string.Empty;
     public string? UserAgent { get; set; }
@@ -241,6 +330,7 @@ public class UpsertThresholdRequest
 
 public class TrustDeviceRequest
 {
+    /// <summary>Omit (or send the caller's own id) for your own devices; another user needs a platform security role.</summary>
     public Guid UserId { get; set; }
     public string DeviceFingerprint { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
