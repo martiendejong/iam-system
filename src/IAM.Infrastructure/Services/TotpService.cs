@@ -115,9 +115,11 @@ public class TotpService : ITotpService
         if (!ValidateCode(user.TwoFactorSecret, code))
             return false;
 
-        // Code is valid - activate TOTP
+        // Code is valid - activate TOTP. The setup URI asked the app for SHA-256, record that so this
+        // enrollment is never mistaken for a legacy SHA-1 one (see User.HasLegacyTotpEnrollment).
         user.TwoFactorEnabled = true;
         user.TwoFactorMethod = TwoFactorMethod.Totp;
+        user.TotpAlgorithm = TotpAlgorithms.Sha256;
         user.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(ct);
@@ -140,6 +142,7 @@ public class TotpService : ITotpService
         // Disable TOTP and clear secret
         user.TwoFactorEnabled = false;
         user.TwoFactorSecret = null;
+        user.TotpAlgorithm = null;
         user.TwoFactorMethod = TwoFactorMethod.None;
         user.UpdatedAt = DateTime.UtcNow;
 
@@ -162,7 +165,19 @@ public class TotpService : ITotpService
         if (!user.TwoFactorEnabled || string.IsNullOrWhiteSpace(user.TwoFactorSecret))
             return false;
 
-        return ValidateCode(user.TwoFactorSecret, code);
+        if (!ValidateCode(user.TwoFactorSecret, code))
+            return false;
+
+        // A code that passes the SHA-256 check proves the app was provisioned from the SHA-256 setup URI, so an
+        // enrollment without the marker (made after PR #104 but before TotpAlgorithm existed) is not legacy after all.
+        if (user.TotpAlgorithm == null)
+        {
+            user.TotpAlgorithm = TotpAlgorithms.Sha256;
+            user.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync(ct);
+        }
+
+        return true;
     }
 
     public async Task<List<string>> GenerateRecoveryCodesAsync(Guid userId, int count = 8, CancellationToken ct = default)
@@ -247,7 +262,7 @@ public class TotpService : ITotpService
     // ---------- TOTP Core Algorithm (RFC 6238) ----------
 
     /// <summary>
-    /// Generates a TOTP code using HMAC-SHA1 per RFC 6238 / RFC 4226.
+    /// Generates a TOTP code using HMAC-SHA256 per RFC 6238 / RFC 4226 (SHA-1 enrollments are migrated, see task 3162).
     /// </summary>
     private static string GenerateTotpCode(byte[] secret, long timeStep)
     {

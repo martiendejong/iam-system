@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace IAM.Core.Entities;
 
 public class User
@@ -26,6 +28,13 @@ public class User
     public string? TwoFactorSecret { get; set; }
     public TwoFactorMethod TwoFactorMethod { get; set; } = TwoFactorMethod.None;
 
+    /// <summary>
+    /// HMAC algorithm the stored authenticator-app secret was provisioned for (see <see cref="TotpAlgorithms"/>).
+    /// Set when a TOTP enrollment is activated. A TOTP user without it enrolled before the SHA-1 to SHA-256
+    /// upgrade (task 3162) and is a legacy enrollment, see <see cref="HasLegacyTotpEnrollment"/>.
+    /// </summary>
+    public string? TotpAlgorithm { get; set; }
+
     // Password reset
     public string? PasswordResetToken { get; set; }
     public DateTime? PasswordResetTokenExpiry { get; set; }
@@ -51,6 +60,24 @@ public class User
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
     public ICollection<RecoveryCode> RecoveryCodes { get; set; } = new List<RecoveryCode>();
+
+    /// <summary>
+    /// True when this user has an active authenticator-app (TOTP) enrollment that was not provisioned for
+    /// HMAC-SHA256. Such an app generates SHA-1 codes the server no longer accepts, so the enrollment can
+    /// never pass a check again and has to be migrated (task 3162).
+    /// </summary>
+    public bool HasLegacyTotpEnrollment() => LegacyTotpEnrollmentCompiled(this);
+
+    /// <summary>
+    /// Query form of <see cref="HasLegacyTotpEnrollment"/> (same predicate, translated to SQL) so a count of
+    /// affected members can never drift from the rule used at sign-in.
+    /// </summary>
+    public static readonly Expression<Func<User, bool>> LegacyTotpEnrollment = u =>
+        u.TwoFactorEnabled
+        && u.TwoFactorMethod == TwoFactorMethod.Totp
+        && u.TotpAlgorithm != TotpAlgorithms.Sha256;
+
+    private static readonly Func<User, bool> LegacyTotpEnrollmentCompiled = LegacyTotpEnrollment.Compile();
 }
 
 public enum TwoFactorMethod
@@ -58,4 +85,10 @@ public enum TwoFactorMethod
     None,
     Totp,
     Email
+}
+
+public static class TotpAlgorithms
+{
+    /// <summary>Value stored in <see cref="User.TotpAlgorithm"/> for enrollments made after the SHA-256 upgrade.</summary>
+    public const string Sha256 = "SHA256";
 }

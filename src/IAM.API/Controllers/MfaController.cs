@@ -209,7 +209,8 @@ public class MfaController : ControllerBase
     }
 
     /// <summary>
-    /// Get MFA status for the current user: whether TOTP is enabled, the method, and remaining recovery codes.
+    /// Get MFA status for the current user: whether TOTP is enabled, the method, remaining recovery codes, and
+    /// whether the authenticator enrollment is a legacy SHA-1 one.
     /// </summary>
     [HttpGet("status")]
     public async Task<IActionResult> GetMfaStatus(CancellationToken ct)
@@ -230,7 +231,10 @@ public class MfaController : ControllerBase
             twoFactorEnabled = user.TwoFactorEnabled,
             method = user.TwoFactorEnabled ? user.TwoFactorMethod.ToString().ToLowerInvariant() : (string?)null,
             recoveryCodesRemaining = remainingRecoveryCodes,
-            hasPendingSetup = !user.TwoFactorEnabled && !string.IsNullOrWhiteSpace(user.TwoFactorSecret)
+            hasPendingSetup = !user.TwoFactorEnabled && !string.IsNullOrWhiteSpace(user.TwoFactorSecret),
+            // True for an authenticator app enrolled before the SHA-1 to SHA-256 upgrade: it can never produce an
+            // accepted code (task 3162). Normally migrated to e-mail PIN at the next sign-in unless the tenant opted out.
+            legacyTotpEnrollment = user.HasLegacyTotpEnrollment()
         });
     }
 

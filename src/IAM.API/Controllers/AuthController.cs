@@ -94,7 +94,8 @@ public class AuthController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = result.User!.Id,
-                message = "A verification code has been sent to your email."
+                message = "A verification code has been sent to your email.",
+                twoFactorMigration = result.LegacyTotpMigration
             });
         }
 

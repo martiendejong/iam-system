@@ -145,7 +145,11 @@ export default function LoginPage() {
       if (response.requiresTwoFactor && response.userId) {
         setTwoFactorUserId(response.userId);
         setTwoFactorPending(true);
-        setMessage(response.message || 'A verification code has been sent to your email.');
+        setMessage(
+          response.twoFactorMigration?.message ||
+            response.message ||
+            'A verification code has been sent to your email.'
+        );
         return;
       }
       navigateAfterLogin();
