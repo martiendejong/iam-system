@@ -188,6 +188,12 @@ public class AuthService : IAuthService
             };
         }
 
+        // Password is correct. An authenticator app enrolled before the SHA-1 to SHA-256 upgrade (task 3162)
+        // can never produce an accepted code again, so move it to e-mail PIN two-factor (tenant policy
+        // permitting); the branch below then challenges the member with the PIN like any e-mail 2FA account.
+        var legacyTotpMigration = await LegacyTotpMigration.TryMigrateToEmailPinAsync(
+            _context, user, _logger, ipAddress, userAgent);
+
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
             await _context.SaveChangesAsync();
@@ -197,7 +203,8 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
-                User = user
+                User = user,
+                LegacyTotpMigration = legacyTotpMigration
             };
         }
 
@@ -549,6 +556,10 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
+        // Same legacy authenticator-app migration as the password path (task 3162).
+        var legacyTotpMigration = await LegacyTotpMigration.TryMigrateToEmailPinAsync(
+            _context, user, _logger, ipAddress, userAgent);
+
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
             await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
@@ -557,7 +568,8 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
-                User = user
+                User = user,
+                LegacyTotpMigration = legacyTotpMigration
             };
         }
 

@@ -88,6 +88,8 @@ export interface LoginResponse {
   requiresTwoFactor?: boolean;
   userId?: string;
   message?: string;
+  /** Set when this sign-in moved a legacy (SHA-1) authenticator-app enrollment to e-mail PIN two-factor */
+  twoFactorMigration?: { fromMethod: string; toMethod: string; message: string } | null;
 }
 
 // Identity Provider types

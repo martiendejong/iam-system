@@ -84,7 +84,8 @@ public class OtpController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = loginResult.User!.Id,
-                message = "A verification code has been sent to your email."
+                message = "A verification code has been sent to your email.",
+                twoFactorMigration = loginResult.LegacyTotpMigration
             });
         }
 
@@ -172,7 +173,8 @@ public class OtpController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = loginResult.User!.Id,
-                message = "A verification code has been sent to your email."
+                message = "A verification code has been sent to your email.",
+                twoFactorMigration = loginResult.LegacyTotpMigration
             });
         }
 

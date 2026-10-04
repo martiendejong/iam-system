@@ -630,7 +630,7 @@ Done: PR #165 - a verified social login (Google/GitHub/Apple) whose e-mail match
 Verified: build clean; 12 new test cases in SocialLoginVerifiedEmailTests (5 of them fail on unchanged develop, incl. the pre-hijack sequence); SocialLogin filter 57 passed; full IAM.API.Tests 1125 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call. Accounts auto-created through Microsoft before 4707 were stored with EmailConfirmed = true, so the guard cannot see them; a data audit is filed as a follow-up. A legit user who registered but never confirmed is refused with a "confirm your e-mail" message.
 
-## 2026-10-04 - task 3162 (in progress)
-Done: started - legacy SHA-1 authenticator enrollments (PR #104 moved TOTP to SHA-256) move to e-mail-PIN two-factor at next login, tenant-configurable.
-Verified: not yet.
-Left: implementation, tests, PR body.
+## 2026-10-04 - task 3162
+Done: PR #168 - a TOTP member enrolled before PR #104 (SHA-1 app, `Users.TotpAlgorithm` empty) is moved to the existing e-mail-PIN two-factor at the next password / magic-link / OTP sign-in (PIN is mailed then, nothing in bulk; secret and recovery codes removed, audit row written). Per-tenant policy `OrganizationSettings.LegacyTotpMigration` (EmailPin default / Off) on the org-settings API + admin UI, with a count of affected members; `/api/mfa/status` flags `legacyTotpEnrollment`; sign-in responses carry `twoFactorMigration` and the login page shows it. See docs/TOTP-MIGRATION.md.
+Verified: build clean; 42 new .NET tests (7 fail with the migration disabled) + 1 new LoginPage test; full IAM.API.Tests 1202 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; admin-ui tsc clean, LoginPage/auth tests 36 passed. Not verified: live deploy; the chat log behind Martien's decision could not be read, so "e-mail PIN" is interpreted (see PR).
+Left: before the new build starts apply the two ALTER TABLE statements in docs/TOTP-MIGRATION.md (Users.TotpAlgorithm, OrganizationSettings.LegacyTotpMigration), then deploy (Martien). TOTP is still not enforced at sign-in on develop (open PR #142 / #67); when it lands the migration call must stay before its TOTP branch.

@@ -34,7 +34,12 @@ interface OrgSettings {
   defaultRoleName: string | null;
   maxMembers: number;
   welcomeMessage: string | null;
+  legacyTotpMigration?: LegacyTotpMigration;
+  legacyTotpUserCount?: number;
 }
+
+/** What happens to members whose authenticator app was set up before the SHA-1 to SHA-256 upgrade (task 3162). */
+type LegacyTotpMigration = 'EmailPin' | 'Off';
 
 type TabId = 'invite' | 'pending' | 'all' | 'members' | 'settings' | 'bulk';
 
@@ -61,13 +66,21 @@ export default function InvitationsPage() {
   const [bulkResult, setBulkResult] = useState<any>(null);
 
   // Org settings
-  const [, setOrgSettings] = useState<OrgSettings | null>(null);
-  const [settingsForm, setSettingsForm] = useState({
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+  const [settingsForm, setSettingsForm] = useState<{
+    allowedEmailDomains: string;
+    requireMfa: boolean;
+    defaultRoleId: string;
+    maxMembers: number;
+    welcomeMessage: string;
+    legacyTotpMigration: LegacyTotpMigration;
+  }>({
     allowedEmailDomains: '',
     requireMfa: false,
     defaultRoleId: '',
     maxMembers: 0,
     welcomeMessage: '',
+    legacyTotpMigration: 'EmailPin',
   });
 
   // Load tenants and roles on mount
@@ -135,6 +148,7 @@ export default function InvitationsPage() {
         defaultRoleId: data.defaultRoleId || '',
         maxMembers: data.maxMembers || 0,
         welcomeMessage: data.welcomeMessage || '',
+        legacyTotpMigration: data.legacyTotpMigration === 'Off' ? 'Off' : 'EmailPin',
       });
     } catch {
       // Settings might not exist yet, that's OK
@@ -254,6 +268,7 @@ export default function InvitationsPage() {
         defaultRoleId: settingsForm.defaultRoleId || null,
         maxMembers: settingsForm.maxMembers,
         welcomeMessage: settingsForm.welcomeMessage || null,
+        legacyTotpMigration: settingsForm.legacyTotpMigration,
       });
       setSuccess('Organization settings saved');
       loadOrgSettings();
@@ -644,6 +659,29 @@ export default function InvitationsPage() {
                   <label htmlFor="requireMfa" className="ml-2 block text-sm text-gray-900">
                     Require MFA for all members
                   </label>
+                </div>
+                <div>
+                  <label htmlFor="legacyTotpMigration" className="block text-sm font-medium text-gray-700">
+                    Members with an outdated authenticator app
+                  </label>
+                  <select
+                    id="legacyTotpMigration"
+                    value={settingsForm.legacyTotpMigration}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, legacyTotpMigration: e.target.value as LegacyTotpMigration })
+                    }
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                  >
+                    <option value="EmailPin">Switch them to an e-mailed PIN at their next sign-in</option>
+                    <option value="Off">Leave them as they are (handled separately)</option>
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Authenticator apps set up before the security upgrade to SHA-256 no longer produce valid codes. With
+                    the e-mail PIN option nothing is mailed in bulk: a PIN is sent only when the member signs in, and they
+                    can set up an authenticator app again afterwards.
+                    {typeof orgSettings?.legacyTotpUserCount === 'number' &&
+                      ` Members affected in this organization: ${orgSettings.legacyTotpUserCount}.`}
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Default Role</label>
