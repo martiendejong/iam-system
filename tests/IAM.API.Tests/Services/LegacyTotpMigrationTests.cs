@@ -350,50 +350,46 @@ public class LegacyTotpMigrationTests
         Assert.NotNull(result.LegacyTotpMigration);
     }
 
-    // ----- passwordless entry points ----------------------------------------------------------
+    // ----- only a password sign-in migrates ---------------------------------------------------
 
     [Fact]
-    public async Task Passwordless_LegacyTotpUser_IsMigratedAndChallengedWithAPin()
+    public async Task Passwordless_MailboxProofAlone_NeverStripsAnAuthenticatorEnrollment()
     {
+        // A magic link / OTP proves only mailbox access and the PIN would go to that same mailbox: the migration
+        // must wait for a password sign-in, where the password is a separate factor.
         var (auth, email, context) = CreateServices();
         var user = await SeedLegacyTotpUserAsync(context);
 
         var result = await auth.CompletePasswordlessLoginAsync(user);
 
-        Assert.True(result.Success);
-        Assert.True(result.RequiresTwoFactor);
-        Assert.Null(result.AccessToken);
-        Assert.NotNull(result.LegacyTotpMigration);
+        Assert.Null(result.LegacyTotpMigration);
+        Assert.Empty(email.SentTwoFactorCodes);
+        var stored = await context.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id);
+        Assert.Equal(TwoFactorMethod.Totp, stored.TwoFactorMethod);
+        Assert.NotNull(stored.TwoFactorSecret);
+        Assert.Equal(2, await context.RecoveryCodes.CountAsync(rc => rc.UserId == user.Id));
+        Assert.Empty(await context.AuditLogs.Where(a => a.Action == "LegacyTotpMigratedToEmailPin").ToListAsync());
+
+        // ... and the member is not stranded: the next password sign-in migrates them.
+        var passwordLogin = await auth.LoginAsync(user.Email, Password);
+        Assert.NotNull(passwordLogin.LegacyTotpMigration);
         Assert.Single(email.SentTwoFactorCodes);
-        Assert.Equal(TwoFactorMethod.Email, (await context.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id)).TwoFactorMethod);
     }
 
     [Fact]
-    public async Task Passwordless_UnconfirmedEmail_IsNotMigrated()
+    public async Task Login_UnconfirmedEmail_IsRefusedBeforeAnythingIsMigrated()
     {
         var (auth, email, context) = CreateServices();
         var user = NewUser(TwoFactorMethod.Totp, emailConfirmed: false);
         context.Users.Add(user);
         await context.SaveChangesAsync();
 
-        var result = await auth.CompletePasswordlessLoginAsync(user);
+        var result = await auth.LoginAsync(user.Email, Password);
 
+        Assert.False(result.Success);
         Assert.Null(result.LegacyTotpMigration);
         Assert.Empty(email.SentTwoFactorCodes);
         Assert.Equal(TwoFactorMethod.Totp, (await context.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id)).TwoFactorMethod);
-    }
-
-    [Fact]
-    public async Task Passwordless_TenantSetToOff_IsNotMigrated()
-    {
-        var (auth, email, context) = CreateServices();
-        var user = await SeedLegacyTotpUserAsync(context);
-        await PlaceInTenantAsync(context, user, LegacyTotpMigrationMode.Off);
-
-        var result = await auth.CompletePasswordlessLoginAsync(user);
-
-        Assert.Null(result.LegacyTotpMigration);
-        Assert.Empty(email.SentTwoFactorCodes);
     }
 
     // ----- what counts as a legacy enrollment -------------------------------------------------

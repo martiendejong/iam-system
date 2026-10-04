@@ -12,14 +12,19 @@ namespace IAM.Infrastructure.Services;
 /// generates codes the server can never accept again (<see cref="User.HasLegacyTotpEnrollment"/>).
 /// <para>
 /// Decision (Martien, 2026-10-04): handle it through an e-mail PIN, and let each tenant configure the behaviour
-/// (<see cref="OrganizationSettings.LegacyTotpMigration"/>). When a legacy member signs in and has passed the first
-/// proof (password, magic link or OTP), the account moves to the e-mail-PIN second factor that already exists
+/// (<see cref="OrganizationSettings.LegacyTotpMigration"/>). When a legacy member signs in with their password, the
+/// account moves to the e-mail-PIN second factor that already exists
 /// (<see cref="TwoFactorMethod.Email"/>): the caller then falls into the normal "send a PIN, require it before any
 /// token is issued" branch, so the member is never left without a working second factor and never locked out.
 /// </para>
 /// <para>
 /// Nothing here sends mail in bulk: the PIN is mailed by the existing login-2FA flow, and only when the member
 /// signs in. The member can set up an authenticator app again afterwards (new enrollments are SHA-256).
+/// </para>
+/// <para>
+/// Only the password sign-in migrates. A magic link or OTP proves nothing but access to the mailbox, and the PIN goes
+/// to that same mailbox, so letting those paths strip an authenticator enrollment would hand a mailbox-only attacker
+/// both factors; with a password sign-in the password and the mailbox are separate factors.
 /// </para>
 /// </summary>
 public static class LegacyTotpMigration
@@ -57,7 +62,7 @@ public static class LegacyTotpMigration
     /// <summary>
     /// Moves a legacy authenticator-app user to e-mail-PIN two-factor and returns the notice to show them, or returns
     /// null when nothing was changed (not a legacy enrollment, e-mail not confirmed so a PIN could not be trusted,
-    /// inactive account, or the tenant policy is off). The caller must have verified the user's first proof already.
+    /// inactive account, or the tenant policy is off). The caller must have verified the user's password already.
     /// </summary>
     public static async Task<LegacyTotpMigrationNotice?> TryMigrateToEmailPinAsync(
         IAMDbContext context,

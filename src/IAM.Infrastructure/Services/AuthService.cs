@@ -556,10 +556,9 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
-        // Same legacy authenticator-app migration as the password path (task 3162).
-        var legacyTotpMigration = await LegacyTotpMigration.TryMigrateToEmailPinAsync(
-            _context, user, _logger, ipAddress, userAgent);
-
+        // No legacy-authenticator migration here (task 3162): a magic link / OTP proves only mailbox possession, and
+        // the e-mail PIN would go to that same mailbox, so it must not be able to strip an authenticator enrollment.
+        // The member is migrated at their next password sign-in (LoginAsync), where the password is a separate factor.
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
             await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
@@ -568,8 +567,7 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
-                User = user,
-                LegacyTotpMigration = legacyTotpMigration
+                User = user
             };
         }
 

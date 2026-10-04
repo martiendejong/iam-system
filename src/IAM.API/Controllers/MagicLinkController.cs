@@ -71,8 +71,7 @@ public class MagicLinkController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = loginResult.User!.Id,
-                message = "A verification code has been sent to your email.",
-                twoFactorMigration = loginResult.LegacyTotpMigration
+                message = "A verification code has been sent to your email."
             });
         }
 

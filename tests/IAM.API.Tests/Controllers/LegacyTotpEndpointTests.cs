@@ -219,4 +219,31 @@ public class LegacyTotpEndpointTests : IClassFixture<IAMTestWebApplicationFactor
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(expected, (await ReadAsync(response)).GetProperty("legacyTotpEnrollment").GetBoolean());
     }
+
+    // ----- portal security summary ------------------------------------------------------------
+
+    [Theory]
+    [InlineData(TwoFactorMethod.Totp, "SHA256", "totp")]
+    [InlineData(TwoFactorMethod.Email, null, "email")]
+    public async Task PortalSecuritySummary_ReportsTheRealMfaMethod(TwoFactorMethod method, string? algorithm, string expected)
+    {
+        // A member migrated from a legacy authenticator app is on e-mail PIN; the summary must not call that "totp".
+        var user = await CreateUserAsync(tenantId: null, method, algorithm);
+
+        var body = await ReadAsync(await ClientAs(user.Id).GetAsync("/api/portal/security-summary"));
+
+        Assert.True(body.GetProperty("mfaEnabled").GetBoolean());
+        Assert.Equal(expected, body.GetProperty("mfaMethod").GetString());
+    }
+
+    [Fact]
+    public async Task PortalSecuritySummary_WithoutTwoFactor_HasNoMethod()
+    {
+        var user = await CreateUserAsync(tenantId: null);
+
+        var body = await ReadAsync(await ClientAs(user.Id).GetAsync("/api/portal/security-summary"));
+
+        Assert.False(body.GetProperty("mfaEnabled").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("mfaMethod").ValueKind);
+    }
 }

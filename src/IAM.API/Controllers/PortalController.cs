@@ -167,7 +167,8 @@ public class PortalController : ControllerBase
         return Ok(new
         {
             mfaEnabled = user.TwoFactorEnabled,
-            mfaMethod = user.TwoFactorEnabled ? "totp" : (string?)null,
+            // The real method ("totp" / "email"): a legacy authenticator member is moved to e-mail PIN (task 3162).
+            mfaMethod = user.TwoFactorEnabled ? user.TwoFactorMethod.ToString().ToLowerInvariant() : (string?)null,
             passkeyCount,
             sessionCount,
             lastLoginAt = user.LastLoginAt,

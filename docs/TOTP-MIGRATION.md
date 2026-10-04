@@ -14,12 +14,14 @@ Martien, 2026-10-04: do it through an **e-mail PIN**, and make the options **con
 * `Users.TotpAlgorithm` records what an enrollment was provisioned for. It is set to `SHA256` when a member activates a
   new authenticator app. A member with TOTP enabled and no `SHA256` marker is a **legacy enrollment**
   (`User.HasLegacyTotpEnrollment()`; the same predicate is available as the query `User.LegacyTotpEnrollment`).
-* When a legacy member signs in and has passed the first proof (password, magic link, SMS/e-mail OTP), the account is moved to
-  the **e-mail PIN two-factor method that already exists** (`TwoFactorMethod.Email`): the stored secret and the recovery
-  codes of the authenticator enrollment are removed, an audit row `LegacyTotpMigratedToEmailPin` is written, and the normal
-  login-2FA step follows: a PIN is e-mailed and has to be entered before any token is issued. The sign-in responses
-  (`/api/auth/login`, `/api/auth/otp/*`, `/api/auth/magic-link/*`) carry `twoFactorMigration { fromMethod, toMethod, message }`
-  so a client can explain why a PIN is asked; the admin UI shows that message.
+* When a legacy member **signs in with their password** (the password has to be correct and the e-mail confirmed), the account
+  is moved to the **e-mail PIN two-factor method that already exists** (`TwoFactorMethod.Email`): the stored secret and the
+  recovery codes of the authenticator enrollment are removed, an audit row `LegacyTotpMigratedToEmailPin` is written, and the
+  normal login-2FA step follows: a PIN is e-mailed and has to be entered before any token is issued. The `/api/auth/login`
+  response carries `twoFactorMigration { fromMethod, toMethod, message }` so a client can explain why a PIN is asked; the admin
+  UI shows that message.
+* Magic-link and OTP sign-ins do **not** migrate: they prove only access to the mailbox, and the PIN goes to that same
+  mailbox, so they must not be able to strip an authenticator enrollment. The member is migrated at their next password sign-in.
 * **Nothing is mailed in bulk.** A PIN goes out only when a member signs in. There is no "notify everyone" step.
 * The member can set up an authenticator app again later (new enrollments are SHA-256).
 * If a member's authenticator code passes the SHA-256 check while the marker is still empty (enrolled after PR #104 but
@@ -41,7 +43,7 @@ Martien, 2026-10-04: do it through an **e-mail PIN**, and make the options **con
 * Admin UI: Invitations > Organization Settings > "Members with an outdated authenticator app".
 * A member with roles in several tenants is left alone only when **every** one of those tenants says `Off`; otherwise they are
   migrated. Members without a tenant, and tenants without a settings row, get the default.
-* The migration needs a confirmed e-mail address (a PIN to an unconfirmed address would prove nothing) and an active account;
+* The migration needs a confirmed e-mail address (a password sign-in is refused without one anyway) and an active account;
   otherwise the enrollment is left as it is.
 
 ## Deploying
@@ -80,8 +82,9 @@ WHERE u."TwoFactorEnabled" AND u."TwoFactorMethod" = 1 AND u."TotpAlgorithm" IS 
 * **TOTP is not enforced at sign-in on `develop`.** `AuthService` only challenges `TwoFactorMethod.Email`; a member with an
   authenticator app signs in with the password alone, and `/api/mfa/totp/validate` is a stand-alone endpoint nothing calls during
   login. Open PRs #142 (task 4521) and #67 add that enforcement. Once one of them lands, the legacy migration above has to run
-  **before** its TOTP branch (it does here: the call sits right before the e-mail-2FA branch in `LoginAsync` and
-  `CompletePasswordlessLoginAsync`), otherwise every legacy member would be locked out. Resolve the `AuthService` conflict by
-  keeping `LegacyTotpMigration.TryMigrateToEmailPinAsync` first.
+  **before** its TOTP branch (it does here: the call sits right before the e-mail-2FA branch in `LoginAsync`), otherwise every
+  legacy member would be locked out of password sign-in. Resolve the `AuthService` conflict by keeping
+  `LegacyTotpMigration.TryMigrateToEmailPinAsync` first. Magic-link / OTP sign-in does not migrate, so a legacy member who only
+  ever signs in passwordless has to use the password sign-in once (or the password reset) after that PR lands.
 * Social login and passkey sign-in do not check a second factor at all (unchanged); a legacy member is migrated at the next
-  password, magic-link or OTP sign-in.
+  password sign-in.

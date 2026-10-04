@@ -259,11 +259,7 @@ export default function LoginPage() {
       if (response.data.requiresTwoFactor && response.data.userId) {
         setTwoFactorUserId(response.data.userId);
         setTwoFactorPending(true);
-        setMessage(
-          response.data.twoFactorMigration?.message ||
-            response.data.message ||
-            'A verification code has been sent to your email.'
-        );
+        setMessage(response.data.message || 'A verification code has been sent to your email.');
         return;
       }
       if (response.data.accessToken) {
