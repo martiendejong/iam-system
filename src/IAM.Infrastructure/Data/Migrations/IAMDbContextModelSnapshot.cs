@@ -5116,8 +5116,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("ApproverRole");
 
                     b.Navigation("DecidedByUser");
-
-                    b.Navigation("Votes");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.ApprovalVote", b =>
@@ -6344,6 +6342,11 @@ namespace IAM.Infrastructure.Data.Migrations
             modelBuilder.Entity("IAM.Core.Entities.AlertRule", b =>
                 {
                     b.Navigation("Alerts");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.ApprovalStep", b =>
+                {
+                    b.Navigation("Votes");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Building", b =>
