@@ -629,3 +629,8 @@ Left: deploy is Martien's call. Admin UI reads these endpoints as admin only (no
 Done: PR #165 - a verified social login (Google/GitHub/Apple) whose e-mail matches an existing account that is not e-mail confirmed is refused before any write (no ExternalLogin, no tokens, no user change); a confirmed account still links and signs in (4707 unchanged), an already linked identity and explicit linking are untouched. Stops the unverified-Microsoft-auto-create (or never-confirmed password registration) pre-hijack of the real owner.
 Verified: build clean; 12 new test cases in SocialLoginVerifiedEmailTests (5 of them fail on unchanged develop, incl. the pre-hijack sequence); SocialLogin filter 57 passed; full IAM.API.Tests 1125 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
 Left: deploy is Martien's call. Accounts auto-created through Microsoft before 4707 were stored with EmailConfirmed = true, so the guard cannot see them; a data audit is filed as a follow-up. A legit user who registered but never confirmed is refused with a "confirm your e-mail" message.
+
+## 2026-10-05 - task 4573
+Done: in progress - passkey and social login go through the shared 2FA gate (CompletePasswordlessLoginAsync).
+Verified: not yet.
+Left: everything; this stub rides the draft PR.
