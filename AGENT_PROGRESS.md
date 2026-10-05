@@ -631,6 +631,6 @@ Verified: build clean; 12 new test cases in SocialLoginVerifiedEmailTests (5 of 
 Left: deploy is Martien's call. Accounts auto-created through Microsoft before 4707 were stored with EmailConfirmed = true, so the guard cannot see them; a data audit is filed as a follow-up. A legit user who registered but never confirmed is refused with a "confirm your e-mail" message.
 
 ## 2026-10-05 - task 4573
-Done: in progress - passkey and social login go through the shared 2FA gate (CompletePasswordlessLoginAsync).
-Verified: not yet.
-Left: everything; this stub rides the draft PR.
+Done: PR #171 - passkey login and social/SSO login (existing, linked and auto-created accounts) now go through IAuthService.CompletePasswordlessLoginAsync like magic-link/OTP. A 2FA account gets { requiresTwoFactor: true, userId } with no cookie/token and finishes through the existing verify-code endpoint; accounts without 2FA sign in as before. SocialAuthService no longer mints tokens (its duplicated token code is gone; it takes IAuthService, drops IClaimsMappingService).
+Verified: build clean; 14 new tests in PasskeySocialTwoFactorLoginTests, and re-introducing any one bypass makes 1 to 6 of them fail; full IAM.API.Tests 1174 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: TOTP is only gated once PR #142 (4521) merges, because it extends the same method; then the two new 2FA responses should also carry twoFactorMethod. Deploy is Martien's call.
