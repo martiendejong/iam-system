@@ -94,9 +94,9 @@ public class SocialLoginVerifiedEmailTests
             context,
             config,
             new StubFactory(stub),
-            new ClaimsMappingService(context),
             new StubVault(),
             new MemoryCache(new MemoryCacheOptions()),
+            AuthServiceTestFactory.Create(context, config),
             NullLogger<SocialAuthService>.Instance);
 
         return new Harness { Options = options, Context = context, Service = service, Provider = provider, Stub = stub };

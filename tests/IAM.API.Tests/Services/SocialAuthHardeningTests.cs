@@ -43,11 +43,11 @@ public class SocialAuthHardeningTests
         var config = CreateConfiguration(globalRedirectUri);
         var cache = new MemoryCache(new MemoryCacheOptions());
         var httpClientFactory = new FakeHttpClientFactory();
-        var claimsMappingService = new ClaimsMappingService(context);
         var secretsVault = new FakeSecretsVaultService();
+        var authService = AuthServiceTestFactory.Create(context, config);
 
         var service = new SocialAuthService(
-            context, config, httpClientFactory, claimsMappingService, secretsVault, cache);
+            context, config, httpClientFactory, secretsVault, cache, authService);
 
         return (service, context, cache);
     }
