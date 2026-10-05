@@ -11,6 +11,11 @@ public interface IAuthService
     Task<bool> VerifyEmailAsync(string token);
     Task<bool> SendPasswordResetAsync(string email);
     Task<bool> ResetPasswordAsync(string token, string newPassword);
+    /// <summary>
+    /// Issues tokens for an already-authenticated user with NO second-factor check. Only call this once
+    /// the 2FA gate has been passed (the verify-code methods below do). A sign-in entry point (passkey,
+    /// social, magic link, OTP) must call CompletePasswordlessLoginAsync instead, never this.
+    /// </summary>
     Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<bool> ResendVerificationEmailAsync(Guid userId);
 
