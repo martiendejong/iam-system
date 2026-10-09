@@ -23,7 +23,7 @@
     <!-- 5.9.0 was never a published version (latest 5.x is 5.8.0), so NuGet silently
          resolved the next available version (6.0.0) instead. Pin exactly so a future
          restore can't silently drift to whatever is newest at that time. -->
-    <PackageReference Include="OpenIddict.AspNetCore" Version="[6.0.0]" />
+    <PackageReference Include="OpenIddict.AspNetCore" Version="[7.7.1]" />
     <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="[6.0.0]" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
   </ItemGroup>
