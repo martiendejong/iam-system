@@ -646,6 +646,6 @@ Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virt
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
 
 ## 2026-10-09 - task 5165
-Done: WIP - CA key file password must be configured outside Development; legacy default removed from source, one-time re-protect.
-Verified: not yet.
-Left: everything.
+Done: PR #179 - new CertificateAuthoritySettings resolves Ca:* once at startup and refuses to start outside Development without Ca:CertificatePassword (before any CA file is read); the hardcoded default is gone (Development uses a documented dev-only password); a key file made with an older version's password is re-saved with the configured one on first start, same key and thumbprint, only when Ca:LegacyCertificatePassword is explicitly configured; default path is outside the app folder, but an existing ./ca-certs/ca.pfx is kept in place (a new CA would orphan every device certificate).
+Verified: build clean; 17 new CertificateAuthorityPasswordTests (missing/wrong password, re-protect with same thumbprint and chain, no default fallback); Production start without the password fails with the clear message; IAM.API.Tests 1191 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy prerequisite (Martien): back up the live ca.pfx, then set Ca:CertificatePassword (strong, from vault) AND one-time Ca:LegacyCertificatePassword (the old default, see git history) in the IAMSystem configuration, start once, then remove the legacy setting.

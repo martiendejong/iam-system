@@ -18,6 +18,7 @@ public class CertificateAuthorityService : ICertificateAuthorityService
     private readonly IConfiguration _configuration;
     private readonly ILogger<CertificateAuthorityService> _logger;
 
+    private readonly CertificateAuthoritySettings _settings;
     private readonly string _caCertificatePath;
     private readonly string _caCertificatePassword;
     private readonly int _defaultValidityDays;
@@ -29,14 +30,18 @@ public class CertificateAuthorityService : ICertificateAuthorityService
     public CertificateAuthorityService(
         IAMDbContext context,
         IConfiguration configuration,
+        CertificateAuthoritySettings settings,
         ILogger<CertificateAuthorityService> logger)
     {
         _context = context;
         _configuration = configuration;
         _logger = logger;
 
-        _caCertificatePath = configuration["Ca:CertificatePath"] ?? "./ca-certs/ca.pfx";
-        _caCertificatePassword = configuration["Ca:CertificatePassword"] ?? "IAM-CA-Default-Password";
+        // Task 5165: path and password come from the settings resolved (and validated) at startup. There is no
+        // fallback password here: a missing one stopped the app before this constructor could run.
+        _settings = settings;
+        _caCertificatePath = settings.CertificatePath;
+        _caCertificatePassword = settings.CertificatePassword;
         _defaultValidityDays = configuration.GetValue<int>("Ca:DefaultValidityDays", 365);
         _rootValidityYears = configuration.GetValue<int>("Ca:RootValidityYears", 10);
         _caSubjectName = configuration["Ca:SubjectName"] ?? "CN=IAM System CA, O=IAM System";
@@ -379,29 +384,17 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
     // ─── Private helpers ──────────────────────────────────────────────
 
+    private const X509KeyStorageFlags CaKeyStorageFlags = X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
+
     private async Task<X509Certificate2> GetOrCreateCaCertificateAsync(CancellationToken ct)
     {
-        // Fast path: check if PFX already exists on disk
-        if (File.Exists(_caCertificatePath))
-        {
-            return new X509Certificate2(
-                _caCertificatePath,
-                _caCertificatePassword,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
-        }
-
-        // Slow path: generate new CA certificate (thread-safe)
+        // One caller at a time: generating a new CA and the one-time re-protect of an old key file both write the
+        // file, so neither may run twice concurrently.
         await _caLock.WaitAsync(ct);
         try
         {
-            // Double-check after acquiring lock
             if (File.Exists(_caCertificatePath))
-            {
-                return new X509Certificate2(
-                    _caCertificatePath,
-                    _caCertificatePassword,
-                    X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
-            }
+                return LoadCaCertificate();
 
             return GenerateAndStoreCaCertificate();
         }
@@ -409,6 +402,79 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         {
             _caLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Opens the CA key file with the configured password. Only if that fails AND an explicit
+    /// <see cref="CertificateAuthoritySettings.LegacyCertificatePassword"/> is configured, the file is opened with the
+    /// legacy password and re-saved with the configured one (same key, same certificate, same thumbprint). The legacy
+    /// password is never a fallback for anything else.
+    /// </summary>
+    private X509Certificate2 LoadCaCertificate()
+    {
+        if (_settings.UsesLegacyDefaultLocation)
+        {
+            _logger.LogWarning(
+                "CA key file is still at the old default location {Path}. Move it outside the application folder and set Ca:CertificatePath.",
+                _caCertificatePath);
+        }
+
+        try
+        {
+            return X509CertificateLoader.LoadPkcs12FromFile(_caCertificatePath, _caCertificatePassword, CaKeyStorageFlags);
+        }
+        catch (CryptographicException ex)
+        {
+            if (_settings.LegacyCertificatePassword == null)
+                throw CannotOpen(ex, legacyTried: false);
+
+            X509Certificate2 legacyCert;
+            try
+            {
+                legacyCert = X509CertificateLoader.LoadPkcs12FromFile(
+                    _caCertificatePath, _settings.LegacyCertificatePassword, CaKeyStorageFlags);
+            }
+            catch (CryptographicException)
+            {
+                throw CannotOpen(ex, legacyTried: true);
+            }
+
+            using (legacyCert)
+            {
+                return ReProtectCaFile(legacyCert);
+            }
+        }
+    }
+
+    private InvalidOperationException CannotOpen(Exception inner, bool legacyTried) =>
+        new(
+            $"The CA key file at '{_caCertificatePath}' could not be opened with the configured Ca:CertificatePassword" +
+            (legacyTried ? " or with Ca:LegacyCertificatePassword" : string.Empty) +
+            ". Check that Ca:CertificatePassword is the password this file was saved with; to upgrade a file made by an " +
+            "older version, also set Ca:LegacyCertificatePassword to the password it was made with (one-time).",
+            inner);
+
+    private X509Certificate2 ReProtectCaFile(X509Certificate2 openedWithLegacyPassword)
+    {
+        var pfxBytes = openedWithLegacyPassword.Export(X509ContentType.Pfx, _caCertificatePassword);
+
+        // Prove the new file opens with the new password and is the same CA before replacing anything.
+        var reopened = X509CertificateLoader.LoadPkcs12(pfxBytes, _caCertificatePassword, CaKeyStorageFlags);
+        if (!string.Equals(reopened.Thumbprint, openedWithLegacyPassword.Thumbprint, StringComparison.Ordinal))
+        {
+            reopened.Dispose();
+            throw new InvalidOperationException("Re-protecting the CA key file changed the CA thumbprint; the file was left untouched.");
+        }
+
+        var tempPath = _caCertificatePath + ".tmp";
+        File.WriteAllBytes(tempPath, pfxBytes);
+        File.Move(tempPath, _caCertificatePath, overwrite: true);
+
+        _logger.LogWarning(
+            "CA key file {Path} was protected with the legacy password and has been re-saved with the configured Ca:CertificatePassword (thumbprint {Thumbprint} unchanged). Remove Ca:LegacyCertificatePassword from configuration.",
+            _caCertificatePath, reopened.Thumbprint);
+
+        return reopened;
     }
 
     private X509Certificate2 GenerateAndStoreCaCertificate()
