@@ -644,3 +644,8 @@ Left: develop HEAD (~20 security PRs + AddApprovalVotes) is NOT deployed; it nee
 Done: docs/auth-00/ - inventory of IAM / Password Manager / Jengo web / Lango / Bitwarden, ADR-0001 (D1-D10), threat model (23 threats), compatibility matrix, key custody decision, estimate. Chosen: the fresh-confirmation verifier sits next to the seeds in Password Manager (not in IAM); trusted browser = named registration owning a refresh-token family; owned TOTP component, not Bitwarden. Companion PoC is passwordmanager branch feat/5097-auth-00-authenticator-adr (flag off, fictional data). Follow-up packages AUTH-01..05 exist as 5102-5107 (planned, dependencies in their descriptions). No IAM code changed.
 Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virtual authenticator). Not verified: real Android/desktop browser, live host key custody, Bitwarden `bw serve` security notes.
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
+
+## 2026-10-09 - task 5164
+Done: WIP - building-management controllers (Location, Building, Floor, Room, RoomGroup, IoTDevice) get tenant-role authorization and input models.
+Verified: not yet.
+Left: everything.
