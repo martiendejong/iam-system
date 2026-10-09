@@ -646,6 +646,6 @@ Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virt
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
 
 ## 2026-10-09 - task 5147
-Done: WIP - TenantRoleGrantRules also refuses federated app roles and privileged global roles for non-SuperAdmins.
-Verified: not yet.
-Left: everything.
+Done: PR #178 - TenantRoleGrantRules.Check (the one rule behind role change, invitation, bulk invite and acceptance) now refuses federated app roles (Category app:* or a client:role name) and other PrivilegedRoles.IsPrivileged roles (admin-like name, wildcard permissions) for everyone but a SuperAdmin; new problems FederatedAppRole / PrivilegedRole. BuildingManager and the owner-level roles keep their old handling; decided on name and category, never only TenantId.
+Verified: build clean; 29 new unit test cases (TenantRoleGrantRulesTests) and 7 new controller tests over all four grant paths (5 fail on the old rule); IAM.API.Tests 1181 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. App-role grants already given to members are not revoked (a data audit would be a separate task). A custom tenant role whose name merely contains "admin" or has wildcard permissions is now SuperAdmin-only too.
