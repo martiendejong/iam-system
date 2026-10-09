@@ -291,6 +291,14 @@ public static class BrandingSanitizer
                 continue;
             }
 
+            if (i + 1 < html.Length && (html[i + 1] == '!' || html[i + 1] == '?'))
+            {
+                // <!DOCTYPE ...>, <![CDATA[ ...]]>, <?xml ...?>: declarations carry no content, drop them.
+                var declarationEnd = html.IndexOf('>', i + 2);
+                i = declarationEnd < 0 ? html.Length : declarationEnd + 1;
+                continue;
+            }
+
             var match = TagPattern.Match(html[i..]);
             if (!match.Success)
             {
