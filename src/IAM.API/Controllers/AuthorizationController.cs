@@ -241,6 +241,23 @@ public class AuthorizationController : ControllerBase
                 identity.SetDestinations(GetDestinations);
                 claimsPrincipal = new ClaimsPrincipal(identity);
             }
+            else
+            {
+                // Task 5002: the principal read from the authorization code has already been through
+                // IClaimsTransformation, and SuperAdminClaimsTransformation adds the admin roles a SuperAdmin
+                // implies as extra "role" claims. They have no destinations, so OpenIddict cannot build the
+                // refresh token for offline_access (empty HTTP 500, "Conflicting destinations for the claim
+                // 'role'"). Rebuild the role claims from the stored roles, exactly as the refresh branch does:
+                // SetClaims replaces every role claim (implied ones included) and the destinations are set
+                // again. Implied roles are never given a destination, so they cannot leak into a token.
+                var identity = new ClaimsIdentity(claimsPrincipal.Claims,
+                    authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                    nameType: Claims.Name,
+                    roleType: Claims.Role);
+                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
+                identity.SetDestinations(GetDestinations);
+                claimsPrincipal = new ClaimsPrincipal(identity);
+            }
 
             // Task 4099: re-resolve the scope→resource mapping on every exchange (authorization
             // code AND refresh token) instead of trusting what was stored when the code/refresh
