@@ -76,6 +76,10 @@ builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
+// Task 5165: the CA key file password must be configured outside Development. Resolved here, at startup and before
+// any CA file is read, so a missing Ca:CertificatePassword stops the app (same style as the OpenIddict signing
+// certificate check below) instead of falling back to a password that is written in the source.
+builder.Services.AddSingleton(CertificateAuthoritySettings.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment()));
 builder.Services.AddScoped<ICertificateAuthorityService, CertificateAuthorityService>();
 builder.Services.AddScoped<IEventBus, EventBusService>();
 builder.Services.AddScoped<IWebhookService, WebhookService>();
