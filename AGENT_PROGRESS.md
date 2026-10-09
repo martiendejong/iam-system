@@ -646,6 +646,6 @@ Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virt
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
 
 ## 2026-10-09 - task 5164
-Done: WIP - building-management controllers (Location, Building, Floor, Room, RoomGroup, IoTDevice) get tenant-role authorization and input models.
-Verified: not yet.
-Left: everything.
+Done: PR #177 - the six building-management controllers (Location, Building, Floor, Room, RoomGroup, IoTDevice) share BuildingManagementControllerBase on top of ITenantAccessResolver (4726): device / service-account / token-exchange tokens get 403, writes need SuperAdmin or TenantAdmin/BuildingOwner/BuildingManager in the tenant, reads need tenant membership; tenant = tenant_id claim, else ?tenantId, else the caller's only tenant. Create/update bind input models (BuildingManagementRequests.cs); parent ids must belong to the tenant.
+Verified: build clean; 16 new BuildingManagementAuthorizationTests (15 fail on the old controllers); IAM.API.Tests 1190 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Device tokens lose these endpoints (no repo client used them); a read-only device endpoint is not added. Update does Update(entity) on a loaded graph, so child rows get redundant UPDATEs (pre-existing service behaviour).
