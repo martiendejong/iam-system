@@ -646,6 +646,6 @@ Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virt
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
 
 ## 2026-10-09 - task 5002
-Done: WIP - authorization_code grant rebuilds the role claims from the database so SuperAdmin's implied roles (added by the claims transformation) never reach OpenIddict; regression tests.
-Verified: not yet.
-Left: everything.
+Done: PR #180 - AuthorizationController.Exchange: the authorization_code grant now rebuilds the role claims from the user's stored roles and sets destinations (as the refresh branch does). Cause: SuperAdminClaimsTransformation also runs on the principal read from the code and adds 7 implied role claims with no destinations, so OpenIddict could not build the refresh token (empty 500 "Conflicting destinations for the claim 'role'"). Implied roles never get a destination, so tokens carry exactly the stored roles.
+Verified: build clean; 12 new SuperAdminOfflineAccessTests (real login/authorize/token/refresh, in-memory RSA keys; SuperAdmin alone, SuperAdmin + app roles, several app roles, one role at two tenants, with and without offline_access; the 4 SuperAdmin cases fail on develop); RefreshTokenRoleRecheck + AccessTokenFormat tests still pass; IAM.API.Tests 1186 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Not tested against the OpenIddict 7.x bump in open PRs #122/#123; a curl round trip on a local copy was not run (the in-process test uses the real pipeline).
