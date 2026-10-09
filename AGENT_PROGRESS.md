@@ -646,6 +646,6 @@ Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virt
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
 
 ## 2026-10-09 - task 5003
-Done: WIP - make the AllowedRedirectUris migration and snapshot say text and register the migration with EF.
-Verified: not yet.
-Left: everything.
+Done: PR #176 - IdentityProviders.AllowedRedirectUris is text in the model snapshot (one line) and in 20260926120000_AddAllowedRedirectUrisToIdentityProvider, which now has [DbContext]/[Migration] so EF registers it; manual SQL already said text.
+Verified: `migrations list --no-connect` shows 20260926120000; a throwaway `migrations add Probe` gave an empty Up() and Down() (probe files removed, nothing applied to any database); IAM.API.Tests 1174 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 1 passed.
+Left: nothing for this task. Live __EFMigrationsHistory still has no row for this migration (the app uses EnsureCreated; never run `database update` there).
