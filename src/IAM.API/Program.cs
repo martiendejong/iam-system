@@ -342,7 +342,12 @@ builder.Services.AddAuthentication(options =>
 {
     options.Cookie.Name = "IAM.Session";
     options.Cookie.HttpOnly = true;
-    options.Cookie.SameSite = SameSiteMode.Strict;
+    // Task 5053: Lax, not Strict. An app on another domain (knowledge.prospergenics.com, ...) sends the
+    // user to /connect/authorize with a cross-site top-level navigation; a Strict cookie is not sent on
+    // that, so IAM would never recognise a signed-in user and prompt=none would always answer
+    // login_required. Lax still withholds the cookie from cross-site sub-requests and form POSTs.
+    // Only /connect/authorize reads this cookie; the refreshToken cookie stays Strict.
+    options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
