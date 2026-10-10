@@ -57,6 +57,8 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
+// Per-IP + typed-email progressive delay for password sign-ins (task 5166). Singleton: the state lives in IMemoryCache.
+builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
@@ -127,6 +129,11 @@ builder.Services.AddHttpClient("WebhookDelivery", client => {
     // Task 4702: connection-time SSRF guard, no redirects, no proxy. Self-signed certificates are
     // allowed in development only.
     WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
+
+// Task 5150: custom-domain ownership proof (DNS TXT over HTTPS) for tenant branding
+builder.Services.AddHttpClient("DomainVerification", client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddSingleton<ITxtRecordResolver, DohTxtRecordResolver>();
+builder.Services.AddSingleton<IDomainOwnershipVerifier, DomainOwnershipVerifier>();
 
 // HttpClient for social/enterprise SSO provider calls
 builder.Services.AddHttpClient("SocialAuth");
@@ -340,7 +347,12 @@ builder.Services.AddAuthentication(options =>
 {
     options.Cookie.Name = "IAM.Session";
     options.Cookie.HttpOnly = true;
-    options.Cookie.SameSite = SameSiteMode.Strict;
+    // Task 5053: Lax, not Strict. An app on another domain (knowledge.prospergenics.com, ...) sends the
+    // user to /connect/authorize with a cross-site top-level navigation; a Strict cookie is not sent on
+    // that, so IAM would never recognise a signed-in user and prompt=none would always answer
+    // login_required. Lax still withholds the cookie from cross-site sub-requests and form POSTs.
+    // Only /connect/authorize reads this cookie; the refreshToken cookie stays Strict.
+    options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
@@ -468,6 +480,19 @@ app.MapFallback("/api/{**rest}", () => Results.NotFound(new { error = "API endpo
 
 // SPA fallback — serves index.html for any non-API path not matched by a route
 app.MapFallbackToFile("index.html");
+
+// Task 5150: re-validate branding rows stored before branding input was restricted (idempotent; never blocks startup)
+try
+{
+    using var brandingScope = app.Services.CreateScope();
+    await IAM.Infrastructure.Services.BrandingCleanup.RunAsync(
+        brandingScope.ServiceProvider.GetRequiredService<IAMDbContext>(),
+        app.Logger);
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Branding clean-up pass failed; branding is still validated when it is read");
+}
 
 // Seed development data (only in Development environment)
 if (app.Environment.IsDevelopment())
