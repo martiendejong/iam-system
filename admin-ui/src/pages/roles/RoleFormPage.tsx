@@ -25,7 +25,9 @@ export default function RoleFormPage() {
   const navigate = useNavigate();
   const isEditMode = !!id;
   const { user } = useAuth();
-  const superAdmin = isSuperAdmin(user);
+  // The login response carries no roles (only GET /users/me does), so after a fresh sign-in the context user
+  // has none until a reload. Create mode therefore resolves the roles itself (see the tenant effect below).
+  const [superAdmin, setSuperAdmin] = useState(isSuperAdmin(user));
 
   const [loading, setLoading] = useState(isEditMode);
   const [saving, setSaving] = useState(false);
@@ -54,13 +56,16 @@ export default function RoleFormPage() {
     const loadTenants = async () => {
       try {
         setTenantsLoading(true);
-        const options: TenantOption[] = superAdmin
+        const me = user.roles ? user : await api.getCurrentUser();
+        const isSuper = isSuperAdmin(me);
+        const options: TenantOption[] = isSuper
           ? (await api.getTenants()).map((t: any) => ({ id: t.id, name: t.name }))
-          : ownedTenantOptions(user, await api.getMyTenants());
+          : ownedTenantOptions(me, await api.getMyTenants());
         if (cancelled) return;
+        setSuperAdmin(isSuper);
         setTenants(options);
         // A single owned tenant is the only valid answer, so preselect it; a SuperAdmin defaults to Global.
-        reset((prev) => ({ ...prev, tenantId: !superAdmin && options.length === 1 ? options[0].id : GLOBAL }));
+        reset((prev) => ({ ...prev, tenantId: !isSuper && options.length === 1 ? options[0].id : GLOBAL }));
       } catch (err: any) {
         if (!cancelled) setError(apiErrorMessage(err, 'Failed to load tenants'));
       } finally {
@@ -71,7 +76,7 @@ export default function RoleFormPage() {
     return () => {
       cancelled = true;
     };
-  }, [isEditMode, user, superAdmin, reset]);
+  }, [isEditMode, user, reset]);
 
   const loadRole = async () => {
     try {

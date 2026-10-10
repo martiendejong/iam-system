@@ -17,6 +17,7 @@ vi.mock('../../services/api', () => ({
     createRole: vi.fn(),
     updateRole: vi.fn(),
     getRole: vi.fn(),
+    getCurrentUser: vi.fn(),
   },
 }));
 
@@ -164,5 +165,34 @@ describe('RoleFormPage tenant picker (task 5222)', () => {
 
     expect(await screen.findByText(/This is a system role/)).toBeTruthy();
     expect(screen.queryByLabelText(/^Tenant/)).toBeNull();
+  });
+
+  // Regression: the login response user has no roles, so a fresh sign-in must not read as "owns nothing".
+  it('resolves the roles itself when the signed-in user came from the login response (no roles yet)', async () => {
+    mockedUseAuth.mockReturnValue({
+      user: { id: 'u1', email: 'a@b.c', firstName: 'A', lastName: 'B' },
+    } as unknown as ReturnType<typeof useAuth>);
+    mockedApi.getCurrentUser.mockResolvedValue({
+      id: 'u1', roles: [{ id: 'r1', name: 'BuildingOwner', tenantId: OWN }],
+    } as any);
+    renderForm();
+
+    const select = (await screen.findByLabelText(/^Tenant/)) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe(OWN));
+    expect(screen.queryByText(/do not own an active tenant/)).toBeNull();
+  });
+
+  it('shows Global to a SuperAdmin whose context user has no roles yet', async () => {
+    mockedUseAuth.mockReturnValue({
+      user: { id: 'u1', email: 'a@b.c', firstName: 'A', lastName: 'B' },
+    } as unknown as ReturnType<typeof useAuth>);
+    mockedApi.getCurrentUser.mockResolvedValue({
+      id: 'u1', roles: [{ id: 'r1', name: 'SuperAdmin', tenantId: null }],
+    } as any);
+    renderForm();
+
+    const select = (await screen.findByLabelText(/^Tenant/)) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).map((o) => o.textContent)).toContain('Global (all tenants)'));
+    expect(select.value).toBe('');
   });
 });

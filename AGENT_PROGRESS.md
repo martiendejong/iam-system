@@ -749,3 +749,8 @@ Left: nothing in code. Deploy is Martien's call; service accounts that call thes
 Done: admin-ui Create Role form has a Tenant picker (BuildingOwner: owned tenants only, required; SuperAdmin: Global default or any root tenant; owner with no active tenant sees a message and cannot submit). Refusals show the API's {error} text. Role list shows each role's tenant or Global; api.ts maps isSystemRole to isSystem so the System badge, no-Delete rule and edit warning work.
 Verified: tsc/build clean, eslint 0 errors, vitest 52 passed (13 new); Playwright on the built UI with the API mocked at the network layer (create as owner/SuperAdmin, refusal text, no-tenant state, role list). Not verified: a real round trip against a local IAM API (iam_user cannot create a throwaway database).
 Left: reviewer may do the real-API walkthrough; child tenants are not selectable for SuperAdmin (GET /api/tenants returns roots only).
+
+## 2026-10-10 - task 5222 (review)
+Done: reviewed PR #198 (approved after one fix). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Fixed: the login response user carries no roles (only GET /users/me does), so right after a fresh sign-in the form saw a SuperAdmin/BuildingOwner as owning nothing and blocked submit until a reload; the create form now fetches the current user when the context user has no roles.
+Verified: admin-ui tests 84 passed (2 new fail on the old form), build clean, lint 0 errors.
+Left: nothing in code. Deploy is Martien's call; a real-API walkthrough was not run (network-mocked UI tests only).
