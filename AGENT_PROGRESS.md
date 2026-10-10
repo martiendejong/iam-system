@@ -804,3 +804,7 @@ Left: deploy is Martien's call. EmailConfirmed for passwordless login stays out 
 Done: reviewed PR #199 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Checked the grant check runs before any user/role row is added, in the dry run too, with the grantor taken from the token (SuperAdmin role claim only); both ImportUsersAsync callers pass it.
 Verified: clean build on the merged head; IAM.API.Tests and IAM.Core.Tests results in the PR comment; BulkImportRoleGrantTests all pass.
 Left: deploy is Martien's call.
+## 2026-10-10 - task 5224
+Done: (in progress) startup step that revokes the API keys of users who were already inactive before 5155.
+Verified: not verified yet
+Left: implementation, tests, PR body
