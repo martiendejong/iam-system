@@ -46,7 +46,7 @@ public class BulkOperationsController : ControllerBase
         {
             using var stream = file.OpenReadStream();
             var operation = await _bulkOperationService.ImportUsersAsync(
-                tenantId, userId.Value, stream, file.FileName, bulkFormat.Value, dryRun: false, ct);
+                tenantId, userId.Value, stream, file.FileName, bulkFormat.Value, GetGrantor(), dryRun: false, ct);
 
             return Ok(MapOperationResponse(operation));
         }
@@ -83,7 +83,7 @@ public class BulkOperationsController : ControllerBase
         {
             using var stream = file.OpenReadStream();
             var operation = await _bulkOperationService.ImportUsersAsync(
-                tenantId, userId.Value, stream, file.FileName, bulkFormat.Value, dryRun: true, ct);
+                tenantId, userId.Value, stream, file.FileName, bulkFormat.Value, GetGrantor(), dryRun: true, ct);
 
             return Ok(MapOperationResponse(operation));
         }
@@ -211,6 +211,13 @@ public class BulkOperationsController : ControllerBase
         completedAt = op.CompletedAt,
         createdAt = op.CreatedAt
     };
+
+    /// <summary>
+    /// Who is importing, from the token only (task 5146): a SuperAdmin may grant any role; a SystemAdmin may grant
+    /// owner-level roles but no platform-wide role.
+    /// </summary>
+    private TenantGrantor GetGrantor() =>
+        User.IsInRole("SuperAdmin") ? TenantGrantor.SuperAdmin : new TenantGrantor(false, true);
 
     private Guid? GetUserId()
     {

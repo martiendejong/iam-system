@@ -727,3 +727,7 @@ Left: nothing in code. Before deploy (Martien): existing custom domains stay uns
 Done: reviewed PR #193 (approved). Merged develop (AuthService + progress file conflicted): kept develop's login, where wrong passwords no longer count (task 5166), and routed its lock check/reset through LoginLockout. Rewrote the portal test that assumed login failures share the counter.
 Verified: clean build on merged head; IAM.API.Tests 1427 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; removing the failure count, the revoke or the reset each fails portal tests.
 Left: deploy is Martien's call. The portal is now the only place wrong passwords lock the account; a lock set there also blocks login for 15 min.
+## 2026-10-10 - task 5146
+Done: bulk user import (BulkOperationService.ImportUsersAsync) now runs TenantRoleGrantRules.Check on every row's role, in the dry run too; the grantor comes from the token in BulkOperationsController (SuperAdmin -> SuperAdmin, SystemAdmin -> owner-level but no platform roles). A refused row is a row error and creates no user or role.
+Verified: clean build; 15 new BulkImportRoleGrantTests (12 fail with the check disabled); IAM.API.Tests 1469 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed.
+Left: deploy is Martien's call. EmailConfirmed for passwordless login stays out on purpose (it would lock out every imported user). Unknown role names behave as before (user created, row note).
