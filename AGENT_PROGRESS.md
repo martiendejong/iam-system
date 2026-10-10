@@ -645,6 +645,10 @@ Done: docs/auth-00/ - inventory of IAM / Password Manager / Jengo web / Lango / 
 Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virtual authenticator). Not verified: real Android/desktop browser, live host key custody, Bitwarden `bw serve` security notes.
 Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
 
+## 2026-10-09 - task 5164
+Done: PR #177 - the six building-management controllers (Location, Building, Floor, Room, RoomGroup, IoTDevice) share BuildingManagementControllerBase on top of ITenantAccessResolver (4726): device / service-account / token-exchange tokens get 403, writes need SuperAdmin or TenantAdmin/BuildingOwner/BuildingManager in the tenant, reads need tenant membership; tenant = tenant_id claim, else ?tenantId, else the caller's only tenant. Create/update bind input models (BuildingManagementRequests.cs); parent ids must belong to the tenant.
+Verified: build clean; 16 new BuildingManagementAuthorizationTests (15 fail on the old controllers); IAM.API.Tests 1190 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Device tokens lose these endpoints (no repo client used them); a read-only device endpoint is not added. Update does Update(entity) on a loaded graph, so child rows get redundant UPDATEs (pre-existing service behaviour).
 ## 2026-10-09 - task 5003
 Done: PR #176 - IdentityProviders.AllowedRedirectUris is text in the model snapshot (one line) and in 20260926120000_AddAllowedRedirectUrisToIdentityProvider, which now has [DbContext]/[Migration] so EF registers it; manual SQL already said text.
 Verified: `migrations list --no-connect` shows 20260926120000; a throwaway `migrations add Probe` gave an empty Up() and Down() (probe files removed, nothing applied to any database); IAM.API.Tests 1174 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 1 passed.
