@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
+using IAM.Core.Services;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore;
@@ -131,7 +132,7 @@ public class AuthorizationController : ControllerBase
                 .SetClaim(Claims.FamilyName, user.LastName);
 
         // Add role claims
-        var roles = user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray();
+        var roles = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray();
         identity.SetClaims(Claims.Role, roles);
 
         // Add tenant claim (only set when the app-role gate above resolved one — see
@@ -230,7 +231,7 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray());
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray());
                 if (!gate.Errored)
                 {
                     identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
@@ -238,6 +239,23 @@ public class AuthorizationController : ControllerBase
                 // On a fail-open gate error the tenant_id copied from the stored principal is
                 // kept as-is: stripping it would silently WIDEN the token (tenant-less can mean
                 // platform-wide to resource servers), which is worse than a stale scope.
+                identity.SetDestinations(GetDestinations);
+                claimsPrincipal = new ClaimsPrincipal(identity);
+            }
+            else
+            {
+                // Task 5002: the principal read from the authorization code has already been through
+                // IClaimsTransformation, and SuperAdminClaimsTransformation adds the admin roles a SuperAdmin
+                // implies as extra "role" claims. They have no destinations, so OpenIddict cannot build the
+                // refresh token for offline_access (empty HTTP 500, "Conflicting destinations for the claim
+                // 'role'"). Rebuild the role claims from the stored roles, exactly as the refresh branch does:
+                // SetClaims replaces every role claim (implied ones included) and the destinations are set
+                // again. Implied roles are never given a destination, so they cannot leak into a token.
+                var identity = new ClaimsIdentity(claimsPrincipal.Claims,
+                    authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                    nameType: Claims.Name,
+                    roleType: Claims.Role);
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
                 identity.SetDestinations(GetDestinations);
                 claimsPrincipal = new ClaimsPrincipal(identity);
             }
@@ -348,7 +366,7 @@ public class AuthorizationController : ControllerBase
         // Roles scope
         if (User.HasScope("roles"))
         {
-            claims[Claims.Role] = user.UserRoles.Select(ur => ur.Role.Name).ToArray();
+            claims[Claims.Role] = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToArray();
         }
 
         // Custom tenants scope
@@ -356,6 +374,7 @@ public class AuthorizationController : ControllerBase
         {
             var tenants = await _context.UserRoles
                 .Where(ur => ur.UserId == user.Id && ur.TenantId != null)
+                .WhereActive()
                 .Select(ur => new
                 {
                     id = ur.TenantId,
@@ -505,6 +524,7 @@ public class AuthorizationController : ControllerBase
 
             var rolePrefix = clientIdLower + ":";
             var appRoleAssignments = user.UserRoles
+                .WhereActive()
                 .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (appRoleAssignments.Count == 0)
