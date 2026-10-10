@@ -19,6 +19,17 @@ public class AuthService : IAuthService
     // Today's default when an organization has never saved a Token Configuration.
     private const int DefaultRefreshTokenLifetimeDays = 7;
 
+    // Task 5166: one message for every way a password sign-in can fail before the password is proven.
+    internal const string InvalidCredentialsMessage = "Invalid email or password";
+    internal const string TooManyLoginAttemptsMessage = "Too many failed sign-in attempts. Please wait a moment and try again.";
+    // The 2FA lock (task 4523); deliberately has no timestamp.
+    internal const string AccountLockedMessage = "Account is temporarily locked. Try again later.";
+
+    // Same cost as every stored hash (workFactor 12 is used everywhere passwords are set). Built once
+    // per process; a random password nobody can type, so it never matches.
+    private static readonly string DummyPasswordHash =
+        BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString("N"), workFactor: 12);
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
@@ -26,6 +37,7 @@ public class AuthService : IAuthService
     private readonly IOtpService _otpService;
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
+    private readonly ILoginThrottle _loginThrottle;
 
     public AuthService(
         IAMDbContext context,
@@ -34,7 +46,8 @@ public class AuthService : IAuthService
         IRiskAssessmentService riskAssessmentService,
         IOtpService otpService,
         IClaimsMappingService claimsMappingService,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        ILoginThrottle loginThrottle)
     {
         _context = context;
         _configuration = configuration;
@@ -43,6 +56,32 @@ public class AuthService : IAuthService
         _otpService = otpService;
         _claimsMappingService = claimsMappingService;
         _logger = logger;
+        _loginThrottle = loginThrottle;
+    }
+
+    /// <summary>
+    /// One BCrypt verification whatever the input: against the stored hash when there is a usable one,
+    /// otherwise against a dummy hash of the same cost (unknown email, or a stored value that is not a
+    /// BCrypt hash, which would otherwise throw instantly and show up as a 500).
+    /// </summary>
+    private static bool VerifyPasswordWithUniformCost(string? password, string? storedHash)
+    {
+        var candidate = password ?? string.Empty;
+
+        if (!string.IsNullOrEmpty(storedHash))
+        {
+            try
+            {
+                return BCrypt.Net.BCrypt.Verify(candidate, storedHash);
+            }
+            catch (BCrypt.Net.SaltParseException)
+            {
+                // Not a BCrypt hash: fall through to the dummy check so the cost is still paid.
+            }
+        }
+
+        BCrypt.Net.BCrypt.Verify(candidate, DummyPasswordHash);
+        return false;
     }
 
     /// <summary>
@@ -123,52 +162,62 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
+        // Task 5166: repeated failures slow down THIS caller (typed email + IP) instead of locking the
+        // real account, and the refusal is the same whether or not the account exists. It comes before
+        // any lookup or BCrypt work, so a blocked caller costs next to nothing.
+        var attempt = _loginThrottle.BeginAttempt(email, ipAddress);
+        if (!attempt.Allowed)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = TooManyLoginAttemptsMessage,
+                RetryAfterSeconds = attempt.RetryAfterSeconds
+            };
+        }
+
         var user = await _context.Users
             .Include(u => u.UserRoles)
                 .ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(u => u.Email == email);
 
-        if (user == null)
+        // Every attempt pays for exactly one BCrypt check, against a dummy hash of the same cost when
+        // there is no (usable) account, so response time does not tell an unknown email from a real
+        // one. This runs BEFORE the lock check: a wrong password on a locked account must look just
+        // like any other wrong password.
+        var passwordValid = VerifyPasswordWithUniformCost(password, user?.PasswordHash);
+
+        if (user == null || !passwordValid)
         {
             return new AuthResult
             {
                 Success = false,
-                Error = "Invalid email or password"
+                Error = InvalidCredentialsMessage
             };
         }
 
-        // Check lockout BEFORE any expensive operations (prevents BCrypt timing oracle on locked accounts)
+        _loginThrottle.RecordSuccess(email, ipAddress);
+
+        // The persistent lock now only comes from the 2FA step (task 4523). It is reported only to a
+        // caller who has proven the password, and without a timestamp.
         if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
         {
             return new AuthResult
             {
                 Success = false,
-                Error = $"Account locked. Try again after {user.LockoutEnd:yyyy-MM-dd HH:mm:ss} UTC"
+                Error = AccountLockedMessage
             };
         }
 
-        if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+        // Password failures no longer touch FailedLoginAttempts / IsLockedOut / LockoutEnd; they carry
+        // the 2FA counter. While a second factor is still pending a correct password must NOT reset it
+        // (it would hand out a fresh set of code guesses); an expired lock is the one thing to clear.
+        if (!user.TwoFactorEnabled || user.IsLockedOut)
         {
-            // Increment failed login attempts
-            user.FailedLoginAttempts++;
-            if (user.FailedLoginAttempts >= 5)
-            {
-                user.IsLockedOut = true;
-                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
-            }
-            await _context.SaveChangesAsync();
-
-            return new AuthResult
-            {
-                Success = false,
-                Error = "Invalid email or password"
-            };
+            user.FailedLoginAttempts = 0;
+            user.IsLockedOut = false;
+            user.LockoutEnd = null;
         }
-
-        // Reset failed attempts on successful password verification
-        user.FailedLoginAttempts = 0;
-        user.IsLockedOut = false;
-        user.LockoutEnd = null;
 
         if (!user.EmailConfirmed)
         {
@@ -616,7 +665,7 @@ public class AuthService : IAuthService
             return new AuthResult
             {
                 Success = false,
-                Error = "Account is temporarily locked. Try again later."
+                Error = AccountLockedMessage
             };
         }
 
@@ -708,7 +757,7 @@ public class AuthService : IAuthService
         }
 
         // Add roles
-        foreach (var userRole in user.UserRoles)
+        foreach (var userRole in user.UserRoles.WhereActive())
         {
             claims.Add(new Claim(ClaimTypes.Role, userRole.Role.Name));
         }
