@@ -128,6 +128,50 @@ public class ApiKeyRevocationTests
     }
 
     [Fact]
+    public async Task RevokeApiKeysOfInactiveUsers_RevokesOnlyLiveKeysOfInactiveOwners_AndASecondRunFindsNothing()
+    {
+        var context = CreateContext();
+        var inactive = await AddUserAsync(context, "gone");
+        var active = await AddUserAsync(context, "here");
+        inactive.IsActive = false;
+        await context.SaveChangesAsync();
+        var live1 = await AddKeyAsync(context, inactive.Id);
+        var live2 = await AddKeyAsync(context, inactive.Id);
+        var alreadyRevoked = await AddKeyAsync(context, inactive.Id, isActive: false);
+        var activeUsersKey = await AddKeyAsync(context, active.Id);
+        var ownerless = await AddKeyAsync(context, userId: null);
+
+        var first = await context.RevokeApiKeysOfInactiveUsersAsync();
+        await context.SaveChangesAsync();
+
+        Assert.Equal(new[] { live1.KeyHash, live2.KeyHash }.Order(), first.Order());
+        Assert.False((await context.ApiKeys.FindAsync(live1.Id))!.IsActive);
+        Assert.False((await context.ApiKeys.FindAsync(live2.Id))!.IsActive);
+        Assert.False((await context.ApiKeys.FindAsync(alreadyRevoked.Id))!.IsActive);
+        Assert.True((await context.ApiKeys.FindAsync(activeUsersKey.Id))!.IsActive);
+        Assert.True((await context.ApiKeys.FindAsync(ownerless.Id))!.IsActive);
+
+        Assert.Empty(await context.RevokeApiKeysOfInactiveUsersAsync());
+        Assert.False(context.ChangeTracker.HasChanges());
+    }
+
+    [Fact]
+    public async Task RevokeApiKeysOfInactiveUsers_DoesNotTreatALockedOutButActiveUserAsInactive()
+    {
+        var context = CreateContext();
+        var lockedOut = await AddUserAsync(context, "locked");
+        lockedOut.IsLockedOut = true;
+        lockedOut.LockoutEnd = DateTime.UtcNow.AddHours(1);
+        await context.SaveChangesAsync();
+        var key = await AddKeyAsync(context, lockedOut.Id);
+
+        Assert.Empty(await context.RevokeApiKeysOfInactiveUsersAsync());
+        await context.SaveChangesAsync();
+
+        Assert.True((await context.ApiKeys.FindAsync(key.Id))!.IsActive);
+    }
+
+    [Fact]
     public void Forget_DropsOnlyTheGivenKeysFromTheCache_AndIsHarmlessWithoutOne()
     {
         var cache = new RecordingCache();

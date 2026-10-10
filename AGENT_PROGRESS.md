@@ -804,3 +804,7 @@ Left: deploy is Martien's call. EmailConfirmed for passwordless login stays out 
 Done: reviewed PR #199 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Checked the grant check runs before any user/role row is added, in the dry run too, with the grantor taken from the token (SuperAdmin role claim only); both ImportUsersAsync callers pass it.
 Verified: clean build on the merged head; IAM.API.Tests and IAM.Core.Tests results in the PR comment; BulkImportRoleGrantTests all pass.
 Left: deploy is Martien's call.
+## 2026-10-10 - task 5224
+Done: PR #201. DatabaseSeeder runs a try/catch-wrapped startup step (after the group-role backfill) that revokes every active API key owned by an inactive user through the 5155 helper (new ApiKeyRevocation.RevokeApiKeysOfInactiveUsersAsync, then save, then cache Forget) and logs the count. Ownerless keys, keys of active users and locked-out-but-active users are untouched; a second start reports 0.
+Verified: clean build; 6 new tests (startup path with a second run = 0, cache eviction, no cache registered, failure never throws, helper matrix, locked-out user); with the seeder call removed the startup test fails; IAM.API.Tests 1690 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; generated Postgres SQL is a plain EXISTS + ANY(@ids) (not run against a live database).
+Left: deploy is Martien's call; the clean-up runs on the first start after deploy and logs "API key backfill: N active key(s)...".
