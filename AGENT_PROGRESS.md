@@ -762,3 +762,12 @@ Left: nothing in code. Deploy is Martien's call; a real-API walkthrough was not 
 Done: reviewed PR #192 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Checked that every user-deactivation site in src is covered (admin, lock_account, SCIM x3, directory sync, account merge, GDPR) and that both key lookups include the user.
 Verified: clean build on the merged head; IAM.API.Tests 1598 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; removing the store owner check or the SCIM-delete revoke each fails a test.
 Left: deploy is Martien's call; users deactivated before the deploy need follow-up 5224 before they are reactivated.
+## 2026-10-10 - task 5161
+Done: GroupsController read routes (get group, by-tenant, members, effective-permissions) now decide from the stored group's tenant via ITenantAccessResolver: tenant member or SuperAdmin reads; an active, unexpired member of the group reads that one group; device/service tokens, other-tenant tokens and everyone else get one identical 403 (unknown id too, SuperAdmin alone sees 404). Effective permissions: that user, a tenant admin of the tenant, or SuperAdmin.
+Verified: build clean; 9 new GroupReadAuthorizationTests (7 fail on the old controller); IAM.API.Tests 1277 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. API keys never get the group-member exception (they only read tenants their scope reaches). my-groups and ownerless unchanged.
+
+## 2026-10-10 - task 5161 (review)
+Done: reviewed PR #196 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). All four read routes (get group, list by tenant, list members, effective permissions) decide from the stored group tenant via ITenantAccessResolver; device/service/other-tenant tokens and unknown ids get the same 403; group-member exception is user-token only.
+Verified: build clean on the merged head; IAM.API.Tests 1590 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; Group filter 62/62.
+Left: nothing in code. Deploy is Martien's call.
