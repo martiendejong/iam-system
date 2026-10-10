@@ -109,6 +109,39 @@ public static class TestAuthenticationHelper
     }
 
     /// <summary>
+    /// A service-account token like <see cref="GenerateServiceAccountToken"/> for an account created inside a tenant:
+    /// ServiceAccountService adds a tenant_id claim when the account has a TenantId (task 5162).
+    /// </summary>
+    public static string GenerateTenantServiceAccountToken(string clientId, string tenantIdClaim, params string[] permissions)
+    {
+        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
+        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new Claim(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+            new Claim("client_id", clientId),
+            new Claim("token_type", "service_account"),
+            new Claim("service_account_type", "internal"),
+            new Claim("tenant_id", tenantIdClaim)
+        };
+        foreach (var permission in permissions)
+        {
+            claims.Add(new Claim("permission", permission));
+        }
+
+        var token = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    /// <summary>
     /// Token shaped like DeviceAuthenticationService issues for a device: "token_type=device", the
     /// device_id and (when given) the tenant_id, no roles (task 4708).
     /// </summary>

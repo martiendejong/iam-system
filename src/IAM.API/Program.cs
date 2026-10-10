@@ -87,6 +87,7 @@ builder.Services.AddSingleton<IHostResolver, DnsHostResolver>();
 builder.Services.AddSingleton<IWebhookUrlGuard, WebhookUrlGuard>();
 builder.Services.AddScoped<IAM.API.Authorization.IWebhookAccessResolver, IAM.API.Authorization.WebhookAccessResolver>();
 builder.Services.AddScoped<IAM.API.Authorization.ITenantAccessResolver, IAM.API.Authorization.TenantAccessResolver>();
+builder.Services.AddScoped<IAM.API.Authorization.IEvaluationAccessResolver, IAM.API.Authorization.EvaluationAccessResolver>();
 builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
 builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
