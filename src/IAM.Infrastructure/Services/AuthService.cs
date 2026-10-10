@@ -757,7 +757,7 @@ public class AuthService : IAuthService
         }
 
         // Add roles
-        foreach (var userRole in user.UserRoles)
+        foreach (var userRole in user.UserRoles.WhereActive())
         {
             claims.Add(new Claim(ClaimTypes.Role, userRole.Role.Name));
         }
