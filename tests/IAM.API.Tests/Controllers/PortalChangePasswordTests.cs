@@ -227,21 +227,21 @@ public class PortalChangePasswordTests
     }
 
     [Fact]
-    public async Task FiveWrongAttempts_AtThePortal_AlsoLockTheLogin_ItIsOneCounter()
+    public async Task FiveWrongAttempts_AtThePortal_AlsoLockTheLogin()
     {
+        // Since task 5166 a wrong password at the login no longer counts (per-IP throttle instead), so the portal's
+        // five tries are the only password failures that reach the persistent lock; the login still honours it.
         await using var context = CreateContext();
         var auth = AuthServiceTestFactory.Create(context, CreateConfiguration());
         var user = await AddUserAsync(context);
         var controller = CreateController(context, user.Id);
 
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 5; i++)
             await controller.ChangePassword(new ChangePasswordRequest("wrong-password", Fresh), default);
-        var fifthAtTheLogin = await auth.LoginAsync(user.Email, "wrong-password"); // login failure #5 locks it
 
-        Assert.False(fifthAtTheLogin.Success);
         var refused = await controller.ChangePassword(new ChangePasswordRequest(Current, Fresh), default);
         Assert.Equal(StatusCodes.Status423Locked, Assert.IsType<ObjectResult>(refused).StatusCode);
-        Assert.Contains("Account locked", (await auth.LoginAsync(user.Email, Current)).Error);
+        Assert.Contains("temporarily locked", (await auth.LoginAsync(user.Email, Current)).Error);
     }
 
     [Fact]
