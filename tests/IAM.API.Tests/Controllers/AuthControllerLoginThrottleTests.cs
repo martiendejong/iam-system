@@ -1,10 +1,17 @@
 using System.Net;
 using System.Net.Http.Json;
 using IAM.API.Tests.Infrastructure;
+using IAM.API.Tests.Services;
+using IAM.Core.Services;
+using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace IAM.API.Tests.Controllers;
@@ -41,7 +48,20 @@ public class AuthControllerLoginThrottleTests : IClassFixture<AuthControllerLogi
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
-            builder.ConfigureTestServices(services => services.AddTransient<IStartupFilter, RemoteIpStartupFilter>());
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddTransient<IStartupFilter, RemoteIpStartupFilter>();
+
+                // A throttle on a frozen clock: the 2 s wait after the 4th failure must not run out
+                // between two requests when a BCrypt check is slow on a busy host (it did, in a full
+                // suite run). The wait is then exactly 2 s and Retry-After is always "2".
+                services.RemoveAll<ILoginThrottle>();
+                services.AddSingleton<ILoginThrottle>(sp => new LoginThrottle(
+                    sp.GetRequiredService<IMemoryCache>(),
+                    sp.GetRequiredService<IConfiguration>(),
+                    sp.GetRequiredService<ILogger<LoginThrottle>>(),
+                    new ManualTimeProvider()));
+            });
         }
     }
 
