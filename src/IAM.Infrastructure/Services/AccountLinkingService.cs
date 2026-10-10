@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -11,13 +12,16 @@ public class AccountLinkingService : IAccountLinkingService
 {
     private readonly IAMDbContext _context;
     private readonly ILogger<AccountLinkingService> _logger;
+    private readonly IApiKeyCache? _apiKeyCache;
 
     public AccountLinkingService(
         IAMDbContext context,
-        ILogger<AccountLinkingService> logger)
+        ILogger<AccountLinkingService> logger,
+        IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
         _logger = logger;
+        _apiKeyCache = apiKeyCache;
     }
 
     public async Task<ExternalLogin> LinkExternalProviderAsync(
@@ -284,8 +288,9 @@ public class AccountLinkingService : IAccountLinkingService
                 log.UserId = primaryUserId;
             }
 
-            // 4. Move refresh tokens (invalidate secondary's tokens)
+            // 4. Move refresh tokens (invalidate secondary's tokens) and API keys (revoked, not handed to the primary)
             await _context.RevokeRefreshTokensAsync(secondaryUserId, ct);
+            var revokedKeys = await _context.RevokeApiKeysAsync(secondaryUserId, ct);
 
             // 5. Deactivate secondary account
             secondaryUser.IsActive = false;
@@ -307,7 +312,8 @@ public class AccountLinkingService : IAccountLinkingService
                 secondaryEmail = secondaryUser.Email,
                 movedExternalLogins = secondaryLogins.Count,
                 movedRoles = secondaryUser.UserRoles.Count,
-                movedAuditLogs = secondaryAuditLogs.Count
+                movedAuditLogs = secondaryAuditLogs.Count,
+                revokedApiKeys = revokedKeys.Count
             });
 
             _context.AuditLogs.Add(new AuditLog
@@ -332,6 +338,7 @@ public class AccountLinkingService : IAccountLinkingService
 
             await _context.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
+            _apiKeyCache.Forget(revokedKeys);
 
             _logger.LogInformation(
                 "Merged account {SecondaryUserId} ({SecondaryEmail}) into {PrimaryUserId} ({PrimaryEmail}). " +
