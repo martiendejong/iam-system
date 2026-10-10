@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import { brandingApi } from '../../services/brandingApi';
 import type { PublicTenantBranding } from '../../services/brandingApi';
+import { isSafeCustomCss, isSafeImageUrl } from '../../utils/brandingSafety';
 import type { PublicIdentityProvider } from '../../types';
 import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
 
@@ -283,15 +284,15 @@ export default function LoginPage() {
     <div
       className="min-h-screen flex items-center justify-center bg-gray-50"
       style={{
-        backgroundImage: branding?.backgroundUrl ? `url(${branding.backgroundUrl})` : undefined,
+        backgroundImage: isSafeImageUrl(branding?.backgroundUrl) ? `url(${branding.backgroundUrl})` : undefined,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
       }}
     >
-      {branding?.customCss && <style>{branding.customCss}</style>}
+      {isSafeCustomCss(branding?.customCss) && <style>{branding.customCss}</style>}
       <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow-lg">
         <div>
-          {branding?.logoUrl ? (
+          {isSafeImageUrl(branding?.logoUrl) ? (
             <img
               src={branding.logoUrl}
               alt={branding.tenantName || 'Logo'}
