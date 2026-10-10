@@ -394,6 +394,55 @@ public class AuthorizeEvaluationAccessTests : IClassFixture<IAMTestWebApplicatio
         Assert.Equal(device.Permission, Text(decision, "matchedPermission"));
     }
 
+    // The tenant in the question is the caller's own, the device is not: the access check vouches for the tenant it
+    // was given, so the effective-permissions lookup itself must tie the device to that tenant.
+    [Fact]
+    public async Task TenantAdmin_ReadingAForeignDevicesPermissions_ByNamingTheirOwnTenant_GetsNothing()
+    {
+        var own = await CreateTenantAsync();
+        var foreign = await CreateTenantAsync();
+        var device = await SeedDeviceAsync(foreign);
+        var client = await MemberAsync(own, "TenantAdmin");
+
+        var response = await client.GetAsync($"/api/authorize/permissions/device/{device.Id}?tenantId={own}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(device.Permission, raw);
+        var json = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal(0, json.GetProperty("directPermissions").GetArrayLength());
+        Assert.Equal(0, json.GetProperty("effectiveAllowed").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task TenantServiceAccount_ReadingAForeignDevicesPermissions_ByNamingItsOwnTenant_GetsNothing()
+    {
+        var own = await CreateTenantAsync();
+        var foreign = await CreateTenantAsync();
+        var device = await SeedDeviceAsync(foreign);
+        var client = ClientWithToken(
+            TestAuthenticationHelper.GenerateTenantServiceAccountToken("tenant-evaluator", own.ToString(), "authorize:evaluate"));
+
+        var response = await client.GetAsync($"/api/authorize/permissions/device/{device.Id}?tenantId={own}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain(device.Permission, await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task TenantAdmin_ReadingTheEffectivePermissionsOfADeviceOfTheirTenant_Succeeds()
+    {
+        var tenant = await CreateTenantAsync();
+        var device = await SeedDeviceAsync(tenant);
+        var client = await MemberAsync(tenant, "TenantAdmin");
+
+        var response = await client.GetAsync($"/api/authorize/permissions/device/{device.Id}?tenantId={tenant}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(device.Permission, json.GetProperty("effectiveAllowed")[0].GetString());
+    }
+
     [Theory]
     [MemberData(nameof(EndpointsAndPrincipalTypes))]
     public async Task TenantAdmin_AskingAboutAnotherTenant_IsForbidden(string endpoint, string type)
