@@ -45,6 +45,27 @@ public static class ApiKeyRevocation
     }
 
     /// <summary>
+    /// Revokes every still-active API key whose owner is currently inactive (task 5224). Users deactivated before
+    /// task 5155 shipped still own keys marked active: the key store rejects them while the owner is inactive, but
+    /// reactivating the account (admin activate, SCIM, directory sync) would bring them back. Keys without an owner and
+    /// keys of active users are never touched, and a second run finds nothing left to revoke. Like the other helpers it
+    /// only stages the change: the caller saves, then passes the returned hashes to <see cref="Forget"/>.
+    /// <c>IsLockedOut</c> is a separate, temporary state and is deliberately not treated as inactive.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> RevokeApiKeysOfInactiveUsersAsync(this IAMDbContext context, CancellationToken ct = default)
+    {
+        // Only inactive users that still own a live key, so the id list handed to the shared helper stays as small as the
+        // actual clean-up instead of growing with every user ever deactivated.
+        var inactiveOwnerIds = await context.Users
+            .AsNoTracking()
+            .Where(u => !u.IsActive && context.ApiKeys.Any(k => k.IsActive && k.UserId == u.Id))
+            .Select(u => u.Id)
+            .ToListAsync(ct);
+
+        return await context.RevokeApiKeysAsync(inactiveOwnerIds, ct);
+    }
+
+    /// <summary>
     /// Drops the revoked keys from the key module's in-process cache so the revocation applies to the very next
     /// request instead of after the cache lifetime. Call it after the <c>SaveChangesAsync</c> that committed the
     /// revocation (invalidating earlier would let a concurrent request re-cache the still-active row).
