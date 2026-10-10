@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -13,10 +14,12 @@ namespace IAM.Infrastructure.Services;
 public class ScimService : IScimService
 {
     private readonly IAMDbContext _context;
+    private readonly IApiKeyCache? _apiKeyCache;
 
-    public ScimService(IAMDbContext context)
+    public ScimService(IAMDbContext context, IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
+        _apiKeyCache = apiKeyCache;
     }
 
     // ---- User Operations ----
@@ -85,13 +88,16 @@ public class ScimService : IScimService
         user.IsActive = scimUser.Active;
         user.UpdatedAt = DateTime.UtcNow;
 
+        IReadOnlyList<string> revokedKeys = Array.Empty<string>();
         if (!user.IsActive)
         {
             await _context.RevokeRefreshTokensAsync(user.Id, ct);
+            revokedKeys = await _context.RevokeApiKeysAsync(user.Id, ct);
         }
 
         await LogProvisioningAsync(tenantId, "Update", "User", scimUser.ExternalId, user.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(revokedKeys);
 
         return MapUserToScimResource(user);
     }
@@ -122,13 +128,16 @@ public class ScimService : IScimService
 
         user.UpdatedAt = DateTime.UtcNow;
 
+        IReadOnlyList<string> revokedKeys = Array.Empty<string>();
         if (!user.IsActive)
         {
             await _context.RevokeRefreshTokensAsync(user.Id, ct);
+            revokedKeys = await _context.RevokeApiKeysAsync(user.Id, ct);
         }
 
         await LogProvisioningAsync(tenantId, "Update", "User", null, user.Id, "Success", $"PATCH: {patchRequest.Operations.Count} operations", ct);
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(revokedKeys);
 
         return MapUserToScimResource(user);
     }
@@ -144,9 +153,11 @@ public class ScimService : IScimService
         user.UpdatedAt = DateTime.UtcNow;
 
         await _context.RevokeRefreshTokensAsync(user.Id, ct);
+        var revokedKeys = await _context.RevokeApiKeysAsync(user.Id, ct);
 
         await LogProvisioningAsync(tenantId, "Delete", "User", null, user.Id, "Success", "Soft delete (deactivated)", ct);
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(revokedKeys);
 
         return true;
     }

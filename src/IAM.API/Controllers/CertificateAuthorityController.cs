@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.API.Authorization;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,11 +12,24 @@ namespace IAM.API.Controllers;
 public class CertificateAuthorityController : ControllerBase
 {
     private readonly ICertificateAuthorityService _caService;
+    private readonly ITenantAccessResolver _access;
 
-    public CertificateAuthorityController(ICertificateAuthorityService caService)
+    public CertificateAuthorityController(ICertificateAuthorityService caService, ITenantAccessResolver access)
     {
         _caService = caService;
+        _access = access;
     }
+
+    // Task 5148. Certificates issued here are device identities that brokers and gateways trust, and issue/renew
+    // return the private key, so issue, renew, revoke, info and expiring need SuperAdmin or a building owner/manager
+    // (TenantAdmin/BuildingOwner/BuildingManager UserRoles row) of the device's own tenant. The tenant always comes
+    // from the stored device or certificate, never from the request; a caller who manages some other tenant gets the
+    // same 404 as for an unknown id. Device and service-account tokens are refused. The public CA certificate, the
+    // CRL and validation stay open: they are how devices and brokers verify a certificate.
+
+    private ObjectResult Forbidden() =>
+        StatusCode(StatusCodes.Status403Forbidden,
+            new { error = "Only SuperAdmin or a building owner/manager of the device's tenant can use the certificate authority." });
 
     /// <summary>
     /// Get CA information including certificate statistics
@@ -23,6 +37,10 @@ public class CertificateAuthorityController : ControllerBase
     [HttpGet("info")]
     public async Task<IActionResult> GetCaInfo(CancellationToken ct)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return Forbidden();
+
         var info = await _caService.GetCaInfoAsync(ct);
 
         return Ok(new
@@ -56,14 +74,29 @@ public class CertificateAuthorityController : ControllerBase
         [FromBody] IssueCertificateRequestDto request,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.CommonName))
-        {
-            return BadRequest(new { error = "CommonName is required" });
-        }
+        // Authorize before anything else, so an unauthorized caller learns nothing about which devices exist.
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return Forbidden();
 
         if (request.DeviceId == Guid.Empty)
         {
             return BadRequest(new { error = "DeviceId is required" });
+        }
+
+        var validityDays = request.ValidityDays ?? CertificateIssuingRules.DefaultValidityDays;
+        var keySizeBits = request.KeySizeBits ?? CertificateIssuingRules.AllowedKeySizes[0];
+        var problem = CertificateIssuingRules.Check(
+            validityDays, keySizeBits, request.CommonName, request.Organization, request.OrganizationalUnit);
+        if (problem != null)
+        {
+            return BadRequest(new { error = problem });
+        }
+
+        var deviceTenantId = await _caService.GetDeviceTenantIdAsync(request.DeviceId, ct);
+        if (deviceTenantId is not { } tenantId || !access.CanManage(tenantId))
+        {
+            return NotFound(new { error = "Device not found" });
         }
 
         var userId = GetCurrentUserId();
@@ -73,8 +106,8 @@ public class CertificateAuthorityController : ControllerBase
             CommonName = request.CommonName,
             Organization = request.Organization,
             OrganizationalUnit = request.OrganizationalUnit,
-            ValidityDays = request.ValidityDays ?? 365,
-            KeySizeInBits = request.KeySizeBits ?? 2048
+            ValidityDays = validityDays,
+            KeySizeInBits = keySizeBits
         };
 
         try
@@ -111,9 +144,19 @@ public class CertificateAuthorityController : ControllerBase
         [FromBody] RevokeCertificateRequestDto request,
         CancellationToken ct)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return Forbidden();
+
         if (string.IsNullOrWhiteSpace(request.Reason))
         {
             return BadRequest(new { error = "Reason is required" });
+        }
+
+        var certificateTenantId = await _caService.GetCertificateTenantIdAsync(certificateId, ct);
+        if (certificateTenantId is not { } tenantId || !access.CanManage(tenantId))
+        {
+            return NotFound(new { error = "Certificate not found" });
         }
 
         var userId = GetCurrentUserId();
@@ -166,12 +209,17 @@ public class CertificateAuthorityController : ControllerBase
         [FromQuery] int days = 30,
         CancellationToken ct = default)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return Forbidden();
+
         if (days < 1 || days > 3650)
         {
             return BadRequest(new { error = "Days must be between 1 and 3650" });
         }
 
-        var certificates = await _caService.GetExpiringCertificatesAsync(days, ct);
+        // null = every tenant (SuperAdmin / platform admin key); otherwise only the tenants the caller manages.
+        var certificates = await _caService.GetExpiringCertificatesAsync(days, access.ManageableTenants, ct);
 
         return Ok(certificates.Select(c => new
         {
@@ -196,6 +244,16 @@ public class CertificateAuthorityController : ControllerBase
         Guid certificateId,
         CancellationToken ct)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return Forbidden();
+
+        var certificateTenantId = await _caService.GetCertificateTenantIdAsync(certificateId, ct);
+        if (certificateTenantId is not { } tenantId || !access.CanManage(tenantId))
+        {
+            return NotFound(new { error = "Certificate not found" });
+        }
+
         var userId = GetCurrentUserId();
 
         try

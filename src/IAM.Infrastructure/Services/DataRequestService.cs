@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -13,6 +14,7 @@ public class DataRequestService : IDataRequestService
     private readonly IAMDbContext _context;
     private readonly IEmailService _emailService;
     private readonly ILogger<DataRequestService> _logger;
+    private readonly IApiKeyCache? _apiKeyCache;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -21,11 +23,12 @@ public class DataRequestService : IDataRequestService
         ReferenceHandler = ReferenceHandler.IgnoreCycles
     };
 
-    public DataRequestService(IAMDbContext context, IEmailService emailService, ILogger<DataRequestService> logger)
+    public DataRequestService(IAMDbContext context, IEmailService emailService, ILogger<DataRequestService> logger, IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
         _emailService = emailService;
         _logger = logger;
+        _apiKeyCache = apiKeyCache;
     }
 
     public async Task<DataRequest> CreateExportRequestAsync(Guid userId, CancellationToken ct = default)
@@ -296,13 +299,7 @@ public class DataRequestService : IDataRequestService
         _context.RecoveryCodes.RemoveRange(recoveryCodes);
 
         // Deactivate API keys
-        var apiKeys = await _context.ApiKeys
-            .Where(ak => ak.UserId == userId)
-            .ToListAsync(ct);
-        foreach (var key in apiKeys)
-        {
-            key.IsActive = false;
-        }
+        var apiKeys = await _context.RevokeApiKeysAsync(userId, ct);
 
         // Revoke all active consents
         var activeConsents = await _context.ConsentRecords
@@ -337,6 +334,7 @@ public class DataRequestService : IDataRequestService
         });
 
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(apiKeys);
 
         // Try to notify user at original email
         try

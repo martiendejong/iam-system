@@ -89,6 +89,7 @@ builder.Services.AddSingleton<IHostResolver, DnsHostResolver>();
 builder.Services.AddSingleton<IWebhookUrlGuard, WebhookUrlGuard>();
 builder.Services.AddScoped<IAM.API.Authorization.IWebhookAccessResolver, IAM.API.Authorization.WebhookAccessResolver>();
 builder.Services.AddScoped<IAM.API.Authorization.ITenantAccessResolver, IAM.API.Authorization.TenantAccessResolver>();
+builder.Services.AddScoped<IAM.API.Authorization.IEvaluationAccessResolver, IAM.API.Authorization.EvaluationAccessResolver>();
 builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
 builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
@@ -141,15 +142,13 @@ builder.Services.AddHttpClient("SocialAuth");
 // HttpClient for Twilio SMS API
 builder.Services.AddHttpClient("TwilioSms");
 
-// HttpClient for region health checks
-builder.Services.AddHttpClient("RegionHealth")
-    .ConfigurePrimaryHttpMessageHandler(() =>
-    {
-        var handler = new HttpClientHandler();
-        if (builder.Environment.IsDevelopment())
-            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        return handler;
-    });
+// HttpClient for region health checks (on demand and from RegionHealthWorker). Task 5153: the same connection-time
+// SSRF guard as webhook delivery (private, loopback and link-local addresses are never dialled), no redirects, no proxy.
+builder.Services.AddHttpClient("RegionHealth", client => {
+    client.Timeout = TimeSpan.FromSeconds(10);
+})
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
 
 // Building Management System services
 builder.Services.AddScoped<ILocationService, LocationService>();
