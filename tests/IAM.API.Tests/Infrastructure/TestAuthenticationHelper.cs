@@ -109,6 +109,38 @@ public static class TestAuthenticationHelper
     }
 
     /// <summary>
+    /// Token shaped like ServiceAccountService issues for a token exchange: the exchanged user's id as subject,
+    /// the user's role claims, a tenant_id and "token_type=token_exchange" (task 5164).
+    /// </summary>
+    public static string GenerateTokenExchangeToken(Guid userId, Guid tenantId, params string[] roles)
+    {
+        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
+        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+        var claims = new List<Claim>
+        {
+            new Claim("sub", userId.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
+            new Claim("tenant_id", tenantId.ToString()),
+            new Claim("token_type", "token_exchange")
+        };
+        foreach (var role in roles)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        }
+
+        var token = new JwtSecurityToken(
+            issuer: Issuer,
+            audience: Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    /// <summary>
     /// Token shaped like DeviceAuthenticationService issues for a device: "token_type=device", the
     /// device_id and (when given) the tenant_id, no roles (task 4708).
     /// </summary>

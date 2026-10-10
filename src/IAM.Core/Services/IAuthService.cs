@@ -5,6 +5,12 @@ namespace IAM.Core.Services;
 public interface IAuthService
 {
     Task<AuthResult> RegisterAsync(string email, string password, string firstName, string lastName);
+    /// <summary>
+    /// Password sign-in. An unknown email, a wrong password and a wrong password on a locked account
+    /// all return the same "Invalid email or password" after the same work; repeated failures from one
+    /// caller are refused with AuthResult.RetryAfterSeconds set (see ILoginThrottle) instead of locking
+    /// the account. A 2FA lock is only reported once the password is correct.
+    /// </summary>
     Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false);
     Task<AuthResult> RefreshTokenAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
     Task<bool> RevokeTokenAsync(string refreshToken);
@@ -46,6 +52,13 @@ public class AuthResult
     public User? User { get; set; }
     public string? Error { get; set; }
     public Dictionary<string, string[]>? ValidationErrors { get; set; }
+
+    /// <summary>
+    /// Set (to whole seconds, at least 1) when a password sign-in was refused because this
+    /// caller has to wait first (task 5166). The caller answers 429 with a Retry-After header;
+    /// it says nothing about whether the account exists.
+    /// </summary>
+    public int RetryAfterSeconds { get; set; }
 
     /// <summary>
     /// True when the risk assessment for this login required an additional step-up
