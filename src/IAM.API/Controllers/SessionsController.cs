@@ -178,22 +178,7 @@ public class SessionsController : ControllerBase
     /// 1. X-Session-Id header (preferred, set by client)
     /// 2. JWT refresh_token_id claim (fallback, set during login)
     /// </summary>
-    private Guid? GetCurrentSessionId()
-    {
-        // Option 1: Explicit session ID header
-        if (Request.Headers.TryGetValue("X-Session-Id", out var sessionIdHeader))
-        {
-            if (Guid.TryParse(sessionIdHeader.FirstOrDefault(), out var headerSessionId))
-                return headerSessionId;
-        }
-
-        // Option 2: JWT refresh_token_id claim (the AuthService binds access tokens to refresh token IDs)
-        var refreshTokenIdClaim = User.FindFirst("refresh_token_id")?.Value;
-        if (Guid.TryParse(refreshTokenIdClaim, out var refreshTokenId))
-            return refreshTokenId;
-
-        return null;
-    }
+    private Guid? GetCurrentSessionId() => CurrentSession.Resolve(Request, User);
 }
 
 public record RevokeAllRequest(Guid? UserId);

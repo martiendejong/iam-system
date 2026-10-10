@@ -5,18 +5,33 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
 
+// Task 5153. Regions drive the high-availability setup (primary region, failover) and every region endpoint is
+// called by IAM itself, so the whole controller is for platform administrators only. Reads are included: they return
+// the endpoints and the stored health-check error text. Everybody else, device and service-account tokens too, gets 403.
 [ApiController]
 [Route("api/[controller]")]
-[Authorize]
+[Authorize(Roles = "SuperAdmin,SystemAdmin")]
 public class RegionsController : ControllerBase
 {
     private readonly IRegionService _regionService;
+    private readonly IWebhookUrlGuard _urlGuard;
     private readonly ILogger<RegionsController> _logger;
 
-    public RegionsController(IRegionService regionService, ILogger<RegionsController> logger)
+    public RegionsController(IRegionService regionService, IWebhookUrlGuard urlGuard, ILogger<RegionsController> logger)
     {
         _regionService = regionService;
+        _urlGuard = urlGuard;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// A region endpoint is called by IAM (health check every 30 seconds), so it must be a public http(s) address:
+    /// the same rule as webhook targets (IWebhookUrlGuard). Returns the error to send back, or null when allowed.
+    /// </summary>
+    private async Task<string?> CheckEndpointAsync(string endpoint, CancellationToken ct)
+    {
+        var error = await _urlGuard.CheckAsync(endpoint, ct);
+        return error == null ? null : $"Region endpoint rejected: {error}";
     }
 
     // ────────────────────────────────────────────────────────────
@@ -58,6 +73,9 @@ public class RegionsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Endpoint))
             return BadRequest("Region endpoint is required");
 
+        if (await CheckEndpointAsync(request.Endpoint, ct) is { } endpointError)
+            return BadRequest(endpointError);
+
         var region = new RegionConfig
         {
             Name = request.Name,
@@ -81,6 +99,15 @@ public class RegionsController : ControllerBase
         [FromBody] RegisterRegionRequest request,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest("Region name is required");
+
+        if (string.IsNullOrWhiteSpace(request.Endpoint))
+            return BadRequest("Region endpoint is required");
+
+        if (await CheckEndpointAsync(request.Endpoint, ct) is { } endpointError)
+            return BadRequest(endpointError);
+
         try
         {
             var region = new RegionConfig
