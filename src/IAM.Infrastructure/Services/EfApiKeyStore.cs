@@ -130,7 +130,10 @@ public sealed class EfApiKeyStore : IApiKeyStore, IApiKeyUsageRecorder
             RateLimitPerMinute = e.RateLimitPerMinute,
             CreatedAtUtc = AsUtc(e.CreatedAt),
             ExpiresAtUtc = e.ExpiresAt is { } exp ? AsUtc(exp) : null,
-            IsActive = e.IsActive,
+            // A key belongs to its owner: once the owner is deactivated the key reads as revoked, in IAM's own
+            // middleware and in the introspection answer other apps cache (task 5155). A key with no owner (service /
+            // tenant key) is unaffected. An owner row that was not loaded fails closed.
+            IsActive = e.IsActive && (e.UserId is null || e.User?.IsActive == true),
             VaultReference = e.VaultReference,
             ExtraClaims = extra,
         };
