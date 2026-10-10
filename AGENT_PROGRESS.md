@@ -685,3 +685,8 @@ Left: nothing in code. Deploy is Martien's call; live POST /api/auth/login 6x ch
 Done: reviewed PR #191 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Read every role/UserRoles site that feeds a token (JWT sink, OIDC authorize/code/refresh, userinfo, app sign-in gate, ClaimsMappingService); none missed, authorizers untouched. The filter translates to the same `ExpiresAt IS NULL OR ExpiresAt > @utcNow` SQL on Npgsql as the existing authorizers.
 Verified: build clean on the merged head; IAM.API.Tests 1331 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 61 passed; the 24 new tests: 17 fail with develop's three source files put back, 7 (the "issued as before" cases) pass either way.
 Left: nothing in code. Deploy is Martien's call.
+
+## 2026-10-10 - task 5222
+Done: admin-ui Create Role form has a Tenant picker (BuildingOwner: owned tenants only, required; SuperAdmin: Global default or any root tenant; owner with no active tenant sees a message and cannot submit). Refusals show the API's {error} text. Role list shows each role's tenant or Global; api.ts maps isSystemRole to isSystem so the System badge, no-Delete rule and edit warning work.
+Verified: tsc/build clean, eslint 0 errors, vitest 52 passed (13 new); Playwright on the built UI with the API mocked at the network layer (create as owner/SuperAdmin, refusal text, no-tenant state, role list). Not verified: a real round trip against a local IAM API (iam_user cannot create a throwaway database).
+Left: reviewer may do the real-API walkthrough; child tenants are not selectable for SuperAdmin (GET /api/tenants returns roots only).
