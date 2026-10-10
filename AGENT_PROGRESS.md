@@ -659,6 +659,6 @@ Verified: build clean; 12 new SuperAdminOfflineAccessTests (real login/authorize
 Left: deploy is Martien's call. Not tested against the OpenIddict 7.x bump in open PRs #122/#123; a curl round trip on a local copy was not run (the in-process test uses the real pipeline).
 
 ## 2026-10-10 - task 5155
-Done: in progress - API keys of an inactive owner are rejected in the key store lookup; every deactivation path revokes the owner's keys through one shared helper.
-Verified: not yet.
-Left: see PR.
+Done: PR #192 - EfApiKeyStore.ToRecord reports a key inactive while its owner is inactive (middleware and introspection both read it); one helper (ApiKeyRevocation.RevokeApiKeysAsync) revokes the owner's keys from admin deactivate, lock_account, SCIM delete/patch/replace, directory sync, account merge and GDPR erasure, then drops the revoked hashes from the key module's cache so the 2-minute cache cannot keep a dead key alive in this process.
+Verified: build clean; 11 new end-to-end tests through the real pipeline (each of the 8 routes: key 200 -> deactivate -> 401 + introspection inactive + row revoked, other users' and ownerless keys untouched, reactivation does not revive it) and 6 helper tests; the 9 route/store tests fail on untouched develop (the 2 ownerless/active-owner tests pass there, as intended); IAM.API.Tests 1227 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. Other apps validating through introspection keep their own 2-minute cache, so a deactivated owner's key stops there within about 2 minutes. Keys of users deactivated BEFORE this ships are rejected by the store check but stay marked active in the table, so reactivating such a user would revive them: follow-up task 5224 (one-time revoke).
