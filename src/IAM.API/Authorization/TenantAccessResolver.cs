@@ -35,6 +35,12 @@ public sealed class TenantAccess
     /// </summary>
     public IReadOnlyCollection<Guid>? ReadableTenants => AllTenants ? null : _readable;
 
+    /// <summary>
+    /// The tenants the caller may change, to pin a query to (task 5163); null means every tenant. Empty when the
+    /// caller manages none.
+    /// </summary>
+    public IReadOnlyCollection<Guid>? ManageableTenants => AllTenants ? null : _manageable;
+
     public bool CanRead(Guid tenantId) => !IsRefused && (AllTenants || _readable.Contains(tenantId));
 
     public bool CanManage(Guid tenantId) => !IsRefused && (AllTenants || _manageable.Contains(tenantId));
