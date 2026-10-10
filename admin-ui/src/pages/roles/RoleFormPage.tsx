@@ -3,28 +3,45 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { api } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
+import {
+  apiErrorMessage,
+  isSuperAdmin,
+  ownedTenantOptions,
+  type TenantOption,
+} from './roleTenantAccess';
 
 interface RoleFormData {
   name: string;
   description: string;
+  tenantId: string;
 }
+
+/** Select value for "Global (all tenants)"; sent to the API as no tenantId at all. */
+const GLOBAL = '';
 
 export default function RoleFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isEditMode = !!id;
+  const { user } = useAuth();
+  // The login response carries no roles (only GET /users/me does), so after a fresh sign-in the context user
+  // has none until a reload. Create mode therefore resolves the roles itself (see the tenant effect below).
+  const [superAdmin, setSuperAdmin] = useState(isSuperAdmin(user));
 
   const [loading, setLoading] = useState(isEditMode);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [isSystemRole, setIsSystemRole] = useState(false);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [tenantsLoading, setTenantsLoading] = useState(!isEditMode);
 
   const {
     register,
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<RoleFormData>();
+  } = useForm<RoleFormData>({ defaultValues: { name: '', description: '', tenantId: GLOBAL } });
 
   useEffect(() => {
     if (isEditMode) {
@@ -32,17 +49,47 @@ export default function RoleFormPage() {
     }
   }, [id]);
 
+  // Create mode: a SuperAdmin may pick any root tenant or Global; a BuildingOwner only the tenants they own.
+  useEffect(() => {
+    if (isEditMode || !user) return;
+    let cancelled = false;
+    const loadTenants = async () => {
+      try {
+        setTenantsLoading(true);
+        const me = user.roles ? user : await api.getCurrentUser();
+        const isSuper = isSuperAdmin(me);
+        const options: TenantOption[] = isSuper
+          ? (await api.getTenants()).map((t: any) => ({ id: t.id, name: t.name }))
+          : ownedTenantOptions(me, await api.getMyTenants());
+        if (cancelled) return;
+        setSuperAdmin(isSuper);
+        setTenants(options);
+        // A single owned tenant is the only valid answer, so preselect it; a SuperAdmin defaults to Global.
+        reset((prev) => ({ ...prev, tenantId: !isSuper && options.length === 1 ? options[0].id : GLOBAL }));
+      } catch (err: any) {
+        if (!cancelled) setError(apiErrorMessage(err, 'Failed to load tenants'));
+      } finally {
+        if (!cancelled) setTenantsLoading(false);
+      }
+    };
+    loadTenants();
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, user, reset]);
+
   const loadRole = async () => {
     try {
       setLoading(true);
       const data = await api.getRole(id!);
-      setIsSystemRole(data.isSystem);
+      setIsSystemRole(!!data.isSystem);
       reset({
         name: data.name,
         description: data.description || '',
+        tenantId: data.tenantId ?? GLOBAL,
       });
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load role');
+      setError(apiErrorMessage(err, 'Failed to load role'));
     } finally {
       setLoading(false);
     }
@@ -54,18 +101,27 @@ export default function RoleFormPage() {
       setError('');
 
       if (isEditMode) {
-        await api.updateRole(id!, data);
+        await api.updateRole(id!, { name: data.name, description: data.description });
       } else {
-        await api.createRole(data);
+        await api.createRole({
+          name: data.name,
+          description: data.description,
+          // Global = no tenantId; the API reads a missing tenant as a platform-wide role.
+          ...(data.tenantId ? { tenantId: data.tenantId } : {}),
+        });
       }
 
       navigate('/roles');
     } catch (err: any) {
-      setError(err.response?.data?.message || `Failed to ${isEditMode ? 'update' : 'create'} role`);
+      // Show the API's own reason (other tenant, duplicate name, platform role name, ...), not a generic line.
+      setError(apiErrorMessage(err, `Failed to ${isEditMode ? 'update' : 'create'} role`));
     } finally {
       setSaving(false);
     }
   };
+
+  // A BuildingOwner who owns no active tenant cannot create a role anywhere.
+  const noOwnedTenant = !isEditMode && !superAdmin && !tenantsLoading && tenants.length === 0;
 
   if (loading) {
     return (
@@ -164,6 +220,52 @@ export default function RoleFormPage() {
                 </p>
               </div>
 
+              {/* Tenant (create only: a role's tenant is fixed once it exists) */}
+              {!isEditMode && (
+                <div>
+                  <label htmlFor="tenantId" className="block text-sm font-medium text-gray-700">
+                    Tenant {superAdmin ? '' : '*'}
+                  </label>
+                  {noOwnedTenant ? (
+                    <p
+                      role="alert"
+                      className="mt-1 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2"
+                    >
+                      You do not own an active tenant, so you cannot create roles. Ask a SuperAdmin to
+                      make you a building owner of a tenant first.
+                    </p>
+                  ) : (
+                    <select
+                      id="tenantId"
+                      disabled={tenantsLoading}
+                      {...register('tenantId', {
+                        validate: (v) => superAdmin || !!v || 'Pick one of your tenants',
+                      })}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    >
+                      {superAdmin ? (
+                        <option value={GLOBAL}>Global (all tenants)</option>
+                      ) : (
+                        <option value="">Select a tenant...</option>
+                      )}
+                      {tenants.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {errors.tenantId && (
+                    <p className="mt-1 text-sm text-red-600">{errors.tenantId.message}</p>
+                  )}
+                  <p className="mt-1 text-xs text-gray-500">
+                    {superAdmin
+                      ? 'Global roles apply to every tenant; pick a tenant to limit the role to it.'
+                      : 'The role is created inside this tenant. Only tenants you own are listed.'}
+                  </p>
+                </div>
+              )}
+
               {/* Description */}
               <div>
                 <label htmlFor="description" className="block text-sm font-medium text-gray-700">
@@ -218,7 +320,7 @@ export default function RoleFormPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || noOwnedTenant || (!isEditMode && tenantsLoading)}
                   className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : isEditMode ? 'Update Role' : 'Create Role'}
