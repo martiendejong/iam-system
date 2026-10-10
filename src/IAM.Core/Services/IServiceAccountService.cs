@@ -75,10 +75,16 @@ public interface IServiceAccountService
     /// <summary>
     /// Perform a token exchange per RFC 8693.
     /// Exchanges a subject token for a new token scoped to a target service.
+    /// Every check runs before a token is issued and any failure gives the same (false, null, null):
+    /// the subject token must be the caller's own (<paramref name="callerId"/>), a user or service-account
+    /// token (never an earlier exchanged or device token), its account must still be active, the requested
+    /// scopes must be no wider than what the subject holds, and the target must not be IAM's own audience.
+    /// The new token never outlives the subject token.
     /// </summary>
     Task<(bool Success, string? AccessToken, DateTime? ExpiresAt)> ExchangeTokenAsync(
         string subjectToken,
         string targetService,
+        Guid callerId,
         string? scopes = null,
         CancellationToken ct = default);
 }

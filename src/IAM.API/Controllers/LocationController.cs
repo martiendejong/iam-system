@@ -1,30 +1,19 @@
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Interfaces;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
 
-[Authorize]
-[ApiController]
+// Task 5164: authorization and tenant resolution live in BuildingManagementControllerBase.
 [Route("api/[controller]")]
-public class LocationController : ControllerBase
+public class LocationController : BuildingManagementControllerBase
 {
     private readonly ILocationService _locationService;
 
-    public LocationController(ILocationService locationService)
+    public LocationController(ILocationService locationService, ITenantAccessResolver access) : base(access)
     {
         _locationService = locationService;
-    }
-
-    private Guid GetTenantId()
-    {
-        var tenantIdClaim = User.FindFirst("tenant_id")?.Value;
-        if (string.IsNullOrEmpty(tenantIdClaim) || !Guid.TryParse(tenantIdClaim, out var tenantId))
-        {
-            throw new UnauthorizedAccessException("Tenant ID not found in token");
-        }
-        return tenantId;
     }
 
     /// <summary>
@@ -32,10 +21,12 @@ public class LocationController : ControllerBase
     /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(IEnumerable<Location>), 200)]
-    public async Task<ActionResult<IEnumerable<Location>>> GetAll([FromQuery] bool includeInactive = false)
+    public async Task<ActionResult<IEnumerable<Location>>> GetAll([FromQuery] bool includeInactive = false, CancellationToken ct = default)
     {
-        var tenantId = GetTenantId();
-        var locations = await _locationService.GetAllAsync(tenantId, includeInactive);
+        var scope = await ReadScopeAsync(ct);
+        if (scope.Failure != null) return scope.Failure;
+
+        var locations = await _locationService.GetAllAsync(scope.TenantId, includeInactive);
         return Ok(locations);
     }
 
@@ -45,10 +36,12 @@ public class LocationController : ControllerBase
     [HttpGet("{id}")]
     [ProducesResponseType(typeof(Location), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<Location>> GetById(Guid id)
+    public async Task<ActionResult<Location>> GetById(Guid id, CancellationToken ct = default)
     {
-        var tenantId = GetTenantId();
-        var location = await _locationService.GetByIdAsync(id, tenantId);
+        var scope = await ReadScopeAsync(ct);
+        if (scope.Failure != null) return scope.Failure;
+
+        var location = await _locationService.GetByIdAsync(id, scope.TenantId);
 
         if (location == null)
             return NotFound();
@@ -62,10 +55,21 @@ public class LocationController : ControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(Location), 201)]
     [ProducesResponseType(400)]
-    public async Task<ActionResult<Location>> Create([FromBody] Location location)
+    public async Task<ActionResult<Location>> Create([FromBody] LocationRequest request, CancellationToken ct = default)
     {
-        var tenantId = GetTenantId();
-        location.TenantId = tenantId;
+        var scope = await ManageScopeAsync(ct);
+        if (scope.Failure != null) return scope.Failure;
+
+        var location = new Location
+        {
+            Name = request.Name,
+            Address = request.Address,
+            City = request.City,
+            Country = request.Country,
+            Latitude = request.Latitude,
+            Longitude = request.Longitude,
+            TenantId = scope.TenantId
+        };
 
         var created = await _locationService.CreateAsync(location);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
@@ -77,18 +81,22 @@ public class LocationController : ControllerBase
     [HttpPut("{id}")]
     [ProducesResponseType(typeof(Location), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<Location>> Update(Guid id, [FromBody] Location location)
+    public async Task<ActionResult<Location>> Update(Guid id, [FromBody] LocationRequest request, CancellationToken ct = default)
     {
-        var tenantId = GetTenantId();
+        var scope = await ManageScopeAsync(ct);
+        if (scope.Failure != null) return scope.Failure;
 
-        if (id != location.Id)
-            return BadRequest("ID mismatch");
-
-        var exists = await _locationService.ExistsAsync(id, tenantId);
-        if (!exists)
+        var location = await _locationService.GetByIdAsync(id, scope.TenantId);
+        if (location == null)
             return NotFound();
 
-        location.TenantId = tenantId;
+        location.Name = request.Name;
+        location.Address = request.Address;
+        location.City = request.City;
+        location.Country = request.Country;
+        location.Latitude = request.Latitude;
+        location.Longitude = request.Longitude;
+
         var updated = await _locationService.UpdateAsync(location);
         return Ok(updated);
     }
@@ -99,10 +107,12 @@ public class LocationController : ControllerBase
     [HttpDelete("{id}")]
     [ProducesResponseType(204)]
     [ProducesResponseType(404)]
-    public async Task<IActionResult> Delete(Guid id)
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
     {
-        var tenantId = GetTenantId();
-        var result = await _locationService.DeleteAsync(id, tenantId);
+        var scope = await ManageScopeAsync(ct);
+        if (scope.Failure != null) return scope.Failure;
+
+        var result = await _locationService.DeleteAsync(id, scope.TenantId);
 
         if (!result)
             return NotFound();
@@ -116,15 +126,17 @@ public class LocationController : ControllerBase
     [HttpGet("{id}/buildings")]
     [ProducesResponseType(typeof(IEnumerable<Building>), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<IEnumerable<Building>>> GetBuildings(Guid id)
+    public async Task<ActionResult<IEnumerable<Building>>> GetBuildings(Guid id, CancellationToken ct = default)
     {
-        var tenantId = GetTenantId();
-        var exists = await _locationService.ExistsAsync(id, tenantId);
+        var scope = await ReadScopeAsync(ct);
+        if (scope.Failure != null) return scope.Failure;
+
+        var exists = await _locationService.ExistsAsync(id, scope.TenantId);
 
         if (!exists)
             return NotFound();
 
-        var buildings = await _locationService.GetBuildingsAsync(id, tenantId);
+        var buildings = await _locationService.GetBuildingsAsync(id, scope.TenantId);
         return Ok(buildings);
     }
 }
