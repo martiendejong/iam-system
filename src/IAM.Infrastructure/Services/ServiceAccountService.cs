@@ -202,23 +202,80 @@ public class ServiceAccountService : IServiceAccountService
     public async Task<(bool Success, string? AccessToken, DateTime? ExpiresAt)> ExchangeTokenAsync(
         string subjectToken,
         string targetService,
+        Guid callerId,
         string? scopes = null,
         CancellationToken ct = default)
     {
+        // All checks sit here, before any token is issued; every failure looks the same to the caller.
+        var failed = (Success: false, AccessToken: (string?)null, ExpiresAt: (DateTime?)null);
+
         // Validate the subject token
-        var principal = ValidateToken(subjectToken);
-        if (principal == null)
-            return (false, null, null);
+        var validated = ValidateToken(subjectToken);
+        if (validated == null)
+            return failed;
+        var (principal, subjectExpiresAt) = validated.Value;
 
         var subjectIdClaim = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value
                           ?? principal.FindFirst("sub")?.Value;
 
         if (string.IsNullOrEmpty(subjectIdClaim) || !Guid.TryParse(subjectIdClaim, out var subjectId))
-            return (false, null, null);
+            return failed;
 
-        // Generate the exchanged token with reduced scope
-        var expiresAt = DateTime.UtcNow.AddMinutes(
+        // Own token only: another user's or service account's token is refused.
+        if (subjectId != callerId)
+            return failed;
+
+        // Only user tokens (no token_type) and service-account tokens can be exchanged: an exchanged token
+        // cannot be renewed through the exchange, and device tokens have no account to re-check.
+        var tokenType = principal.FindFirst("token_type")?.Value;
+        var isServiceAccount = string.Equals(tokenType, "service_account", StringComparison.Ordinal);
+        if (!isServiceAccount && !string.IsNullOrEmpty(tokenType))
+            return failed;
+
+        // IAM's own audience cannot be the target: that would turn the exchange into a way to mint IAM access.
+        var iamAudience = _configuration["Jwt:Audience"];
+        if (string.IsNullOrWhiteSpace(targetService)
+            || (!string.IsNullOrEmpty(iamAudience) && string.Equals(targetService.Trim(), iamAudience, StringComparison.OrdinalIgnoreCase)))
+            return failed;
+
+        // The account must still exist and be active, and its CURRENT permissions bound the requested scopes.
+        List<string> held;
+        if (isServiceAccount)
+        {
+            var account = await _context.ServiceAccounts.AsNoTracking()
+                .FirstOrDefaultAsync(sa => sa.Id == subjectId, ct);
+            if (account == null || !account.IsActive)
+                return failed;
+            held = ParsePermissions(account.Permissions);
+        }
+        else
+        {
+            var user = await _context.Users.AsNoTracking()
+                .FirstOrDefaultAsync(u => u.Id == subjectId, ct);
+            if (user == null || !user.IsActive)
+                return failed;
+
+            // A user token carries no scope claim: the scopes it may request are the permissions of its roles in force.
+            var utcNow = DateTime.UtcNow;
+            var rolePermissions = await _context.UserRoles.AsNoTracking()
+                .Where(ur => ur.UserId == subjectId && (ur.ExpiresAt == null || ur.ExpiresAt > utcNow))
+                .Select(ur => ur.Role.Permissions)
+                .ToListAsync(ct);
+            held = rolePermissions.SelectMany(ParsePermissions).ToList();
+        }
+
+        var requested = (scopes ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (requested.Any(s => !held.Contains(s, StringComparer.Ordinal)))
+            return failed;
+
+        // The exchanged token never outlives the subject token.
+        var issuedAt = DateTime.UtcNow;
+        var expiresAt = issuedAt.AddMinutes(
             int.Parse(_configuration["Jwt:TokenExchangeExpirationMinutes"] ?? "15"));
+        if (subjectExpiresAt < expiresAt)
+            expiresAt = subjectExpiresAt;
+        if (expiresAt <= issuedAt)
+            return failed;
 
         var exchangedToken = GenerateExchangedToken(subjectId, targetService, scopes, expiresAt);
 
@@ -313,7 +370,14 @@ public class ServiceAccountService : IServiceAccountService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private ClaimsPrincipal? ValidateToken(string token)
+    private static List<string> ParsePermissions(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>(); }
+        catch (JsonException) { return new List<string>(); }
+    }
+
+    private (ClaimsPrincipal Principal, DateTime ValidTo)? ValidateToken(string token)
     {
         try
         {
@@ -332,9 +396,9 @@ public class ServiceAccountService : IServiceAccountService
                 ValidIssuer = _configuration["Jwt:Issuer"],
                 IssuerSigningKey = new SymmetricSecurityKey(key),
                 ClockSkew = TimeSpan.FromSeconds(30)
-            }, out _);
+            }, out var validatedToken);
 
-            return principal;
+            return (principal, validatedToken.ValidTo);
         }
         catch
         {
