@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
+using IAM.Core.Services;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore;
@@ -131,7 +132,7 @@ public class AuthorizationController : ControllerBase
                 .SetClaim(Claims.FamilyName, user.LastName);
 
         // Add role claims
-        var roles = user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray();
+        var roles = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray();
         identity.SetClaims(Claims.Role, roles);
 
         // Add tenant claim (only set when the app-role gate above resolved one — see
@@ -230,7 +231,7 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray());
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray());
                 if (!gate.Errored)
                 {
                     identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
@@ -254,7 +255,7 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
                 identity.SetDestinations(GetDestinations);
                 claimsPrincipal = new ClaimsPrincipal(identity);
             }
@@ -365,7 +366,7 @@ public class AuthorizationController : ControllerBase
         // Roles scope
         if (User.HasScope("roles"))
         {
-            claims[Claims.Role] = user.UserRoles.Select(ur => ur.Role.Name).ToArray();
+            claims[Claims.Role] = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToArray();
         }
 
         // Custom tenants scope
@@ -373,6 +374,7 @@ public class AuthorizationController : ControllerBase
         {
             var tenants = await _context.UserRoles
                 .Where(ur => ur.UserId == user.Id && ur.TenantId != null)
+                .WhereActive()
                 .Select(ur => new
                 {
                     id = ur.TenantId,
@@ -522,6 +524,7 @@ public class AuthorizationController : ControllerBase
 
             var rolePrefix = clientIdLower + ":";
             var appRoleAssignments = user.UserRoles
+                .WhereActive()
                 .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (appRoleAssignments.Count == 0)
