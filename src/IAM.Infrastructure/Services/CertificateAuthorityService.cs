@@ -94,14 +94,16 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         using var deviceKey = RSA.Create(keySizeBits);
 
         // Build the subject name
-        // Name fields are escaped, so a separator inside a value cannot add another name part (task 5148).
-        var subjectBuilder = new StringBuilder($"CN={CertificateIssuingRules.EscapeDnValue(request.CommonName)}");
+        // Built from typed parts, never by pasting text into a "CN=..., O=..." string, so a separator inside a name
+        // field stays part of its value and cannot add another name part (task 5148).
+        var subjectBuilder = new X500DistinguishedNameBuilder();
+        subjectBuilder.AddCommonName(request.CommonName);
         if (!string.IsNullOrWhiteSpace(request.Organization))
-            subjectBuilder.Append($", O={CertificateIssuingRules.EscapeDnValue(request.Organization)}");
+            subjectBuilder.AddOrganizationName(request.Organization);
         if (!string.IsNullOrWhiteSpace(request.OrganizationalUnit))
-            subjectBuilder.Append($", OU={CertificateIssuingRules.EscapeDnValue(request.OrganizationalUnit)}");
+            subjectBuilder.AddOrganizationalUnitName(request.OrganizationalUnit);
 
-        var subjectName = new X500DistinguishedName(subjectBuilder.ToString());
+        var subjectName = subjectBuilder.Build();
 
         // Create certificate request (CSR)
         var csr = new X509CertificateRequest(
@@ -342,9 +344,9 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
         using (parsedCert)
         {
-            commonName = GetRdnValue(parsedCert.Subject, "CN") ?? existingCert.Device.DeviceId;
-            organization = GetRdnValue(parsedCert.Subject, "O");
-            organizationalUnit = GetRdnValue(parsedCert.Subject, "OU");
+            commonName = GetRdnValue(parsedCert.SubjectName, "CN") ?? existingCert.Device.DeviceId;
+            organization = GetRdnValue(parsedCert.SubjectName, "O");
+            organizationalUnit = GetRdnValue(parsedCert.SubjectName, "OU");
         }
 
         // Calculate the same validity period as the original
@@ -592,14 +594,14 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         return BitConverter.ToString(serialBytes).Replace("-", ":");
     }
 
-    private static string? GetRdnValue(string distinguishedName, string rdnType)
+    private static string? GetRdnValue(X500DistinguishedName distinguishedName, string rdnType)
     {
         // Read the parsed name (escaped separators stay inside their value), not a split on ','.
         var oid = rdnType.ToUpperInvariant() switch { "CN" => "2.5.4.3", "O" => "2.5.4.10", "OU" => "2.5.4.11", _ => null };
         if (oid == null)
             return null;
 
-        foreach (var rdn in new X500DistinguishedName(distinguishedName).EnumerateRelativeDistinguishedNames())
+        foreach (var rdn in distinguishedName.EnumerateRelativeDistinguishedNames())
         {
             if (rdn.HasMultipleElements)
                 continue;
