@@ -81,8 +81,12 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         if (!device.IsActive)
             throw new InvalidOperationException($"Device {deviceId} is not active");
 
-        var validityDays = request.ValidityDays > 0 ? request.ValidityDays : _defaultValidityDays;
-        var keySizeBits = request.KeySizeInBits >= 2048 ? request.KeySizeInBits : 2048;
+        // Task 5148: the limits hold here as well as in the controller, so no caller of the service can exceed them.
+        var validityDays = request.ValidityDays > 0 ? request.ValidityDays : Math.Min(_defaultValidityDays, CertificateIssuingRules.MaxValidityDays);
+        var keySizeBits = request.KeySizeInBits;
+        var problem = CertificateIssuingRules.Check(validityDays, keySizeBits, request.CommonName, request.Organization, request.OrganizationalUnit);
+        if (problem != null)
+            throw new InvalidOperationException(problem);
 
         using var caCert = await GetOrCreateCaCertificateAsync(ct);
 
@@ -90,11 +94,12 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         using var deviceKey = RSA.Create(keySizeBits);
 
         // Build the subject name
-        var subjectBuilder = new StringBuilder($"CN={request.CommonName}");
+        // Name fields are escaped, so a separator inside a value cannot add another name part (task 5148).
+        var subjectBuilder = new StringBuilder($"CN={CertificateIssuingRules.EscapeDnValue(request.CommonName)}");
         if (!string.IsNullOrWhiteSpace(request.Organization))
-            subjectBuilder.Append($", O={request.Organization}");
+            subjectBuilder.Append($", O={CertificateIssuingRules.EscapeDnValue(request.Organization)}");
         if (!string.IsNullOrWhiteSpace(request.OrganizationalUnit))
-            subjectBuilder.Append($", OU={request.OrganizationalUnit}");
+            subjectBuilder.Append($", OU={CertificateIssuingRules.EscapeDnValue(request.OrganizationalUnit)}");
 
         var subjectName = new X500DistinguishedName(subjectBuilder.ToString());
 
@@ -271,15 +276,38 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
     public async Task<List<DeviceCertificate>> GetExpiringCertificatesAsync(
         int daysBeforeExpiry = 30,
+        IReadOnlyCollection<Guid>? tenantIds = null,
         CancellationToken ct = default)
     {
         var cutoffDate = DateTime.UtcNow.AddDays(daysBeforeExpiry);
 
-        return await _context.DeviceCertificates
+        var query = _context.DeviceCertificates
             .Include(c => c.Device)
-            .Where(c => c.Status == "Active" && c.NotAfter <= cutoffDate)
+            .Where(c => c.Status == "Active" && c.NotAfter <= cutoffDate);
+
+        // Task 5148: a caller who manages some tenants only sees the certificates of those tenants' devices.
+        if (tenantIds != null)
+            query = query.Where(c => tenantIds.Contains(c.Device!.TenantId));
+
+        return await query
             .OrderBy(c => c.NotAfter)
             .ToListAsync(ct);
+    }
+
+    public async Task<Guid?> GetDeviceTenantIdAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        return await _context.Devices.AsNoTracking()
+            .Where(d => d.Id == deviceId)
+            .Select(d => (Guid?)d.TenantId)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<Guid?> GetCertificateTenantIdAsync(Guid certificateId, CancellationToken ct = default)
+    {
+        return await _context.DeviceCertificates.AsNoTracking()
+            .Where(c => c.Id == certificateId)
+            .Select(c => (Guid?)c.Device!.TenantId)
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<(DeviceCertificate NewCertificate, string PrivateKeyPem)> RenewCertificateAsync(
@@ -322,6 +350,7 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         // Calculate the same validity period as the original
         var originalValidityDays = (int)(existingCert.NotAfter - existingCert.NotBefore).TotalDays;
         var validityDays = originalValidityDays > 0 ? originalValidityDays : _defaultValidityDays;
+        validityDays = Math.Min(validityDays, CertificateIssuingRules.MaxValidityDays); // older certificates may be longer
 
         // Issue new certificate with the same subject
         var request = new CertificateRequest
@@ -330,7 +359,7 @@ public class CertificateAuthorityService : ICertificateAuthorityService
             Organization = organization,
             OrganizationalUnit = organizationalUnit,
             ValidityDays = validityDays,
-            KeySizeInBits = 2048
+            KeySizeInBits = CertificateIssuingRules.AllowedKeySizes[0]
         };
 
         var (newCert, privateKeyPem) = await IssueCertificateAsync(
@@ -565,18 +594,17 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
     private static string? GetRdnValue(string distinguishedName, string rdnType)
     {
-        // Parse "CN=value, O=org, OU=unit" format
-        var parts = distinguishedName.Split(',', StringSplitOptions.TrimEntries);
-        foreach (var part in parts)
+        // Read the parsed name (escaped separators stay inside their value), not a split on ','.
+        var oid = rdnType.ToUpperInvariant() switch { "CN" => "2.5.4.3", "O" => "2.5.4.10", "OU" => "2.5.4.11", _ => null };
+        if (oid == null)
+            return null;
+
+        foreach (var rdn in new X500DistinguishedName(distinguishedName).EnumerateRelativeDistinguishedNames())
         {
-            var equalsIndex = part.IndexOf('=');
-            if (equalsIndex > 0)
-            {
-                var key = part[..equalsIndex].Trim();
-                var value = part[(equalsIndex + 1)..].Trim();
-                if (key.Equals(rdnType, StringComparison.OrdinalIgnoreCase))
-                    return value;
-            }
+            if (rdn.HasMultipleElements)
+                continue;
+            if (rdn.GetSingleElementType().Value == oid)
+                return rdn.GetSingleElementValue();
         }
         return null;
     }
