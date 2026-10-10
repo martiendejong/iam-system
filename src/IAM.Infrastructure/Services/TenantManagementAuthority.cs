@@ -49,6 +49,20 @@ public static class TenantManagementAuthority
             && (ur.Role.Name == OwnerRoleName || ur.Role.Name == ManagerRoleName), ct);
     }
 
+    /// <summary>The tenants where the user holds an active BuildingOwner/BuildingManager row (empty for none; SuperAdmin is not expanded).</summary>
+    public static async Task<List<Guid>> GetManagedTenantIdsAsync(IAMDbContext context, Guid userId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return await context.UserRoles.AsNoTracking()
+            .Where(ur => ur.UserId == userId
+                && ur.TenantId != null
+                && (ur.ExpiresAt == null || ur.ExpiresAt > now)
+                && (ur.Role.Name == OwnerRoleName || ur.Role.Name == ManagerRoleName))
+            .Select(ur => ur.TenantId!.Value)
+            .Distinct()
+            .ToListAsync(ct);
+    }
+
     /// <summary>The user ids holding an active BuildingOwner row in the tenant.</summary>
     public static Task<List<Guid>> GetActiveOwnerIdsAsync(IAMDbContext context, Guid tenantId, CancellationToken ct)
     {
