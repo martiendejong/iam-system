@@ -669,3 +669,8 @@ Left: deploy is Martien's call. The admin-ui pages for network policy (tenant ad
 Done: reviewed PR #182 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). The two HTTP throttle tests used the wall clock, so on a busy host the 2 s wait after the 4th failure ran out between requests (ASpoofedXForwardedForDoesNotEscapeTheThrottle failed once in a full-suite run); the test factory now swaps in a LoginThrottle on a frozen ManualTimeProvider.
 Verified: build clean; IAM.API.Tests 1268 passed / 2 failed (PkceMethodsTests, same failures noted on untouched develop in tasks 5147/5165/5002/5160) / 3 skipped, run on the merged head.
 Left: nothing in code. Deploy is Martien's call; live POST /api/auth/login 6x check and the stopwatch timing check need the deploy; throttle state is in memory (restart clears it).
+
+## 2026-10-10 - task 5161
+Done: GroupsController read routes (get group, by-tenant, members, effective-permissions) now decide from the stored group's tenant via ITenantAccessResolver: tenant member or SuperAdmin reads; an active, unexpired member of the group reads that one group; device/service tokens, other-tenant tokens and everyone else get one identical 403 (unknown id too, SuperAdmin alone sees 404). Effective permissions: that user, a tenant admin of the tenant, or SuperAdmin.
+Verified: build clean; 9 new GroupReadAuthorizationTests (7 fail on the old controller); IAM.API.Tests 1277 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. API keys never get the group-member exception (they only read tenants their scope reaches). my-groups and ownerless unchanged.
