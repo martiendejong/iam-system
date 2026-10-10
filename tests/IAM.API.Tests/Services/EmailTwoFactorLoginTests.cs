@@ -55,7 +55,7 @@ public class EmailTwoFactorLoginTests
         var otpService = new OtpService(context, emailService, smsService, emailSettings, NullLogger<OtpService>.Instance);
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         var claimsMappingService = new ClaimsMappingService(context);
-        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, claimsMappingService, NullLogger<AuthService>.Instance);
+        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, claimsMappingService, NullLogger<AuthService>.Instance, AuthServiceTestFactory.CreateLoginThrottle());
         return (authService, otpService, emailService, context);
     }
 
