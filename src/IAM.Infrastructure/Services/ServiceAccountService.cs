@@ -256,9 +256,9 @@ public class ServiceAccountService : IServiceAccountService
                 return failed;
 
             // A user token carries no scope claim: the scopes it may request are the permissions of its roles in force.
-            var utcNow = DateTime.UtcNow;
             var rolePermissions = await _context.UserRoles.AsNoTracking()
-                .Where(ur => ur.UserId == subjectId && (ur.ExpiresAt == null || ur.ExpiresAt > utcNow))
+                .Where(ur => ur.UserId == subjectId)
+                .WhereActive()
                 .Select(ur => ur.Role.Permissions)
                 .ToListAsync(ct);
             held = rolePermissions.SelectMany(ParsePermissions).ToList();
