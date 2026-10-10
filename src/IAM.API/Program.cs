@@ -131,6 +131,11 @@ builder.Services.AddHttpClient("WebhookDelivery", client => {
     // allowed in development only.
     WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
 
+// Task 5150: custom-domain ownership proof (DNS TXT over HTTPS) for tenant branding
+builder.Services.AddHttpClient("DomainVerification", client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddSingleton<ITxtRecordResolver, DohTxtRecordResolver>();
+builder.Services.AddSingleton<IDomainOwnershipVerifier, DomainOwnershipVerifier>();
+
 // HttpClient for social/enterprise SSO provider calls
 builder.Services.AddHttpClient("SocialAuth");
 
@@ -478,6 +483,19 @@ app.MapFallback("/api/{**rest}", () => Results.NotFound(new { error = "API endpo
 
 // SPA fallback — serves index.html for any non-API path not matched by a route
 app.MapFallbackToFile("index.html");
+
+// Task 5150: re-validate branding rows stored before branding input was restricted (idempotent; never blocks startup)
+try
+{
+    using var brandingScope = app.Services.CreateScope();
+    await IAM.Infrastructure.Services.BrandingCleanup.RunAsync(
+        brandingScope.ServiceProvider.GetRequiredService<IAMDbContext>(),
+        app.Logger);
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Branding clean-up pass failed; branding is still validated when it is read");
+}
 
 // Seed development data (only in Development environment)
 if (app.Environment.IsDevelopment())

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Mail;
 using System.Text.RegularExpressions;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29,7 +30,12 @@ public partial class EmailService : IEmailService
         if (branding == null)
             return (null, null, null, false);
 
-        return (branding.LogoUrl, branding.EmailHeaderHtml, branding.EmailFooterHtml, branding.WhiteLabelEnabled);
+        // Task 5150: stored e-mail HTML is sanitized on save, and again here so rows stored before that are never sent raw.
+        return (
+            BrandingSanitizer.SafeImageUrlOrNull(branding.LogoUrl),
+            BrandingSanitizer.SanitizeEmailHtml(branding.EmailHeaderHtml),
+            BrandingSanitizer.SanitizeEmailHtml(branding.EmailFooterHtml),
+            branding.WhiteLabelEnabled);
     }
 
     public async Task SendEmailVerificationAsync(string email, string username, string verificationToken, CancellationToken ct = default)
@@ -352,7 +358,7 @@ public partial class EmailService : IEmailService
         var headerContent = !string.IsNullOrEmpty(headerHtml)
             ? headerHtml
             : !string.IsNullOrEmpty(logoUrl)
-                ? $"""<img src="{logoUrl}" alt="Logo" style="height:32px;max-width:200px;" />"""
+                ? $"""<img src="{System.Net.WebUtility.HtmlEncode(logoUrl)}" alt="Logo" style="height:32px;max-width:200px;" />"""
                 : """&#128274; IAM System""";
 
         var brandFooterSection = !string.IsNullOrEmpty(footerHtml)
