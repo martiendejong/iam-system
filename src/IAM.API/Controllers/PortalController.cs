@@ -115,13 +115,32 @@ public class PortalController : ControllerBase
         if (user == null)
             return NotFound(new { error = "User not found" });
 
-        // Verify current password
+        // Same lockout as the login, checked before the expensive hash compare: a stolen access token must not
+        // be able to guess the current password at request speed.
+        if (LoginLockout.IsLocked(user))
+            return StatusCode(StatusCodes.Status423Locked,
+                new { error = $"Account locked. Try again after {user.LockoutEnd:yyyy-MM-dd HH:mm:ss} UTC" });
+
+        // Verify current password; a wrong one counts as a failed login
         if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
+        {
+            LoginLockout.RegisterFailure(user);
+            await _context.SaveChangesAsync(ct);
             return BadRequest(new { error = "Current password is incorrect" });
+        }
+
+        LoginLockout.Reset(user);
 
         // Update password
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, workFactor: 12);
         user.UpdatedAt = DateTime.UtcNow;
+
+        // The old password is gone, so every other session opened with it ends, as on admin change and reset.
+        // The session making the change stays signed in when it can be identified (otherwise all end). The refresh
+        // token to keep comes from the signed token claim only; the sessions screen's X-Session-Id header names a
+        // UserSession, not a refresh token.
+        await _context.RevokeRefreshTokensAsync(userId.Value, CurrentSession.RefreshTokenId(User), ct);
+        var currentSessionId = CurrentSession.Resolve(Request, User);
 
         // Log password change in audit log
         _context.AuditLogs.Add(new Core.Entities.AuditLog
@@ -133,6 +152,13 @@ public class PortalController : ControllerBase
             IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
             UserAgent = Request.Headers["User-Agent"].ToString()
         });
+
+        // Both session services save the context, so the new hash, the revoked refresh tokens and the audit row
+        // are committed together.
+        if (currentSessionId.HasValue)
+            await _sessionService.RevokeAllOtherSessionsAsync(userId.Value, currentSessionId.Value, ct);
+        else
+            await _sessionService.RevokeAllUserSessionsAsync(userId.Value, "password_change", ct);
 
         await _context.SaveChangesAsync(ct);
 

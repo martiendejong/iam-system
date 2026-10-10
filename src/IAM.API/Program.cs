@@ -89,6 +89,7 @@ builder.Services.AddSingleton<IHostResolver, DnsHostResolver>();
 builder.Services.AddSingleton<IWebhookUrlGuard, WebhookUrlGuard>();
 builder.Services.AddScoped<IAM.API.Authorization.IWebhookAccessResolver, IAM.API.Authorization.WebhookAccessResolver>();
 builder.Services.AddScoped<IAM.API.Authorization.ITenantAccessResolver, IAM.API.Authorization.TenantAccessResolver>();
+builder.Services.AddScoped<IAM.API.Authorization.IEvaluationAccessResolver, IAM.API.Authorization.EvaluationAccessResolver>();
 builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
 builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
@@ -130,21 +131,24 @@ builder.Services.AddHttpClient("WebhookDelivery", client => {
     // allowed in development only.
     WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
 
+// Task 5150: custom-domain ownership proof (DNS TXT over HTTPS) for tenant branding
+builder.Services.AddHttpClient("DomainVerification", client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddSingleton<ITxtRecordResolver, DohTxtRecordResolver>();
+builder.Services.AddSingleton<IDomainOwnershipVerifier, DomainOwnershipVerifier>();
+
 // HttpClient for social/enterprise SSO provider calls
 builder.Services.AddHttpClient("SocialAuth");
 
 // HttpClient for Twilio SMS API
 builder.Services.AddHttpClient("TwilioSms");
 
-// HttpClient for region health checks
-builder.Services.AddHttpClient("RegionHealth")
-    .ConfigurePrimaryHttpMessageHandler(() =>
-    {
-        var handler = new HttpClientHandler();
-        if (builder.Environment.IsDevelopment())
-            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        return handler;
-    });
+// HttpClient for region health checks (on demand and from RegionHealthWorker). Task 5153: the same connection-time
+// SSRF guard as webhook delivery (private, loopback and link-local addresses are never dialled), no redirects, no proxy.
+builder.Services.AddHttpClient("RegionHealth", client => {
+    client.Timeout = TimeSpan.FromSeconds(10);
+})
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
 
 // Building Management System services
 builder.Services.AddScoped<ILocationService, LocationService>();
@@ -344,7 +348,12 @@ builder.Services.AddAuthentication(options =>
 {
     options.Cookie.Name = "IAM.Session";
     options.Cookie.HttpOnly = true;
-    options.Cookie.SameSite = SameSiteMode.Strict;
+    // Task 5053: Lax, not Strict. An app on another domain (knowledge.prospergenics.com, ...) sends the
+    // user to /connect/authorize with a cross-site top-level navigation; a Strict cookie is not sent on
+    // that, so IAM would never recognise a signed-in user and prompt=none would always answer
+    // login_required. Lax still withholds the cookie from cross-site sub-requests and form POSTs.
+    // Only /connect/authorize reads this cookie; the refreshToken cookie stays Strict.
+    options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
@@ -472,6 +481,19 @@ app.MapFallback("/api/{**rest}", () => Results.NotFound(new { error = "API endpo
 
 // SPA fallback — serves index.html for any non-API path not matched by a route
 app.MapFallbackToFile("index.html");
+
+// Task 5150: re-validate branding rows stored before branding input was restricted (idempotent; never blocks startup)
+try
+{
+    using var brandingScope = app.Services.CreateScope();
+    await IAM.Infrastructure.Services.BrandingCleanup.RunAsync(
+        brandingScope.ServiceProvider.GetRequiredService<IAMDbContext>(),
+        app.Logger);
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Branding clean-up pass failed; branding is still validated when it is read");
+}
 
 // Seed development data (only in Development environment)
 if (app.Environment.IsDevelopment())

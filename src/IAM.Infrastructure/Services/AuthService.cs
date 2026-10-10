@@ -200,7 +200,7 @@ public class AuthService : IAuthService
 
         // The persistent lock now only comes from the 2FA step (task 4523). It is reported only to a
         // caller who has proven the password, and without a timestamp.
-        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        if (LoginLockout.IsLocked(user))
         {
             return new AuthResult
             {
@@ -214,9 +214,7 @@ public class AuthService : IAuthService
         // (it would hand out a fresh set of code guesses); an expired lock is the one thing to clear.
         if (!user.TwoFactorEnabled || user.IsLockedOut)
         {
-            user.FailedLoginAttempts = 0;
-            user.IsLockedOut = false;
-            user.LockoutEnd = null;
+            LoginLockout.Reset(user);
         }
 
         if (!user.EmailConfirmed)
@@ -549,9 +547,7 @@ public class AuthService : IAuthService
 
         // Update last login
         user.LastLoginAt = DateTime.UtcNow;
-        user.FailedLoginAttempts = 0;
-        user.IsLockedOut = false;
-        user.LockoutEnd = null;
+        LoginLockout.Reset(user);
 
         // Resolve this organization's configured token lifetime (falls back to today's
         // defaults when the user has no tenant or the tenant has no Token Configuration)
@@ -660,7 +656,7 @@ public class AuthService : IAuthService
         }
 
         // Check lockout before attempting OTP verification
-        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        if (LoginLockout.IsLocked(user))
         {
             return new AuthResult
             {
@@ -674,11 +670,9 @@ public class AuthService : IAuthService
         if (!valid)
         {
             // Track 2FA failures against the same lockout counter
-            user.FailedLoginAttempts++;
-            if (user.FailedLoginAttempts >= 5)
+            LoginLockout.RegisterFailure(user);
+            if (LoginLockout.IsLocked(user))
             {
-                user.IsLockedOut = true;
-                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
                 await _context.SaveChangesAsync();
                 return new AuthResult
                 {
@@ -757,7 +751,7 @@ public class AuthService : IAuthService
         }
 
         // Add roles
-        foreach (var userRole in user.UserRoles)
+        foreach (var userRole in user.UserRoles.WhereActive())
         {
             claims.Add(new Claim(ClaimTypes.Role, userRole.Role.Name));
         }
