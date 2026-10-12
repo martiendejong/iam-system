@@ -69,6 +69,10 @@ builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>(
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
+// Task 5159: per-device lockout and one-time nonces for device login (singleton: the state lives in IMemoryCache), and the
+// trusted-gateway check for certificate login.
+builder.Services.AddSingleton<IDeviceLoginGuard, DeviceLoginGuard>();
+builder.Services.AddSingleton<IDeviceGatewayVerifier, DeviceGatewayVerifier>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();

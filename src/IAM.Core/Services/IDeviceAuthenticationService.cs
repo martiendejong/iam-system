@@ -5,9 +5,11 @@ namespace IAM.Core.Services;
 public interface IDeviceAuthenticationService
 {
     /// <summary>
-    /// Authenticate a device using X.509 certificate (capable devices).
+    /// Authenticate a device using X.509 certificate (capable devices). Only a trusted edge gateway may call this:
+    /// <paramref name="gatewayKey"/> is the key the gateway sent, and without a valid one the login always fails
+    /// (task 5159), because a certificate PEM is public and proves nothing by itself.
     /// </summary>
-    Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId);
+    Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId, string? gatewayKey);
 
     /// <summary>
     /// Authenticate a device using HMAC-SHA256 (constrained devices).
