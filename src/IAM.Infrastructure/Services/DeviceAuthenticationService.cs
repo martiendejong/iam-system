@@ -9,41 +9,79 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IAM.Infrastructure.Services;
 
 public class DeviceAuthenticationService : IDeviceAuthenticationService
 {
+    /// <summary>
+    /// Task 5159: the one answer every failed login gets, whatever was wrong (unknown or inactive device, wrong secret,
+    /// locked device, replayed nonce, stale timestamp, untrusted caller, unknown certificate). The real reason goes to
+    /// the server log only.
+    /// </summary>
+    public const string GenericFailure = "Authentication failed";
+
+    private const int MaxNonceLength = 128;
+
+    // Hash used to spend the same BCrypt time on a login that already failed for another reason, so the response time
+    // does not tell an unknown or locked device from a known one with a wrong secret (same cost factor as DeviceService).
+    private static readonly Lazy<string> DummySecretHash = new(() =>
+        BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString("N"), workFactor: 12));
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
+    private readonly IDeviceLoginGuard _loginGuard;
+    private readonly IDeviceGatewayVerifier _gatewayVerifier;
+    private readonly ILogger<DeviceAuthenticationService> _logger;
 
-    public DeviceAuthenticationService(IAMDbContext context, IConfiguration configuration)
+    public DeviceAuthenticationService(
+        IAMDbContext context,
+        IConfiguration configuration,
+        IDeviceLoginGuard loginGuard,
+        IDeviceGatewayVerifier gatewayVerifier,
+        ILogger<DeviceAuthenticationService>? logger = null)
     {
         _context = context;
         _configuration = configuration;
+        _loginGuard = loginGuard;
+        _gatewayVerifier = gatewayVerifier;
+        _logger = logger ?? NullLogger<DeviceAuthenticationService>.Instance;
     }
 
-    public async Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId)
+    public async Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId, string? gatewayKey)
     {
-        if (string.IsNullOrWhiteSpace(certificatePem) || string.IsNullOrWhiteSpace(deviceId))
+        // The certificate PEM is public, so on its own it proves nothing: only a trusted edge gateway (which has
+        // verified the device private key in the mTLS handshake) may present it. Checked before anything is looked up.
+        if (!_gatewayVerifier.IsTrusted(gatewayKey))
         {
-            return new DeviceAuthResult { Success = false, Error = "Certificate and device ID are required" };
+            return Fail("certificate login from a caller that is not a trusted gateway", deviceId);
         }
 
-        // Find the device
+        if (string.IsNullOrWhiteSpace(certificatePem) || string.IsNullOrWhiteSpace(deviceId))
+        {
+            return Fail("certificate or device id missing", deviceId);
+        }
+
         var device = await _context.Devices
             .Include(d => d.Certificates.Where(c => c.Status == "Active"))
             .FirstOrDefaultAsync(d => d.DeviceId == deviceId && d.IsActive);
 
         if (device == null)
         {
-            return new DeviceAuthResult { Success = false, Error = "Device not found or inactive" };
+            return Fail("device not found or inactive", deviceId);
+        }
+
+        if (_loginGuard.IsLockedOut(deviceId))
+        {
+            return Fail("device is locked after repeated failures", deviceId);
         }
 
         if (device.AuthenticationMethod != "certificate")
         {
-            return new DeviceAuthResult { Success = false, Error = "Device is not configured for certificate authentication" };
+            return FailKnownDevice("device is not configured for certificate authentication", deviceId);
         }
 
         // Parse and validate the presented certificate
@@ -54,110 +92,142 @@ public class DeviceAuthenticationService : IDeviceAuthenticationService
         }
         catch (Exception)
         {
-            return new DeviceAuthResult { Success = false, Error = "Invalid certificate format" };
+            return FailKnownDevice("invalid certificate format", deviceId);
         }
 
-        // Verify certificate is not expired
-        if (presentedCert.NotAfter < DateTime.UtcNow || presentedCert.NotBefore > DateTime.UtcNow)
+        using (presentedCert)
         {
-            return new DeviceAuthResult { Success = false, Error = "Certificate is expired or not yet valid" };
+            // Verify certificate is not expired. NotBefore/NotAfter are local times; compare them as UTC.
+            var nowUtc = DateTime.UtcNow;
+            if (presentedCert.NotAfter.ToUniversalTime() < nowUtc || presentedCert.NotBefore.ToUniversalTime() > nowUtc)
+            {
+                return FailKnownDevice("certificate is expired or not yet valid", deviceId);
+            }
+
+            // Match the certificate thumbprint (SHA-256, like every stored DeviceCertificate thumbprint) against the registered certificates
+            var thumbprint = CertificateThumbprint.Sha256(presentedCert);
+            var matchedCert = device.Certificates.FirstOrDefault(c =>
+                c.Thumbprint.Equals(thumbprint, StringComparison.OrdinalIgnoreCase));
+
+            if (matchedCert == null)
+            {
+                return FailKnownDevice("certificate not registered for this device", deviceId);
+            }
         }
 
-        // Match certificate thumbprint against registered certificates
-        var thumbprint = presentedCert.GetCertHashString(HashAlgorithmName.SHA256);
-        var matchedCert = device.Certificates.FirstOrDefault(c =>
-            c.Thumbprint.Equals(thumbprint, StringComparison.OrdinalIgnoreCase));
-
-        if (matchedCert == null)
-        {
-            return new DeviceAuthResult { Success = false, Error = "Certificate not registered for this device" };
-        }
-
-        // Update device status
-        device.LastAuthenticatedAt = DateTime.UtcNow;
-        device.IsOnline = true;
-        device.LastSeenAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
-
-        // Generate device access token
-        var permissions = DeserializePermissions(device.Permissions);
-        var accessToken = GenerateDeviceAccessToken(device, permissions);
-
-        return new DeviceAuthResult
-        {
-            Success = true,
-            AccessToken = accessToken,
-            ExpiresIn = GetTokenExpirationSeconds(),
-            DeviceId = device.DeviceId,
-            Permissions = permissions
-        };
+        _loginGuard.RecordSuccess(deviceId);
+        return await CompleteLoginAsync(device);
     }
 
     public async Task<DeviceAuthResult> AuthenticateWithHmacAsync(string deviceId, string hmacPassword)
     {
         if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(hmacPassword))
         {
-            return new DeviceAuthResult { Success = false, Error = "Device ID and HMAC password are required" };
+            return Fail("device id or password missing", deviceId);
         }
+
+        // Every check that can fail runs before the BCrypt step, and the BCrypt step runs exactly once whether or not an
+        // earlier check failed, so the answer and the response time are the same for every kind of failure.
+        string? failure = null;
+        var nonce = string.Empty;
+        var providedHmac = string.Empty;
 
         // Parse HMAC password format: "timestamp:nonce:hmac"
         var parts = hmacPassword.Split(':');
-        if (parts.Length != 3)
+        if (parts.Length != 3 || parts[1].Length == 0 || parts[1].Length > MaxNonceLength)
         {
-            return new DeviceAuthResult { Success = false, Error = "Invalid HMAC format. Expected: timestamp:nonce:hmac" };
+            failure = "invalid password format, expected timestamp:nonce:hmac";
+        }
+        else
+        {
+            nonce = parts[1];
+            providedHmac = parts[2];
+
+            // Validate timestamp (5 minute window; the nonce store below turns that window into a one-time use)
+            if (!long.TryParse(parts[0], out var timestamp))
+            {
+                failure = "invalid timestamp";
+            }
+            else
+            {
+                var requestTime = DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime;
+                if (Math.Abs((DateTime.UtcNow - requestTime).TotalMinutes) > DeviceLoginGuard.TimestampWindow.TotalMinutes)
+                {
+                    failure = "timestamp outside the 5-minute window";
+                }
+            }
         }
 
-        var timestampStr = parts[0];
-        var nonce = parts[1];
-        var providedHmac = parts[2];
-
-        // Validate timestamp (prevent replay attacks - 5 minute window)
-        if (!long.TryParse(timestampStr, out var timestamp))
-        {
-            return new DeviceAuthResult { Success = false, Error = "Invalid timestamp" };
-        }
-
-        var requestTime = DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime;
-        var timeDiff = Math.Abs((DateTime.UtcNow - requestTime).TotalMinutes);
-        if (timeDiff > 5)
-        {
-            return new DeviceAuthResult { Success = false, Error = "Request expired (timestamp outside 5-minute window)" };
-        }
-
-        // Find the device
         var device = await _context.Devices
             .FirstOrDefaultAsync(d => d.DeviceId == deviceId && d.IsActive);
 
+        // Only a device that exists and is not locked can collect a failure; anything else is refused without counting.
+        var countsAsFailure = false;
         if (device == null)
         {
-            return new DeviceAuthResult { Success = false, Error = "Device not found or inactive" };
+            failure ??= "device not found or inactive";
         }
-
-        if (device.AuthenticationMethod != "hmac")
+        else if (_loginGuard.IsLockedOut(deviceId))
         {
-            return new DeviceAuthResult { Success = false, Error = "Device is not configured for HMAC authentication" };
+            failure ??= "device is locked after repeated failures";
         }
-
-        if (string.IsNullOrEmpty(device.SharedSecretHash))
+        else
         {
-            return new DeviceAuthResult { Success = false, Error = "Device has no shared secret configured" };
+            countsAsFailure = true;
+            if (device.AuthenticationMethod != "hmac")
+            {
+                failure ??= "device is not configured for HMAC authentication";
+            }
+            else if (string.IsNullOrEmpty(device.SharedSecretHash))
+            {
+                failure ??= "device has no shared secret configured";
+            }
         }
 
-        // Verify HMAC: The device signs "timestamp:nonce:deviceId" with the shared secret
-        // We verify by checking if the stored hash matches
-        // Since we store BCrypt hash, we reconstruct the expected message and verify
-        var message = $"{timestampStr}:{nonce}:{deviceId}";
+        // The device presents its secret in the HMAC position; a real HMAC check needs a recoverable secret and is the
+        // phase 2 follow-up. Until then the stored BCrypt hash is verified against what was sent.
+        var secretHash = failure is null ? device!.SharedSecretHash! : DummySecretHash.Value;
+        var secretMatches = BCrypt.Net.BCrypt.Verify(providedHmac, secretHash);
 
-        // The HMAC is computed by the device using the raw shared secret
-        // We verify by checking BCrypt.Verify(providedHmac, storedHash)
-        // This works because the device computes HMAC(message, secret) and we stored BCrypt(secret)
-        // Alternative: store the raw secret encrypted and compute HMAC server-side
-        // For simplicity, we verify the shared secret was used correctly
-        if (!BCrypt.Net.BCrypt.Verify(providedHmac, device.SharedSecretHash))
+        if (failure is null && !secretMatches)
         {
-            return new DeviceAuthResult { Success = false, Error = "Authentication failed" };
+            failure = "wrong secret";
         }
 
+        // Only a request that proved the secret may spend its nonce, so an outsider cannot use up a device's nonces.
+        if (failure is null && !_loginGuard.TryUseNonce(deviceId, nonce))
+        {
+            failure = "nonce already used (replay)";
+        }
+
+        if (failure is not null)
+        {
+            return countsAsFailure ? FailKnownDevice(failure, deviceId) : Fail(failure, deviceId);
+        }
+
+        _loginGuard.RecordSuccess(deviceId);
+        return await CompleteLoginAsync(device!);
+    }
+
+    private DeviceAuthResult Fail(string reason, string? deviceId)
+    {
+        _logger.LogWarning("Device login refused for {DeviceId}: {Reason}", Truncate(deviceId), reason);
+        return new DeviceAuthResult { Success = false, Error = GenericFailure };
+    }
+
+    /// <summary>A failure of a device that exists and is not locked: counts towards that device's lock.</summary>
+    private DeviceAuthResult FailKnownDevice(string reason, string deviceId)
+    {
+        _loginGuard.RecordFailure(deviceId);
+        return Fail(reason, deviceId);
+    }
+
+    // The id comes from an unauthenticated request: cut it short and drop control characters before it reaches the log.
+    private static string Truncate(string? value) =>
+        value is null ? string.Empty : new string(value.Take(64).Select(c => char.IsControl(c) ? '?' : c).ToArray());
+
+    private async Task<DeviceAuthResult> CompleteLoginAsync(Device device)
+    {
         // Update device status
         device.LastAuthenticatedAt = DateTime.UtcNow;
         device.IsOnline = true;

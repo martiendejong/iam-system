@@ -56,6 +56,7 @@ public class DatabaseSeeder : IHostedService
         await AuditAdminRolesAsync(context, cancellationToken);
         await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
         await BackfillApiKeysOfInactiveUsersAsync(scope.ServiceProvider, cancellationToken);
+        await BackfillDeviceCertificateThumbprintsAsync(context, cancellationToken);
         await AuditDefaultClientSecretsAsync(scope.ServiceProvider, cancellationToken);
     }
 
@@ -172,6 +173,32 @@ public class DatabaseSeeder : IHostedService
         {
             // Never block startup on the backfill; the key store already rejects keys of inactive owners.
             _logger.LogError(ex, "API key backfill for inactive users failed");
+        }
+    }
+
+    /// <summary>
+    /// Task 5159: idempotent startup step that rewrites SHA-1 device certificate thumbprints (stored by the CA before
+    /// this task) as SHA-256, the algorithm device certificate login compares with. Like the API key backfill it is not
+    /// an EF migration, because IAM creates its schema with EnsureCreated and never calls Migrate().
+    /// </summary>
+    private async Task BackfillDeviceCertificateThumbprintsAsync(IAMDbContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (updated, unreadable) = await context.BackfillSha256Async(cancellationToken);
+            if (updated > 0)
+            {
+                await context.SaveChangesAsync(cancellationToken);
+            }
+
+            _logger.LogInformation(
+                "Device certificate thumbprint backfill: {Updated} row(s) rewritten as SHA-256, {Unreadable} row(s) with an unreadable PEM left as they were",
+                updated, unreadable);
+        }
+        catch (Exception ex)
+        {
+            // Never block startup; the affected certificates then simply do not match at login until the next start.
+            _logger.LogError(ex, "Device certificate thumbprint backfill failed");
         }
     }
 
