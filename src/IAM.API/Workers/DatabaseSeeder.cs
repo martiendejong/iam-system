@@ -1,3 +1,4 @@
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -54,6 +55,7 @@ public class DatabaseSeeder : IHostedService
 
         await AuditAdminRolesAsync(context, cancellationToken);
         await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
+        await BackfillApiKeysOfInactiveUsersAsync(scope.ServiceProvider, cancellationToken);
         await AuditDefaultClientSecretsAsync(scope.ServiceProvider, cancellationToken);
     }
 
@@ -139,6 +141,37 @@ public class DatabaseSeeder : IHostedService
         {
             // Never block startup on the backfill; enforcement itself does not depend on it.
             _logger.LogError(ex, "Group-role backfill failed");
+        }
+    }
+
+    /// <summary>
+    /// Task 5224: idempotent clean-up of the API keys that outlived their owner's deactivation. Task 5155 revokes a
+    /// user's keys when the account is deactivated, but users deactivated before it shipped still own keys marked
+    /// active; the key store only blocks them while the owner is inactive, so reactivating the account would revive
+    /// them. This revokes every active key owned by an inactive user (through the same helper the deactivation routes
+    /// use) and does nothing on the next start. It is a startup step, not an EF migration: IAM creates its schema
+    /// with EnsureCreated and never calls Migrate(), so a migration holding an UPDATE would never run.
+    /// </summary>
+    private async Task BackfillApiKeysOfInactiveUsersAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var context = services.GetRequiredService<IAMDbContext>();
+            var revokedKeyHashes = await context.RevokeApiKeysOfInactiveUsersAsync(cancellationToken);
+            if (revokedKeyHashes.Count > 0)
+            {
+                await context.SaveChangesAsync(cancellationToken);
+                services.GetService<IApiKeyCache>().Forget(revokedKeyHashes);
+            }
+
+            _logger.LogInformation(
+                "API key backfill: {Revoked} active key(s) owned by inactive users revoked",
+                revokedKeyHashes.Count);
+        }
+        catch (Exception ex)
+        {
+            // Never block startup on the backfill; the key store already rejects keys of inactive owners.
+            _logger.LogError(ex, "API key backfill for inactive users failed");
         }
     }
 

@@ -57,7 +57,8 @@ public class RefreshTokenSessionEndingTests
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         return new AuthService(
             context, CreateConfiguration(), emailService, riskAssessmentService, otpService,
-            new ClaimsMappingService(context), logger ?? NullLogger<AuthService>.Instance);
+            new ClaimsMappingService(context), logger ?? NullLogger<AuthService>.Instance,
+            AuthServiceTestFactory.CreateLoginThrottle());
     }
 
     private static async Task<User> AddUserAsync(IAMDbContext context, string name, bool isActive = true, string? passwordHash = null)

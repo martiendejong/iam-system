@@ -2,6 +2,7 @@ using System.DirectoryServices.Protocols;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Security;
 using IAM.Core.Services;
@@ -26,6 +27,7 @@ public class DirectorySyncService : IDirectorySyncService
     private readonly ISecretsVaultService _secretsVault;
     private readonly IHostResolver _resolver;
     private readonly HashSet<string> _allowedHosts;
+    private readonly IApiKeyCache? _apiKeyCache;
 
     // Default LDAP attribute mapping if none specified
     private static readonly Dictionary<string, string> DefaultAttributeMapping = new()
@@ -42,8 +44,10 @@ public class DirectorySyncService : IDirectorySyncService
         ILdapDirectoryClient ldap,
         ISecretsVaultService secretsVault,
         IHostResolver resolver,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IApiKeyCache? apiKeyCache = null)
     {
+        _apiKeyCache = apiKeyCache;
         _context = context;
         _logger = logger;
         _ldap = ldap;
@@ -698,9 +702,12 @@ public class DirectorySyncService : IDirectorySyncService
 
         if (usersToDisable.Count > 0)
         {
-            // A user removed from the directory must not keep refreshing an existing session.
-            await _context.RevokeRefreshTokensAsync(usersToDisable.Select(u => u.Id), ct);
+            // A user removed from the directory must not keep refreshing an existing session or calling with an API key.
+            var disabledIds = usersToDisable.Select(u => u.Id).ToList();
+            await _context.RevokeRefreshTokensAsync(disabledIds, ct);
+            var revokedKeys = await _context.RevokeApiKeysAsync(disabledIds, ct);
             await _context.SaveChangesAsync(ct);
+            _apiKeyCache.Forget(revokedKeys);
         }
 
         return usersToDisable.Count;

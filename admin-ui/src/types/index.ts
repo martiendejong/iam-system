@@ -13,6 +13,16 @@ export interface User {
   managerUserId?: string | null;
   /** Human / Agent / Service; users default to Human (task 4057) */
   principalKind?: PrincipalKindValue;
+  /** Role assignments as returned by GET /users/me (task 5222) */
+  roles?: CurrentUserRole[];
+}
+
+/** One role assignment of the signed-in user: tenantId null = global; expiresAt set = time-boxed. */
+export interface CurrentUserRole {
+  id: string;
+  name: string;
+  tenantId?: string | null;
+  expiresAt?: string | null;
 }
 
 // Principal kind (task 4057) - shared by users and service accounts
@@ -39,6 +49,8 @@ export interface Role {
   description?: string;
   category?: string;
   isSystem: boolean;
+  /** Null/absent = global role (all tenants). */
+  tenantId?: string | null;
 }
 
 // Tenant types

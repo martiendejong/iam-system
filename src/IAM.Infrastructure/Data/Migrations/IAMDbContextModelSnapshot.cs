@@ -1787,7 +1787,7 @@ namespace IAM.Infrastructure.Data.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("AllowedRedirectUris")
-                        .HasColumnType("jsonb");
+                        .HasColumnType("text");
 
                     b.Property<string>("AttributeMapping")
                         .HasColumnType("jsonb");

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { api } from '../../services/api';
 import type { Role } from '../../types';
+import { apiErrorMessage, roleScopeLabel } from './roleTenantAccess';
 
 const CATEGORY_ORDER = ['Jengo', 'Real Estate', 'System'];
 
@@ -36,8 +37,22 @@ export default function RolesPage() {
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [tenantNames, setTenantNames] = useState<Record<string, string>>({});
 
-  useEffect(() => { loadRoles(); }, []);
+  useEffect(() => { loadRoles(); loadTenantNames(); }, []);
+
+  // Names for the tenant label on each role. Best effort: a failure just shows a short id instead.
+  const loadTenantNames = async () => {
+    const names: Record<string, string> = {};
+    for (const load of [() => api.getTenants(), () => api.getMyTenants()]) {
+      try {
+        for (const t of await load()) names[t.id] = t.name;
+      } catch {
+        /* ignore: labels fall back to the id */
+      }
+    }
+    setTenantNames(names);
+  };
 
   const loadRoles = async () => {
     try {
@@ -45,7 +60,7 @@ export default function RolesPage() {
       const data = await api.getRoles();
       setRoles(Array.isArray(data) ? data : []);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to load roles');
+      setError(apiErrorMessage(err, 'Failed to load roles'));
     } finally {
       setLoading(false);
     }
@@ -58,7 +73,7 @@ export default function RolesPage() {
       await api.deleteRole(roleId);
       await loadRoles();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to delete role');
+      alert(apiErrorMessage(err, 'Failed to delete role'));
     } finally {
       setDeletingId(null);
     }
@@ -169,6 +184,9 @@ export default function RolesPage() {
 
                         <div className="flex-1">
                           <h3 className="text-sm font-semibold text-gray-900">{role.name}</h3>
+                          <p className="text-xs text-indigo-600 mt-0.5" data-testid="role-scope">
+                            {roleScopeLabel(role.tenantId, tenantNames)}
+                          </p>
                           {role.description ? (
                             <p className="text-xs text-gray-500 mt-1 line-clamp-2">{role.description}</p>
                           ) : (

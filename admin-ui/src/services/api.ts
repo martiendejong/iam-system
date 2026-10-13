@@ -4,6 +4,12 @@ import type { LoginRequest, LoginResponse, PublicIdentityProvider, RegisterReque
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
 
+/** The roles API sends isSystemRole; the UI reads isSystem (task 5222). Keep both so either reader works. */
+function normalizeRole(role: any): any {
+  if (!role || typeof role !== 'object') return role;
+  return { ...role, isSystem: role.isSystem ?? role.isSystemRole ?? false };
+}
+
 class ApiService {
   private client: AxiosInstance;
   private refreshPromise: Promise<void> | null = null;
@@ -203,15 +209,16 @@ class ApiService {
   // Role endpoints
   async getRoles(): Promise<any[]> {
     const response = await this.client.get('/roles');
-    return response.data;
+    return Array.isArray(response.data) ? response.data.map(normalizeRole) : response.data;
   }
 
   async getRole(id: string): Promise<any> {
     const response = await this.client.get(`/roles/${id}`);
-    return response.data;
+    return normalizeRole(response.data);
   }
 
-  async createRole(data: { name: string; description?: string }): Promise<any> {
+  /** tenantId omitted = a global role (SuperAdmin only); a BuildingOwner must send one of their own tenants (task 5163). */
+  async createRole(data: { name: string; description?: string; tenantId?: string }): Promise<any> {
     const response = await this.client.post('/roles', data);
     return response.data;
   }
@@ -238,6 +245,12 @@ class ApiService {
   // Tenant endpoints
   async getTenants(): Promise<any[]> {
     const response = await this.client.get('/tenants');
+    return response.data;
+  }
+
+  /** Tenants where the caller holds any role (id, name, ...). */
+  async getMyTenants(): Promise<any[]> {
+    const response = await this.client.get('/tenants/my-tenants');
     return response.data;
   }
 

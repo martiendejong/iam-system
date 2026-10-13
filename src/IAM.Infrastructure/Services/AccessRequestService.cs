@@ -38,6 +38,17 @@ public class AccessRequestService : IAccessRequestService
         AccessRequestPriority priority = AccessRequestPriority.Normal,
         CancellationToken ct = default)
     {
+        // Task 5152: only a request for a role and a tenant that exist can be filed, so a request can never be
+        // matched to (and auto-approved by) a template on the strength of made-up ids.
+        if (string.IsNullOrWhiteSpace(resourceType))
+            throw new InvalidOperationException("Resource type is required.");
+
+        if (roleId.HasValue && !await _context.Roles.AsNoTracking().AnyAsync(r => r.Id == roleId.Value, ct))
+            throw new InvalidOperationException("The requested role does not exist.");
+
+        if (tenantId.HasValue && !await _context.Tenants.AsNoTracking().AnyAsync(t => t.Id == tenantId.Value && t.IsActive, ct))
+            throw new InvalidOperationException("The requested tenant does not exist.");
+
         var request = new AccessRequest
         {
             RequesterId = requesterId,
@@ -456,6 +467,11 @@ public class AccessRequestService : IAccessRequestService
 
     public async Task<WorkflowTemplate> CreateTemplateAsync(WorkflowTemplate template, CancellationToken ct = default)
     {
+        ValidateTemplateRules(template.AutoApproveRules);
+
+        if (template.TenantId.HasValue && !await _context.Tenants.AsNoTracking().AnyAsync(t => t.Id == template.TenantId.Value, ct))
+            throw new ArgumentException("The tenant of the template does not exist.");
+
         template.CreatedAt = DateTime.UtcNow;
         template.UpdatedAt = DateTime.UtcNow;
 
@@ -490,6 +506,8 @@ public class AccessRequestService : IAccessRequestService
 
     public async Task<WorkflowTemplate> UpdateTemplateAsync(Guid templateId, WorkflowTemplate updated, CancellationToken ct = default)
     {
+        ValidateTemplateRules(updated.AutoApproveRules);
+
         var template = await _context.WorkflowTemplates
             .FirstOrDefaultAsync(t => t.Id == templateId, ct)
             ?? throw new InvalidOperationException($"Workflow template {templateId} not found");
@@ -541,6 +559,13 @@ public class AccessRequestService : IAccessRequestService
         return template;
     }
 
+    private static void ValidateTemplateRules(string? autoApproveRules)
+    {
+        var error = AutoApproveRules.Validate(autoApproveRules);
+        if (error != null)
+            throw new ArgumentException(error);
+    }
+
     private bool ShouldAutoApprove(WorkflowTemplate template, AccessRequest request)
     {
         if (string.IsNullOrEmpty(template.AutoApproveRules))
@@ -548,12 +573,17 @@ public class AccessRequestService : IAccessRequestService
 
         try
         {
-            var rules = JsonSerializer.Deserialize<List<AutoApproveRule>>(template.AutoApproveRules);
-            if (rules == null || rules.Count == 0)
+            var rules = AutoApproveRules.Parse(template.AutoApproveRules);
+            if (rules.Count == 0)
                 return false;
 
             foreach (var rule in rules)
             {
+                // A rule with no narrowing condition matches every request, so it never approves anything - also when
+                // it was stored before it was refused on save.
+                if (rule == null || !rule.IsNarrowing())
+                    continue;
+
                 var matches = true;
 
                 if (!string.IsNullOrEmpty(rule.ResourceType) && rule.ResourceType != request.ResourceType)
@@ -741,12 +771,5 @@ public class AccessRequestService : IAccessRequestService
         public Guid? ApproverRoleId { get; set; }
         public Guid? ApproverUserId { get; set; }
         public int QuorumCount { get; set; } = 1;
-    }
-
-    private class AutoApproveRule
-    {
-        public string? ResourceType { get; set; }
-        public Guid? RoleId { get; set; }
-        public string? MaxPriority { get; set; }
     }
 }

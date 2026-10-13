@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
+using IAM.Core.Services;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore;
@@ -69,12 +70,21 @@ public class AuthorizationController : ControllerBase
         var request = HttpContext.GetOpenIddictServerRequest() ??
                       throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
+        // Task 5053: prompt=none is the app's silent-renewal probe (OIDC Core 3.1.2.1). It must never
+        // show IAM UI - no login redirect, no HTML "No access" page, no bare 400 - so every outcome
+        // below that would normally render something is answered with an OAuth error redirect back to
+        // the app instead. OpenIddict adds the original state to that redirect.
+        var silent = request.HasPromptValue(PromptValues.None);
+
         // Try to retrieve the user principal stored in the IAM session cookie
         var result = await HttpContext.AuthenticateAsync("IAM.Session");
 
         // If the user is not authenticated, redirect to React login page with return URL
         if (!result.Succeeded || result.Principal == null)
         {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "The user is not signed in to IAM.");
+
             var returnUrl = Request.Path + QueryString.Create(
                 Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
             return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
@@ -84,6 +94,9 @@ public class AuthorizationController : ControllerBase
         var userId = result.Principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId))
         {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "The IAM session does not identify a user.");
+
             return BadRequest(new { error = "invalid_request", error_description = "User ID not found in claims" });
         }
 
@@ -94,15 +107,21 @@ public class AuthorizationController : ControllerBase
 
         if (user == null || !user.IsActive)
         {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "The IAM session belongs to an account that is no longer active.");
+
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
         }
 
         // Federated app-role gate — shared with the refresh_token grant in Exchange, see
         // EvaluateAppRoleGateAsync. Only the denial rendering differs: login shows an HTML
-        // page, refresh returns an OAuth invalid_grant error.
+        // page, refresh returns an OAuth invalid_grant error, prompt=none returns access_denied.
         var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
         if (!gate.Allowed)
         {
+            if (silent)
+                return SilentSignInDenied(Errors.AccessDenied, "The user has no role for this application.");
+
             return Content(
                 "<!doctype html><html><head><meta charset=\"utf-8\"><title>No access</title>" +
                 "<style>body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
@@ -131,7 +150,7 @@ public class AuthorizationController : ControllerBase
                 .SetClaim(Claims.FamilyName, user.LastName);
 
         // Add role claims
-        var roles = user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray();
+        var roles = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray();
         identity.SetClaims(Claims.Role, roles);
 
         // Add tenant claim (only set when the app-role gate above resolved one — see
@@ -165,6 +184,20 @@ public class AuthorizationController : ControllerBase
         // Return the SignInResult to issue tokens
         return SignIn(new ClaimsPrincipal(identity), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
+
+    /// <summary>
+    /// Answers a prompt=none authorization request that cannot be completed silently: OpenIddict turns
+    /// the Forbid into a redirect to the already-validated redirect_uri carrying error, error_description
+    /// and the request's state (same idiom as the Forbid calls in Exchange).
+    /// </summary>
+    private IActionResult SilentSignInDenied(string error, string description) =>
+        Forbid(
+            authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+            properties: new AuthenticationProperties(new Dictionary<string, string?>
+            {
+                [OpenIddictServerAspNetCoreConstants.Properties.Error] = error,
+                [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description
+            }));
 
     /// <summary>
     /// OAuth2 Token Endpoint - exchanges authorization code for access token
@@ -230,7 +263,7 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray());
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray());
                 if (!gate.Errored)
                 {
                     identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
@@ -254,7 +287,7 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
                 identity.SetDestinations(GetDestinations);
                 claimsPrincipal = new ClaimsPrincipal(identity);
             }
@@ -365,7 +398,7 @@ public class AuthorizationController : ControllerBase
         // Roles scope
         if (User.HasScope("roles"))
         {
-            claims[Claims.Role] = user.UserRoles.Select(ur => ur.Role.Name).ToArray();
+            claims[Claims.Role] = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToArray();
         }
 
         // Custom tenants scope
@@ -373,6 +406,7 @@ public class AuthorizationController : ControllerBase
         {
             var tenants = await _context.UserRoles
                 .Where(ur => ur.UserId == user.Id && ur.TenantId != null)
+                .WhereActive()
                 .Select(ur => new
                 {
                     id = ur.TenantId,
@@ -522,6 +556,7 @@ public class AuthorizationController : ControllerBase
 
             var rolePrefix = clientIdLower + ":";
             var appRoleAssignments = user.UserRoles
+                .WhereActive()
                 .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (appRoleAssignments.Count == 0)
