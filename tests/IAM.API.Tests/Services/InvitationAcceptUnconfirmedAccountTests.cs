@@ -1,3 +1,4 @@
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -62,9 +63,17 @@ public class InvitationAcceptUnconfirmedAccountTests
         return new Scene { Options = options, Tenant = tenant, Role = role, Sender = sender, Invitation = invitation };
     }
 
-    private static InvitationService CreateService(IAMDbContext context) =>
+    private static InvitationService CreateService(IAMDbContext context, IApiKeyCache? apiKeyCache = null) =>
         new(context, new RecordingEmailService(), new ConfigurationBuilder().AddInMemoryCollection().Build(),
-            NullLogger<InvitationService>.Instance);
+            NullLogger<InvitationService>.Instance, apiKeyCache);
+
+    /// <summary>Stands in for the key module's cache, which keeps validated keys for a couple of minutes.</summary>
+    private sealed class RecordingApiKeyCache : IApiKeyCache
+    {
+        public List<string> Invalidated { get; } = new();
+        public void Invalidate(string keyHash) => Invalidated.Add(keyHash);
+        public void InvalidateAll() => throw new InvalidOperationException("Only the revoked keys should be dropped from the cache");
+    }
 
     private static IConfiguration JwtConfig() => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
     {
@@ -201,6 +210,38 @@ public class InvitationAcceptUnconfirmedAccountTests
         Assert.Null(user.LockoutEnd);
         Assert.Equal("Real", user.FirstName);
         Assert.Equal("Owner", user.LastName);
+    }
+
+    [Fact]
+    public async Task Accept_UnconfirmedExistingAccount_RevokedApiKeyLeavesTheKeyCacheAtOnce()
+    {
+        var scene = CreateScene();
+        SeedAttackerAccount(scene);
+        var cache = new RecordingApiKeyCache();
+
+        using (var context = scene.NewContext())
+        {
+            var result = await CreateService(context, cache).AcceptInvitationAsync(scene.Invitation.Token, NewPassword, "Real", "Owner");
+            Assert.True(result.Success);
+        }
+
+        // Without this the attacker's key keeps authenticating from the cache until its two-minute lifetime ends.
+        Assert.Equal(new[] { "keyhash" }, cache.Invalidated);
+        using var read = scene.NewContext();
+        Assert.False((await read.ApiKeys.SingleAsync()).IsActive);
+    }
+
+    [Fact]
+    public async Task Accept_ConfirmedExistingAccount_LeavesTheKeyCacheAlone()
+    {
+        var scene = CreateScene();
+        SeedAttackerAccount(scene, emailConfirmed: true);
+        var cache = new RecordingApiKeyCache();
+
+        using var context = scene.NewContext();
+        Assert.True((await CreateService(context, cache).AcceptInvitationAsync(scene.Invitation.Token, null, null, null)).Success);
+
+        Assert.Empty(cache.Invalidated);
     }
 
     [Fact]

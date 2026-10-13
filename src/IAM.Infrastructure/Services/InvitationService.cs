@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -17,16 +18,19 @@ public class InvitationService : IInvitationService
     private readonly ILogger<InvitationService> _logger;
     private readonly int _defaultExpiryDays;
     private readonly string? _emailBaseUrl;
+    private readonly IApiKeyCache? _apiKeyCache;
 
     public InvitationService(
         IAMDbContext context,
         IEmailService emailService,
         IConfiguration configuration,
-        ILogger<InvitationService> logger)
+        ILogger<InvitationService> logger,
+        IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
         _emailService = emailService;
         _logger = logger;
+        _apiKeyCache = apiKeyCache;
         _defaultExpiryDays = configuration.GetValue("Invitations:DefaultExpiryDays", 7);
         _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
     }
@@ -442,6 +446,10 @@ public class InvitationService : IInvitationService
 
         if (accountReset != null)
         {
+            // The key module caches validated keys for a couple of minutes; drop the revoked ones so the old holder's
+            // key stops working on the very next request (task 5155 rule: Forget after the save that revoked them).
+            _apiKeyCache.Forget(accountReset.RevokedApiKeyHashes);
+
             _logger.LogWarning(
                 "Invitation {InvitationId}: unconfirmed account {UserId} ({Email}) was reset before granting role {RoleName} - removed {ExternalLogins} social login(s), {Passkeys} passkey(s), {RefreshTokens} refresh token(s), revoked {OAuthTokens} OAuth token(s), {OtherSignInMethods} other sign-in item(s)",
                 invitation.Id, user.Id, user.Email, invitation.Role.Name, accountReset.ExternalLogins, accountReset.Passkeys,
@@ -470,7 +478,9 @@ public class InvitationService : IInvitationService
         };
     }
 
-    private sealed record AccountReset(int ExternalLogins, int Passkeys, int RefreshTokens, int OAuthTokens, int OtherSignInMethods);
+    private sealed record AccountReset(
+        int ExternalLogins, int Passkeys, int RefreshTokens, int OAuthTokens, int OtherSignInMethods,
+        IReadOnlyList<string> RevokedApiKeyHashes);
 
     /// <summary>
     /// Stages (does not save) the take-over of an existing account whose e-mail was never confirmed: every way of
@@ -512,13 +522,12 @@ public class InvitationService : IInvitationService
         var otpCodes = await _context.OtpCodes
             .Where(o => o.UsedAt == null && (o.UserId == userId || (oldPhone != null && o.PhoneNumber == oldPhone)))
             .ToListAsync(ct);
-        var apiKeys = await _context.ApiKeys.Where(k => k.UserId == userId && k.IsActive).ToListAsync(ct);
+        var revokedApiKeyHashes = await _context.RevokeApiKeysAsync(userId, ct);
         var sessions = await _context.UserSessions.Where(s => s.UserId == userId && !s.IsRevoked).ToListAsync(ct);
         _context.RecoveryCodes.RemoveRange(recoveryCodes);
         _context.TrustedDevices.RemoveRange(trustedDevices);
         _context.MagicLinkTokens.RemoveRange(magicLinks);
         _context.OtpCodes.RemoveRange(otpCodes);
-        foreach (var apiKey in apiKeys) apiKey.IsActive = false;
         foreach (var session in sessions)
         {
             session.IsRevoked = true;
@@ -552,7 +561,8 @@ public class InvitationService : IInvitationService
             passkeys.Count,
             refreshTokens.Count,
             oauthTokens.Count + oauthAuthorizations.Count,
-            recoveryCodes.Count + trustedDevices.Count + magicLinks.Count + otpCodes.Count + apiKeys.Count + sessions.Count);
+            recoveryCodes.Count + trustedDevices.Count + magicLinks.Count + otpCodes.Count + revokedApiKeyHashes.Count + sessions.Count,
+            revokedApiKeyHashes);
     }
 
     public async Task<bool> RevokeInvitationAsync(Guid invitationId, CancellationToken ct = default)
