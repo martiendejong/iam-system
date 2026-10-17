@@ -90,6 +90,19 @@ export interface RegisterRequest {
   phoneNumber?: string;
 }
 
+/**
+ * Payload for the admin create-user flow (POST /users → AdminCreateUserRequest).
+ * Mirrors the backend record exactly: no phoneNumber field (the admin endpoint
+ * ignores it). Kept separate from RegisterRequest so the form cannot silently
+ * send fields the endpoint does not accept.
+ */
+export interface CreateUserRequest {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+}
+
 export interface LoginResponse {
   accessToken?: string;
   expiresIn?: number;

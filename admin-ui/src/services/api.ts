@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
-import type { LoginRequest, LoginResponse, PublicIdentityProvider, RegisterRequest, User } from '../types';
+import type { CreateUserRequest, LoginRequest, LoginResponse, PublicIdentityProvider, RegisterRequest, User } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
 
@@ -95,6 +95,17 @@ class ApiService {
 
   async register(data: RegisterRequest): Promise<void> {
     await this.client.post('/auth/register', data);
+  }
+
+  /**
+   * Admin-create an already-active, pre-verified user with a manually-set password
+   * (SuperAdmin only). Hits POST /users (UsersController.CreateUser), NOT the public
+   * /auth/register endpoint — the latter is disabled by Registration:PublicRegistrationEnabled
+   * and returns 403, which surfaced to admins as the misleading "Failed to create user".
+   * No invitation email is sent; the user can log in immediately with the given password.
+   */
+  async createUser(data: CreateUserRequest): Promise<void> {
+    await this.client.post('/users', data);
   }
 
   async verifyLoginTwoFactor(userId: string, code: string, rememberMe = false): Promise<LoginResponse> {
