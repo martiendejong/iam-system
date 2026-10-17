@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { api } from '../../services/api';
-import type { RegisterRequest } from '../../types';
+import type { CreateUserRequest } from '../../types';
 
 export default function UserCreatePage() {
   const navigate = useNavigate();
@@ -15,11 +15,11 @@ export default function UserCreatePage() {
     handleSubmit,
     watch,
     formState: { errors },
-  } = useForm<RegisterRequest & { confirmPassword: string }>();
+  } = useForm<CreateUserRequest & { confirmPassword: string }>();
 
   const password = watch('password');
 
-  const onSubmit = async (data: RegisterRequest & { confirmPassword: string }) => {
+  const onSubmit = async (data: CreateUserRequest & { confirmPassword: string }) => {
     try {
       setCreating(true);
       setError('');
@@ -27,10 +27,17 @@ export default function UserCreatePage() {
       // Remove confirmPassword before sending to API
       const { confirmPassword, ...userData } = data;
 
-      await api.register(userData);
+      // Admin create goes through POST /users (pre-verified, immediate login),
+      // not the disabled public /auth/register endpoint which returns 403.
+      await api.createUser(userData);
       navigate('/users');
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to create user');
+      // The admin endpoint returns { error }; fall back to { message } and a generic string.
+      setError(
+        err.response?.data?.error ||
+          err.response?.data?.message ||
+          'Failed to create user',
+      );
     } finally {
       setCreating(false);
     }
@@ -93,15 +100,6 @@ export default function UserCreatePage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-              <input
-                type="tel"
-                {...register('phoneNumber')}
-                className="block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-              />
-            </div>
-
-            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Password *</label>
               <input
                 type="password"
@@ -132,7 +130,8 @@ export default function UserCreatePage() {
             </div>
 
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-              The user will receive an email verification link to activate their account.
+              The account is created active and pre-verified. The user can sign in
+              immediately with this password and change it afterwards. No email is sent.
             </div>
 
             <div className="flex justify-end gap-3 pt-2">
