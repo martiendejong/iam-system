@@ -149,6 +149,11 @@ public class AuthorizationController : ControllerBase
                 .SetClaim(Claims.GivenName, user.FirstName)
                 .SetClaim(Claims.FamilyName, user.LastName);
 
+        // Task 5804: email_verified travels in the id_token as a real JSON boolean (OIDC Core 5.1) so a
+        // relying party can refuse to match or create accounts from an address IAM never verified. Added
+        // as a typed claim: SetClaim(string) would serialise it as the JSON string "true".
+        identity.AddClaim(new Claim(Claims.EmailVerified, user.EmailConfirmed ? "true" : "false", ClaimValueTypes.Boolean));
+
         // Add role claims
         var roles = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray();
         identity.SetClaims(Claims.Role, roles);
@@ -422,19 +427,28 @@ public class AuthorizationController : ControllerBase
     }
 
     /// <summary>
-    /// OAuth2 Logout Endpoint - handles logout requests
+    /// OIDC RP-Initiated Logout / end_session endpoint (task 5804). OpenIddict has already validated the
+    /// request before this action runs: the client must hold the end_session endpoint permission and a
+    /// post_logout_redirect_uri is only accepted when it is registered on a client, so an unregistered
+    /// address is never redirected to. This action ends the IAM single sign-on session (the IAM.Session
+    /// cookie that /connect/authorize reads); the relying party's own session is its business.
+    ///
+    /// SignOut hands control back to OpenIddict, which redirects to the validated post_logout_redirect_uri
+    /// (echoing state) or, when none was sent, to the IAM login page.
     /// </summary>
     [HttpGet("logout")]
     [HttpPost("logout")]
+    [IgnoreAntiforgeryToken]
     public async Task<IActionResult> Logout()
     {
-        // Ask the OpenIddict server to sign out
-        await HttpContext.SignOutAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        _ = HttpContext.GetOpenIddictServerRequest() ??
+            throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
-        // TODO: Also sign out from the cookie authentication scheme if using cookies
-        // await HttpContext.SignOutAsync("Identity.Application");
+        await HttpContext.SignOutAsync("IAM.Session");
 
-        return Ok(new { message = "Logged out successfully" });
+        return SignOut(
+            authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+            properties: new AuthenticationProperties { RedirectUri = $"{_loginBasePath}/login" });
     }
 
     /// <summary>

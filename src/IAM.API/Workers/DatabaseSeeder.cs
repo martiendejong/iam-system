@@ -43,6 +43,11 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
+        await WordPressSsoSeeder.SeedAppRolesAsync(
+            context,
+            WordPressSsoSeeder.ResolveSites(_configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
+            _logger,
+            cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
 
         // Security check: alert if test accounts exist in non-development environment
@@ -1159,6 +1164,16 @@ public class DatabaseSeeder : IHostedService
                 }
             }, cancellationToken);
         }
+
+        // WordPress SSO (task 5804, board 44): one confidential PKCE client per WordPress site that runs the
+        // Jengo IAM SSO plugin - test.prospergenics.com built in, further sites from the WordPressSso:Sites
+        // configuration section. See WordPressSsoSeeder for the recipe (secrets come from configuration on
+        // the IAM host, never from git; a site without a secret is not registered).
+        await WordPressSsoSeeder.SeedClientsAsync(
+            manager,
+            WordPressSsoSeeder.ResolveSites(configuration, provider.GetRequiredService<ILogger<DatabaseSeeder>>()),
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>(),
+            cancellationToken);
 
         // Task 4059: Vault resolver client — confidential, client_credentials only.
         // Secret is read from config key "VaultResolver:ClientSecret" (never committed to git).

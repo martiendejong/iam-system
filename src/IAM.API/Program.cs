@@ -208,7 +208,10 @@ builder.Services.AddOpenIddict()
         options.SetAuthorizationEndpointUris("/connect/authorize")
                .SetTokenEndpointUris("/connect/token")
                .SetIntrospectionEndpointUris("/connect/introspect")
-               .SetRevocationEndpointUris("/connect/revoke");
+               .SetRevocationEndpointUris("/connect/revoke")
+               // Task 5804: RP-initiated logout. Advertised as end_session_endpoint in the discovery
+               // document; clients opt in with the end_session endpoint permission.
+               .SetEndSessionEndpointUris("/connect/logout");
 
         // Enable authorization code flow, refresh token, and client credentials flows.
         // PKCE is enforced per-client via Requirements.Features.ProofKeyForCodeExchange in the seeder —
@@ -281,6 +284,7 @@ builder.Services.AddOpenIddict()
                .EnableAuthorizationEndpointPassthrough()
                .EnableTokenEndpointPassthrough()
                .EnableUserInfoEndpointPassthrough()
+               .EnableEndSessionEndpointPassthrough()
                .EnableStatusCodePagesIntegration()
                .DisableTransportSecurityRequirement(); // Allow HTTP when behind IIS/ARR reverse proxy
 
