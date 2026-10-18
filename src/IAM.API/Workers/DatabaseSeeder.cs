@@ -43,6 +43,7 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
+        await SeedWordPressAppRolesAsync(context, cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
 
         // Security check: alert if test accounts exist in non-development environment
@@ -220,6 +221,69 @@ public class DatabaseSeeder : IHostedService
         {
             // Audit failure must never crash startup
             _logger.LogError(ex, "AdminRoleAudit: Failed to complete admin role audit.");
+        }
+    }
+
+    /// <summary>
+    /// Task 5804: seeds the federated app-role catalog for the WordPress SSO client
+    /// (test.prospergenics.com). Same shape as AppRolesController.Register produces:
+    /// global roles named "{clientId}:{role}" with Category "app:{clientId}", so the
+    /// access matrix and the OIDC app-role gate (AuthorizationController) pick them up
+    /// without any further wiring. Idempotent: creates missing roles only, never updates
+    /// or deletes existing ones. Seeding this catalog activates the app-role gate for the
+    /// client — only users holding at least one of these roles can sign in to WordPress.
+    /// The WordPress plugin maps "{clientId}:{role}" onto the matching WP role on login.
+    /// </summary>
+    private async Task SeedWordPressAppRolesAsync(IAMDbContext context, CancellationToken cancellationToken)
+    {
+        const string clientId = "wordpress-test-prospergenics";
+        var category = $"app:{clientId}";
+
+        var catalog = new (string Role, string Description)[]
+        {
+            ("administrator", "WordPress administrator (full site admin)"),
+            ("editor", "WordPress editor (manage and publish all content)"),
+            ("author", "WordPress author (publish own content)"),
+            ("subscriber", "WordPress subscriber (read-only account)")
+        };
+
+        try
+        {
+            var existing = await context.Roles
+                .Where(r => r.Category == category)
+                .Select(r => r.Name)
+                .ToListAsync(cancellationToken);
+
+            var added = 0;
+            foreach (var (role, description) in catalog)
+            {
+                var fullName = $"{clientId}:{role}";
+                if (existing.Contains(fullName, StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                context.Roles.Add(new Role
+                {
+                    Name = fullName,
+                    TenantId = null, // global, same as AppRolesController.Register
+                    Category = category,
+                    Description = description,
+                    IsSystemRole = false
+                });
+                added++;
+            }
+
+            if (added > 0)
+            {
+                await context.SaveChangesAsync(cancellationToken);
+                _logger.LogInformation(
+                    "WordPress SSO app-role catalog seeded for {ClientId}: {Added} role(s) added", clientId, added);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Role seeding must never take IAM down; the catalog can also be
+            // registered later via POST /api/app-roles/register.
+            _logger.LogError(ex, "WordPress SSO app-role seeding failed for {ClientId}", clientId);
         }
     }
 
@@ -1140,6 +1204,60 @@ public class DatabaseSeeder : IHostedService
                     new Uri("https://knowledge.prospergenics.com/login"),
                     new Uri("http://localhost:5173/login"),
                     new Uri("http://localhost:5280/login")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // WordPress SSO — test.prospergenics.com (task 5804, board 44). Confidential client
+        // (WordPress keeps the secret server-side) using Authorization Code Flow with PKCE.
+        // The redirect URI is WordPress' own login endpoint with the plugin's callback action;
+        // it must match the plugin's redirect_uri byte-for-byte (including the query string).
+        // Secret is read from config key "Clients:WordPressTestProspergenics:Secret" (never
+        // committed to git — same recipe as the jengo-vault resolver client below): when the
+        // key is absent the client is NOT seeded and a warning is logged, so no client row
+        // ever exists with a known/empty secret.
+        var wordPressClientSecret = configuration["Clients:WordPressTestProspergenics:Secret"];
+        if (string.IsNullOrEmpty(wordPressClientSecret))
+        {
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>().LogWarning(
+                "Clients:WordPressTestProspergenics:Secret is not configured — the " +
+                "'wordpress-test-prospergenics' OAuth client will NOT be seeded. Set the key " +
+                "to enable WordPress SSO for test.prospergenics.com (task 5804).");
+        }
+
+        if (!string.IsNullOrEmpty(wordPressClientSecret)
+            && await manager.FindByClientIdAsync("wordpress-test-prospergenics", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "wordpress-test-prospergenics",
+                ClientSecret = wordPressClientSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "WordPress (test.prospergenics.com)",
+                RedirectUris =
+                {
+                    new Uri("https://test.prospergenics.com/wp-login.php?action=jengo-iam-callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://test.prospergenics.com/")
                 },
                 Permissions =
                 {
