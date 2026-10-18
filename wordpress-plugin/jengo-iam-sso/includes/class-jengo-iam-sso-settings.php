@@ -1,10 +1,11 @@
 <?php
 /**
- * Settings → Jengo IAM SSO.
+ * Settings -> Jengo IAM SSO.
  *
- * Capability: manage_options. The client secret is stored in the options
- * table (standard for WP OIDC plugins) and never echoed back into the form;
- * leaving the field blank keeps the stored value.
+ * Capability: manage_options. The client secret is write-only: it is never
+ * echoed back into the form (a blank field keeps the stored value) and can be
+ * defined in wp-config.php instead (JENGO_IAM_SSO_CLIENT_SECRET) so it never
+ * has to live in the database.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -83,27 +84,30 @@ class Jengo_IAM_SSO_Settings {
 
 		$clean['auto_provision'] = empty( $input['auto_provision'] ) ? 0 : 1;
 		$clean['sync_roles']     = empty( $input['sync_roles'] ) ? 0 : 1;
+		$clean['logout_iam']     = empty( $input['logout_iam'] ) ? 0 : 1;
 
+		// The default role for new accounts can never be administrator (or any
+		// other role that can manage users, plugins or options).
 		if ( isset( $input['default_role'] ) ) {
 			$role = sanitize_key( (string) $input['default_role'] );
-			if ( null !== get_role( $role ) ) {
+			if ( null !== get_role( $role ) && ! Jengo_IAM_SSO_Role_Mapper::is_privileged_role( $role ) ) {
 				$clean['default_role'] = $role;
+			} else {
+				add_settings_error( self::SETTINGS_SLUG, 'default_role', __( 'That role cannot be the default for new accounts (administrators and other user-management roles are excluded).', 'jengo-iam-sso' ) );
 			}
 		}
 
-		foreach ( array( 'authorization_endpoint', 'token_endpoint', 'userinfo_endpoint' ) as $endpoint ) {
-			if ( isset( $input[ $endpoint ] ) ) {
-				$url = esc_url_raw( trim( (string) $input[ $endpoint ] ) );
-				$clean[ $endpoint ] = $url; // Empty string = use discovery/defaults.
-			}
+		if ( isset( $input['role_map'] ) ) {
+			$clean['role_map'] = sanitize_textarea_field( (string) $input['role_map'] );
 		}
 
 		if ( ! empty( $input['regenerate_bypass'] ) ) {
 			$clean['bypass_secret'] = bin2hex( random_bytes( 20 ) );
 		}
 
-		// Endpoint config changed → drop the cached discovery document.
-		delete_transient( 'jengo_iam_sso_disco_' . md5( untrailingslashit( $clean['issuer'] ) ) );
+		// Issuer/credentials may have changed: drop cached discovery and JWKS.
+		( new Jengo_IAM_SSO_OIDC_Client( $current ) )->flush_cache();
+		( new Jengo_IAM_SSO_OIDC_Client( $clean ) )->flush_cache();
 
 		return $clean;
 	}
@@ -113,17 +117,33 @@ class Jengo_IAM_SSO_Settings {
 			return;
 		}
 
-		$options      = jengo_iam_sso_get_options();
-		$option_name  = JENGO_IAM_SSO_OPTION;
-		$redirect_uri = add_query_arg( 'action', 'jengo-iam-callback', wp_login_url() );
-		$bypass_url   = add_query_arg( 'jengo_sso_bypass', $options['bypass_secret'], wp_login_url() );
+		$options       = jengo_iam_sso_get_options();
+		$option_name   = JENGO_IAM_SSO_OPTION;
+		$redirect_uri  = Jengo_IAM_SSO_OIDC_Client::redirect_uri();
+		$logout_uri    = Jengo_IAM_SSO_OIDC_Client::post_logout_redirect_uri();
+		$bypass_url    = add_query_arg( 'jengo_sso_bypass', $options['bypass_secret'], wp_login_url() );
+		$secret_in_cfg = defined( 'JENGO_IAM_SSO_CLIENT_SECRET' ) && '' !== (string) JENGO_IAM_SSO_CLIENT_SECRET;
+		$discovery     = ( new Jengo_IAM_SSO_OIDC_Client( $options ) )->get_discovery();
+
+		$default_role = Jengo_IAM_SSO_Role_Mapper::is_privileged_role( $options['default_role'] ) ? 'subscriber' : $options['default_role'];
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Jengo IAM SSO', 'jengo-iam-sso' ); ?></h1>
+			<p><?php esc_html_e( 'Single sign-on via Jengo IAM (OpenID Connect, authorization code + PKCE). Register these exact URIs on the IAM client:', 'jengo-iam-sso' ); ?></p>
+			<ul>
+				<li><?php esc_html_e( 'Redirect URI:', 'jengo-iam-sso' ); ?> <code><?php echo esc_html( $redirect_uri ); ?></code></li>
+				<li><?php esc_html_e( 'Post-logout redirect URI:', 'jengo-iam-sso' ); ?> <code><?php echo esc_html( $logout_uri ); ?></code></li>
+			</ul>
 			<p>
-				<?php esc_html_e( 'Single sign-on via Jengo IAM (OpenID Connect, authorization code + PKCE).', 'jengo-iam-sso' ); ?>
-				<?php esc_html_e( 'Register this exact redirect URI on the IAM client:', 'jengo-iam-sso' ); ?>
-				<code><?php echo esc_html( $redirect_uri ); ?></code>
+				<strong><?php esc_html_e( 'IAM connection:', 'jengo-iam-sso' ); ?></strong>
+				<?php
+				if ( is_wp_error( $discovery ) ) {
+					/* translators: %s: short error code, e.g. issuer_mismatch. */
+					echo esc_html( sprintf( __( 'not reachable or invalid (%s). Check the issuer URL; it must equal the "issuer" in the discovery document.', 'jengo-iam-sso' ), $discovery->get_error_message() ) );
+				} else {
+					esc_html_e( 'OK (discovery document found and issuer matches).', 'jengo-iam-sso' );
+				}
+				?>
 			</p>
 
 			<form method="post" action="options.php">
@@ -143,39 +163,62 @@ class Jengo_IAM_SSO_Settings {
 					<tr>
 						<th scope="row"><label for="jengo-client-secret"><?php esc_html_e( 'Client secret', 'jengo-iam-sso' ); ?></label></th>
 						<td>
-							<input name="<?php echo esc_attr( $option_name ); ?>[client_secret]" id="jengo-client-secret" type="password" class="regular-text" value="" autocomplete="new-password" placeholder="<?php echo esc_attr( '' !== $options['client_secret'] ? __( '(secret stored — leave blank to keep)', 'jengo-iam-sso' ) : '' ); ?>" />
-							<p class="description"><?php esc_html_e( 'Stored on save; leave blank to keep the current secret.', 'jengo-iam-sso' ); ?></p>
+							<?php if ( $secret_in_cfg ) : ?>
+								<p><?php esc_html_e( 'Defined in wp-config.php (JENGO_IAM_SSO_CLIENT_SECRET); the field below is ignored.', 'jengo-iam-sso' ); ?></p>
+							<?php endif; ?>
+							<input name="<?php echo esc_attr( $option_name ); ?>[client_secret]" id="jengo-client-secret" type="password" class="regular-text" value="" autocomplete="new-password" placeholder="<?php echo esc_attr( '' !== $options['client_secret'] ? __( '(secret stored, leave blank to keep)', 'jengo-iam-sso' ) : '' ); ?>" />
+							<p class="description"><?php esc_html_e( 'Stored on save and never shown again; leave blank to keep the current secret. It can also be set in wp-config.php.', 'jengo-iam-sso' ); ?></p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Login mode', 'jengo-iam-sso' ); ?></th>
 						<td>
 							<fieldset>
-								<label><input type="radio" name="<?php echo esc_attr( $option_name ); ?>[login_mode]" value="both" <?php checked( $options['login_mode'], 'both' ); ?> /> <?php esc_html_e( 'Both — WordPress form plus a "Log in with Jengo IAM" button (default)', 'jengo-iam-sso' ); ?></label><br />
-								<label><input type="radio" name="<?php echo esc_attr( $option_name ); ?>[login_mode]" value="iam" <?php checked( $options['login_mode'], 'iam' ); ?> /> <?php esc_html_e( 'IAM only — wp-login.php redirects straight to Jengo IAM (emergency bypass below keeps working)', 'jengo-iam-sso' ); ?></label><br />
-								<label><input type="radio" name="<?php echo esc_attr( $option_name ); ?>[login_mode]" value="wordpress" <?php checked( $options['login_mode'], 'wordpress' ); ?> /> <?php esc_html_e( 'WordPress only — SSO disabled on the login form', 'jengo-iam-sso' ); ?></label>
+								<label><input type="radio" name="<?php echo esc_attr( $option_name ); ?>[login_mode]" value="both" <?php checked( $options['login_mode'], 'both' ); ?> /> <?php esc_html_e( 'Both: WordPress form plus a "Log in with Jengo IAM" button (default)', 'jengo-iam-sso' ); ?></label><br />
+								<label><input type="radio" name="<?php echo esc_attr( $option_name ); ?>[login_mode]" value="iam" <?php checked( $options['login_mode'], 'iam' ); ?> /> <?php esc_html_e( 'IAM only: wp-login.php redirects straight to Jengo IAM and password logins are refused (emergency bypass below keeps working)', 'jengo-iam-sso' ); ?></label><br />
+								<label><input type="radio" name="<?php echo esc_attr( $option_name ); ?>[login_mode]" value="wordpress" <?php checked( $options['login_mode'], 'wordpress' ); ?> /> <?php esc_html_e( 'WordPress only: SSO disabled on the login form', 'jengo-iam-sso' ); ?></label>
 							</fieldset>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Auto-provision users', 'jengo-iam-sso' ); ?></th>
 						<td>
-							<label><input type="checkbox" name="<?php echo esc_attr( $option_name ); ?>[auto_provision]" value="1" <?php checked( $options['auto_provision'], 1 ); ?> /> <?php esc_html_e( 'Create a WordPress account on first IAM login (requires an IAM-granted role for this site)', 'jengo-iam-sso' ); ?></label>
+							<label><input type="checkbox" name="<?php echo esc_attr( $option_name ); ?>[auto_provision]" value="1" <?php checked( $options['auto_provision'], 1 ); ?> /> <?php esc_html_e( 'Create a WordPress account on first IAM login (off by default; requires an IAM-granted role for this site and a verified e-mail address)', 'jengo-iam-sso' ); ?></label>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row"><label for="jengo-default-role"><?php esc_html_e( 'Default role for new users', 'jengo-iam-sso' ); ?></label></th>
 						<td>
 							<select name="<?php echo esc_attr( $option_name ); ?>[default_role]" id="jengo-default-role">
-								<?php wp_dropdown_roles( $options['default_role'] ); ?>
+								<?php
+								foreach ( wp_roles()->roles as $role_key => $role_details ) {
+									if ( Jengo_IAM_SSO_Role_Mapper::is_privileged_role( $role_key ) ) {
+										continue;
+									}
+									echo '<option value="' . esc_attr( $role_key ) . '"' . selected( $default_role, $role_key, false ) . '>' . esc_html( translate_user_role( $role_details['name'] ) ) . '</option>';
+								}
+								?>
 							</select>
-							<p class="description"><?php esc_html_e( 'Used for new accounts when role sync is off; with role sync on, the IAM role wins.', 'jengo-iam-sso' ); ?></p>
+							<p class="description"><?php esc_html_e( 'Used for new accounts when role sync is off. Administrator and other user-management roles are not offered.', 'jengo-iam-sso' ); ?></p>
 						</td>
 					</tr>
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Sync role from IAM', 'jengo-iam-sso' ); ?></th>
 						<td>
-							<label><input type="checkbox" name="<?php echo esc_attr( $option_name ); ?>[sync_roles]" value="1" <?php checked( $options['sync_roles'], 1 ); ?> /> <?php esc_html_e( 'On every SSO login, set the WordPress role from the IAM roles claim ({client id}:administrator/editor/author/contributor/subscriber)', 'jengo-iam-sso' ); ?></label>
+							<label><input type="checkbox" name="<?php echo esc_attr( $option_name ); ?>[sync_roles]" value="1" <?php checked( $options['sync_roles'], 1 ); ?> /> <?php esc_html_e( 'On every SSO login, set the WordPress role from the IAM roles claim', 'jengo-iam-sso' ); ?></label>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="jengo-role-map"><?php esc_html_e( 'IAM role to WordPress role map', 'jengo-iam-sso' ); ?></label></th>
+						<td>
+							<textarea name="<?php echo esc_attr( $option_name ); ?>[role_map]" id="jengo-role-map" rows="5" cols="50" class="large-text code"><?php echo esc_textarea( $options['role_map'] ); ?></textarea>
+							<p class="description"><?php esc_html_e( 'Optional. One "iam_role = wp_role" per line, first line wins, e.g. TeamLead = editor. IAM roles named "{client id}:administrator|editor|author|contributor|subscriber" map automatically and rank below these lines.', 'jengo-iam-sso' ); ?></p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e( 'Logout', 'jengo-iam-sso' ); ?></th>
+						<td>
+							<label><input type="checkbox" name="<?php echo esc_attr( $option_name ); ?>[logout_iam]" value="1" <?php checked( $options['logout_iam'], 1 ); ?> /> <?php esc_html_e( 'Also log out of Jengo IAM when a user who signed in through IAM logs out of WordPress', 'jengo-iam-sso' ); ?></label>
 						</td>
 					</tr>
 					<tr>
@@ -185,21 +228,10 @@ class Jengo_IAM_SSO_Settings {
 								<p><?php esc_html_e( 'With login mode "IAM only", this URL still shows the normal WordPress login form:', 'jengo-iam-sso' ); ?></p>
 								<p><code><?php echo esc_html( $bypass_url ); ?></code></p>
 							<?php else : ?>
-								<p><?php esc_html_e( 'No bypass secret yet — it is generated automatically on plugin activation.', 'jengo-iam-sso' ); ?></p>
+								<p><?php esc_html_e( 'No bypass secret yet; it is generated automatically on plugin activation.', 'jengo-iam-sso' ); ?></p>
 							<?php endif; ?>
 							<label><input type="checkbox" name="<?php echo esc_attr( $option_name ); ?>[regenerate_bypass]" value="1" /> <?php esc_html_e( 'Regenerate the bypass secret on save (invalidates the URL above)', 'jengo-iam-sso' ); ?></label>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Endpoint overrides (optional)', 'jengo-iam-sso' ); ?></th>
-						<td>
-							<p class="description"><?php esc_html_e( 'Fallbacks when OIDC discovery is unreachable. Leave blank to use discovery / issuer defaults.', 'jengo-iam-sso' ); ?></p>
-							<p><label for="jengo-authz-endpoint"><?php esc_html_e( 'Authorization endpoint', 'jengo-iam-sso' ); ?></label><br />
-								<input name="<?php echo esc_attr( $option_name ); ?>[authorization_endpoint]" id="jengo-authz-endpoint" type="url" class="regular-text" value="<?php echo esc_attr( $options['authorization_endpoint'] ); ?>" /></p>
-							<p><label for="jengo-token-endpoint"><?php esc_html_e( 'Token endpoint', 'jengo-iam-sso' ); ?></label><br />
-								<input name="<?php echo esc_attr( $option_name ); ?>[token_endpoint]" id="jengo-token-endpoint" type="url" class="regular-text" value="<?php echo esc_attr( $options['token_endpoint'] ); ?>" /></p>
-							<p><label for="jengo-userinfo-endpoint"><?php esc_html_e( 'Userinfo endpoint', 'jengo-iam-sso' ); ?></label><br />
-								<input name="<?php echo esc_attr( $option_name ); ?>[userinfo_endpoint]" id="jengo-userinfo-endpoint" type="url" class="regular-text" value="<?php echo esc_attr( $options['userinfo_endpoint'] ); ?>" /></p>
+							<p class="description"><?php esc_html_e( 'Other emergency routes: add define( \'JENGO_IAM_SSO_BYPASS\', true ); to wp-config.php, or run "wp jengo-iam-sso set-mode wordpress". If IAM cannot be reached, the normal form is shown automatically.', 'jengo-iam-sso' ); ?></p>
 						</td>
 					</tr>
 				</table>
