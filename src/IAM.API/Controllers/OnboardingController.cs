@@ -134,7 +134,13 @@ public class OnboardingController : ControllerBase
             {
                 var invited = await _invitationService.SendInvitationAsync(
                     inviteEmail, tenant.Id, ownerRole.Id, user.Id);
-                invitation = new { id = invited.Id, email = invited.Email, status = invited.Status };
+                invitation = new
+                {
+                    id = invited.Invitation.Id,
+                    email = invited.Invitation.Email,
+                    status = invited.Invitation.Status,
+                    emailSent = invited.EmailSent
+                };
             }
             catch (InvalidOperationException ex)
             {

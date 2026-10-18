@@ -44,7 +44,7 @@ public class InvitationService : IInvitationService
         return template;
     }
 
-    public async Task<Invitation> SendInvitationAsync(
+    public async Task<InvitationSendResult> SendInvitationAsync(
         string email,
         Guid tenantId,
         Guid roleId,
@@ -130,6 +130,7 @@ public class InvitationService : IInvitationService
         var customTemplate = await _context.Set<EmailTemplate>()
             .FirstOrDefaultAsync(t => t.TenantId == tenantId && t.Key == "Invitation" && t.IsActive, ct);
 
+        bool emailSent;
         if (customTemplate != null)
         {
             var inviteUrl = $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={token}";
@@ -146,7 +147,7 @@ public class InvitationService : IInvitationService
                 ["{{Email}}"] = email
             };
 
-            await _emailService.SendRawEmailAsync(
+            emailSent = await _emailService.SendRawEmailAsync(
                 email,
                 RenderTemplate(customTemplate.Subject, placeholders),
                 RenderTemplate(customTemplate.BodyHtml, placeholders),
@@ -154,14 +155,23 @@ public class InvitationService : IInvitationService
         }
         else
         {
-            await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
+            emailSent = await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
         }
 
-        _logger.LogInformation(
-            "Invitation sent to {Email} for tenant {TenantName} ({TenantId}) by user {InviterId}",
-            email, tenant.Name, tenantId, invitedByUserId);
+        if (emailSent)
+        {
+            _logger.LogInformation(
+                "Invitation sent to {Email} for tenant {TenantName} ({TenantId}) by user {InviterId}",
+                email, tenant.Name, tenantId, invitedByUserId);
+        }
+        else
+        {
+            _logger.LogError(
+                "Invitation for {Email} (tenant {TenantName}) was created but the email could NOT be sent; the admin must hand over the accept link manually",
+                email, tenant.Name);
+        }
 
-        return invitation;
+        return new InvitationSendResult(invitation, emailSent);
     }
 
     public async Task<BulkInviteResult> SendBulkInvitationsAsync(
@@ -278,8 +288,17 @@ public class InvitationService : IInvitationService
                     }
                 }
 
-                await SendInvitationAsync(entry.Email, tenantId, roleId, invitedByUserId, ct: ct);
+                var sendResult = await SendInvitationAsync(entry.Email, tenantId, roleId, invitedByUserId, ct: ct);
                 result.Succeeded++;
+                if (!sendResult.EmailSent)
+                {
+                    result.Errors.Add(new BulkInviteError
+                    {
+                        Row = i + 1,
+                        Email = entry.Email,
+                        Error = "Invitation created but the email could not be sent - hand over the accept link manually"
+                    });
+                }
             }
             catch (Exception ex)
             {
