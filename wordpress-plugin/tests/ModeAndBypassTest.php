@@ -332,6 +332,105 @@ class ModeAndBypassTest extends JengoTestCase {
 		$this->assertCount( 1, $discovery_calls );
 	}
 
+	/* ---- IAM goes down AFTER discovery was cached (review round 2 finding) ------------------------- */
+
+	public function test_iam_only_falls_back_to_the_form_when_iam_goes_down_after_discovery_was_cached() {
+		$this->configure( array( 'login_mode' => 'iam' ) );
+
+		// IAM is healthy: wp-login.php redirects, and the discovery document gets cached (12 h).
+		$location = $this->redirect_of( function () {
+			$this->enter_wp_login( $this->login() );
+		} );
+		$this->assertStringStartsWith( 'https://iam.test/connect/authorize?', $location );
+
+		// IAM goes down; the cached document still names its endpoints.
+		$this->iam->discovery_up = false;
+		Jengo_Test_World::$now_offset += Jengo_IAM_SSO_OIDC_Client::REACHABILITY_TTL + 1;
+
+		$login = $this->login();
+		$this->enter_wp_login( $login ); // must NOT redirect into the dead host
+
+		$user = Jengo_Test_World::add_user( 'admin', 'a@example.com', array( 'administrator' ) );
+		$this->assertSame( $user, $login->block_password_login( $user, 'admin', 'pw' ), 'Password login must work while IAM is down' );
+		$this->assertStringContainsString( 'not reachable', $this->login_form_message( $login ) );
+	}
+
+	public function test_the_reachability_probe_is_remembered_for_a_minute_and_iam_coming_back_redirects_again() {
+		$this->configure( array( 'login_mode' => 'iam' ) );
+
+		$this->redirect_of( function () {
+			$this->enter_wp_login( $this->login() );
+		} );
+		$this->iam->discovery_up = false;
+		Jengo_Test_World::$now_offset += Jengo_IAM_SSO_OIDC_Client::REACHABILITY_TTL + 1;
+
+		$count_discovery_gets = static function () {
+			return count(
+				array_filter(
+					Jengo_Test_World::$http_log,
+					static function ( $e ) {
+						return false !== strpos( $e[1], 'openid-configuration' );
+					}
+				)
+			);
+		};
+
+		$this->enter_wp_login( $this->login() ); // probe fails
+		$after_first = $count_discovery_gets();
+		$this->enter_wp_login( $this->login() ); // remembered, no new request
+		$this->enter_wp_login( $this->login() );
+		$this->assertSame( $after_first, $count_discovery_gets(), 'A failed probe is remembered for the cache window' );
+
+		// IAM is back; once the remembered failure expires the redirect returns.
+		$this->iam->discovery_up = true;
+		Jengo_Test_World::$now_offset += Jengo_IAM_SSO_OIDC_Client::REACHABILITY_TTL + 1;
+		$location = $this->redirect_of( function () {
+			$this->enter_wp_login( $this->login() );
+		} );
+		$this->assertStringStartsWith( 'https://iam.test/connect/authorize?', $location );
+	}
+
+	/* ---- "WordPress only" and the kill switch really switch SSO off (review round 2 finding) ------- */
+
+	public function test_wordpress_only_mode_refuses_the_sso_start_and_callback_endpoints() {
+		$this->configure( array( 'login_mode' => 'wordpress' ) );
+
+		$start = $this->die_message_of( array( $this->login(), 'start_authorization' ) );
+		$this->assertStringContainsString( 'switched off', $start );
+
+		$_GET     = array( 'code' => 'abc', 'state' => str_repeat( 'a', 32 ) );
+		$_REQUEST = $_GET;
+		$callback = $this->die_message_of( array( $this->login(), 'handle_callback' ) );
+		$this->assertStringContainsString( 'switched off', $callback );
+		$this->assertSame( array(), $this->token_posts(), 'The token endpoint is never contacted' );
+	}
+
+	public function test_a_flow_started_before_the_switch_cannot_be_completed_after_it() {
+		$alice = Jengo_Test_World::add_user( 'alice', 'alice@example.com', array( 'subscriber' ) );
+		$login = $this->login();
+		$flow  = $this->start_flow( $login );
+		$code  = $this->iam->issue_code( $flow['location'] );
+
+		$this->configure( array( 'login_mode' => 'wordpress' ) ); // admin flips the switch mid-flow
+		$result = $this->run_callback( $this->login(), $code, $flow['params']['state'], $flow['binding'] );
+
+		$this->assertArrayHasKey( 'die', $result );
+		$this->assertNoSession();
+		$this->assertSame( array(), $this->token_posts() );
+		$this->assertSame( array( 'subscriber' ), $alice->roles );
+	}
+
+	public function test_the_wp_config_kill_switch_refuses_a_complete_sso_login() {
+		Jengo_Test_World::add_user( 'alice', 'alice@example.com', array( 'subscriber' ) );
+		$login                  = $this->login();
+		$login->bypass_constant = true;
+
+		$message = $this->die_message_of( array( $login, 'start_authorization' ) );
+
+		$this->assertStringContainsString( 'switched off', $message );
+		$this->assertNoSession();
+	}
+
 	/* ---- not configured: never lock anyone out ----------------------------------------------- */
 
 	public function test_an_unconfigured_plugin_behaves_like_wordpress_only_even_if_mode_is_iam() {

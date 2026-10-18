@@ -116,7 +116,9 @@ class Jengo_IAM_SSO_Login {
 			return;
 		}
 
-		if ( ! $this->oidc()->is_available() ) {
+		// Live check, not just "a discovery document is cached": when IAM is down
+		// the form must come back instead of a redirect into a dead host.
+		if ( ! $this->oidc()->is_reachable() ) {
 			$this->iam_unreachable = true;
 			return;
 		}
@@ -228,6 +230,18 @@ class Jengo_IAM_SSO_Login {
 		return $message . $button;
 	}
 
+	/**
+	 * "WordPress only" and the wp-config kill switch (JENGO_IAM_SSO_BYPASS) must
+	 * really switch IAM sign-in off, not just hide the button: the start and
+	 * callback endpoints are plain URLs and would otherwise keep issuing
+	 * WordPress sessions.
+	 */
+	protected function refuse_when_sso_is_off() {
+		if ( 'wordpress' === $this->effective_login_mode() ) {
+			$this->fail( __( 'Jengo IAM sign-in is switched off on this site. Use your WordPress credentials.', 'jengo-iam-sso' ) );
+		}
+	}
+
 	/* ---------------------------------------------------------------------
 	 * Authorization request
 	 * ------------------------------------------------------------------ */
@@ -242,6 +256,7 @@ class Jengo_IAM_SSO_Login {
 		if ( ! $this->is_configured() ) {
 			$this->fail( __( 'Jengo IAM SSO is not configured yet (issuer, client ID and client secret are required).', 'jengo-iam-sso' ) );
 		}
+		$this->refuse_when_sso_is_off();
 
 		$state   = bin2hex( random_bytes( 16 ) );
 		$nonce   = bin2hex( random_bytes( 16 ) );
@@ -291,6 +306,7 @@ class Jengo_IAM_SSO_Login {
 		if ( ! $this->is_configured() ) {
 			$this->fail( __( 'Jengo IAM SSO is not configured.', 'jengo-iam-sso' ) );
 		}
+		$this->refuse_when_sso_is_off();
 
 		if ( isset( $_GET['error'] ) ) {
 			$this->fail(

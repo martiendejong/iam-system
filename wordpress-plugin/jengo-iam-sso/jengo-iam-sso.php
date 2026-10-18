@@ -3,7 +3,7 @@
  * Plugin Name:       Jengo IAM SSO
  * Plugin URI:        https://github.com/martiendejong/iam-system
  * Description:       Single sign-on for WordPress via Jengo IAM (OpenID Connect authorization-code flow with PKCE). Login mode: WordPress only, Jengo IAM only, or Both.
- * Version:           1.1.0
+ * Version:           1.1.1
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            Jengo
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JENGO_IAM_SSO_VERSION', '1.1.0' );
+define( 'JENGO_IAM_SSO_VERSION', '1.1.1' );
 define( 'JENGO_IAM_SSO_OPTION', 'jengo_iam_sso_options' );
 define( 'JENGO_IAM_SSO_DIR', plugin_dir_path( __FILE__ ) );
 

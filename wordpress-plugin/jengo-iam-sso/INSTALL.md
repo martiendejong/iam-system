@@ -7,7 +7,7 @@ registration at IAM** and **the plugin settings**.
 | Login mode | Behaviour |
 |---|---|
 | **Both** (default) | Normal WordPress form plus the IAM button. |
-| **WordPress only** | No button, plugin inactive on the login form. |
+| **WordPress only** | No button, and the IAM sign-in endpoints refuse too: IAM login is fully off. |
 | **IAM only** | `wp-login.php` redirects to IAM; password logins are refused. Emergency routes below. |
 
 Requirements: WordPress 5.8+, PHP 7.4+ with the OpenSSL extension, outbound
@@ -61,7 +61,7 @@ Build the zip (or take the one attached to the task): `composer build-zip`
 in `wordpress-plugin/` writes `dist/jengo-iam-sso-<version>.zip`.
 
 - WP admin: Plugins, Add New, Upload Plugin, choose the zip, Activate; or
-- WP-CLI: `wp plugin install jengo-iam-sso-1.1.0.zip --activate`.
+- WP-CLI: `wp plugin install jengo-iam-sso-1.1.1.zip --activate`.
 
 Activation generates the emergency bypass secret.
 
@@ -101,10 +101,13 @@ In this order of convenience:
 
 1. **Bypass URL**: `https://SITE/wp-login.php?jengo_sso_bypass=<secret>` (shown on
    the settings page; `wp jengo-iam-sso bypass-url` prints it).
-2. **wp-config.php**: add `define( 'JENGO_IAM_SSO_BYPASS', true );` to switch the
-   plugin off for logins without touching the database. Remove it afterwards.
+2. **wp-config.php**: add `define( 'JENGO_IAM_SSO_BYPASS', true );` to switch IAM
+   sign-in off (button gone, sign-in and callback endpoints refuse) without touching
+   the database. Remove it afterwards.
 3. **WP-CLI**: `wp jengo-iam-sso set-mode wordpress`.
-4. If IAM is unreachable the form is shown automatically.
+4. If IAM is unreachable the form is shown automatically. IAM is checked live on
+   `wp-login.php` visits (the answer is remembered for a minute), so this also works
+   when IAM goes down while its discovery document is still cached.
 
 ## What is checked on every login
 

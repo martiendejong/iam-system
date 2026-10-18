@@ -20,6 +20,7 @@ class Jengo_IAM_SSO_OIDC_Client {
 
 	const DISCOVERY_CACHE_TTL   = 12 * HOUR_IN_SECONDS;
 	const DISCOVERY_FAILURE_TTL = 60;
+	const REACHABILITY_TTL      = 60;
 	const JWKS_CACHE_TTL        = HOUR_IN_SECONDS;
 	const JWKS_REFETCH_LOCK_TTL = 30;
 
@@ -85,15 +86,49 @@ class Jengo_IAM_SSO_OIDC_Client {
 		$document = $this->fetch_discovery_document( $issuer );
 		if ( is_wp_error( $document ) ) {
 			set_transient( $cache_key . '_fail', 1, self::DISCOVERY_FAILURE_TTL );
+			set_transient( $this->reachability_key(), '0', self::REACHABILITY_TTL );
 			return $this->discovery = $document;
 		}
 
 		set_transient( $cache_key, $document, self::DISCOVERY_CACHE_TTL );
+		set_transient( $this->reachability_key(), '1', self::REACHABILITY_TTL );
 		return $this->discovery = $document;
 	}
 
+	/**
+	 * Whether a usable discovery document is known (configuration level). This
+	 * can stay true for hours after IAM went down, because the document itself
+	 * is cached; use is_reachable() before sending a visitor to IAM.
+	 */
 	public function is_available() {
 		return ! is_wp_error( $this->get_discovery() );
+	}
+
+	/**
+	 * Whether IAM answers right now. The cached discovery document says where
+	 * IAM lives, not that it is up, so IAM-only mode (which redirects every
+	 * wp-login.php visit) asks this instead: a live fetch of the discovery
+	 * document, remembered for a minute so a login page view costs at most one
+	 * request per minute and a down IAM never slows pages down.
+	 */
+	public function is_reachable() {
+		if ( is_wp_error( $this->get_discovery() ) ) {
+			return false;
+		}
+
+		$known = get_transient( $this->reachability_key() );
+		if ( false !== $known ) {
+			return '1' === $known;
+		}
+
+		$live = $this->fetch_discovery_document( $this->get_issuer() );
+		$up   = ! is_wp_error( $live );
+		set_transient( $this->reachability_key(), $up ? '1' : '0', self::REACHABILITY_TTL );
+		return $up;
+	}
+
+	private function reachability_key() {
+		return 'jengo_iam_sso_up_' . md5( $this->get_issuer() );
 	}
 
 	/**
@@ -105,6 +140,7 @@ class Jengo_IAM_SSO_OIDC_Client {
 		$document  = get_transient( $cache_key );
 		delete_transient( $cache_key );
 		delete_transient( $cache_key . '_fail' );
+		delete_transient( $this->reachability_key() );
 		if ( is_array( $document ) && ! empty( $document['jwks_uri'] ) ) {
 			delete_transient( 'jengo_iam_sso_jwks_' . md5( $document['jwks_uri'] ) );
 		}
