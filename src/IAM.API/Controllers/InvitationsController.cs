@@ -18,16 +18,23 @@ public class InvitationsController : ControllerBase
     private readonly IInvitationService _invitationService;
     private readonly IAMDbContext _context;
     private readonly ILogger<InvitationsController> _logger;
+    private readonly string? _emailBaseUrl;
 
     public InvitationsController(
         IInvitationService invitationService,
         IAMDbContext context,
-        ILogger<InvitationsController> logger)
+        ILogger<InvitationsController> logger,
+        IConfiguration configuration)
     {
         _invitationService = invitationService;
         _context = context;
         _logger = logger;
+        _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
     }
+
+    /// <summary>The accept link for an invitation token - returned to the admin so a failed
+    /// or spam-filtered email never strands an onboarding (the admin can hand it over).</summary>
+    private string AcceptUrl(string token) => $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={token}";
 
     /// <summary>
     /// Send an invitation to a user. Allowed for the admin roles, and (task 1496) for
@@ -93,13 +100,14 @@ public class InvitationsController : ControllerBase
 
         try
         {
-            var invitation = await _invitationService.SendInvitationAsync(
+            var result = await _invitationService.SendInvitationAsync(
                 request.Email,
                 request.TenantId,
                 request.RoleId,
                 userId.Value,
                 request.ExpiryDays,
                 ct);
+            var invitation = result.Invitation;
 
             return Ok(new
             {
@@ -109,7 +117,11 @@ public class InvitationsController : ControllerBase
                 roleId = invitation.RoleId,
                 status = invitation.Status,
                 expiresAt = invitation.ExpiresAt,
-                createdAt = invitation.CreatedAt
+                createdAt = invitation.CreatedAt,
+                // Honest delivery status + a manual fallback: emailSent=false means the
+                // invitation exists but no mail went out, so show/hand over acceptUrl.
+                emailSent = result.EmailSent,
+                acceptUrl = AcceptUrl(invitation.Token)
             });
         }
         catch (InvalidOperationException ex)
