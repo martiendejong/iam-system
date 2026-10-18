@@ -4,7 +4,9 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Hazina.Security.ApiKeys;
 using IAM.API.Auth;
+using IAM.API.Mcp;
 using IAM.API.Middleware;
+using Jengo.Mcp;
 using IAM.API.Workers;
 using IAM.Core.Interfaces;
 using Microsoft.AspNetCore.Authentication;
@@ -78,6 +80,12 @@ builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
+// Task 5800: remote MCP server at /mcp (agent-safe user onboarding via invitations). Auth for
+// /mcp is additive and self-contained, independent of the JWT bearer / IAM.Session cookie schemes:
+// an API key (X-Api-Key, or bearer for ChatGPT connectors) from the Mcp:Keys configuration array,
+// each key bound to one IAM user. AddIamMcp also exempts /mcp from the Hazina X-Api-Key middleware,
+// which would otherwise 401 the MCP key before it reaches the MCP auth scheme.
+builder.Services.AddIamMcp();
 // Task 5165: the CA key file password must be configured outside Development. Resolved here, at startup and before
 // any CA file is read, so a missing Ca:CertificatePassword stops the app (same style as the OpenIddict signing
 // certificate check below) instead of falling back to a password that is written in the source.
@@ -470,6 +478,11 @@ app.UseHazinaApiKeyAuth(); // API key auth + per-key rate limiting before JWT (s
 app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
 app.UseAuthorization();
+
+// Task 5800: the remote MCP endpoint (/mcp), always behind the MCP auth scheme. Mapped after
+// UseAuthentication/UseAuthorization, as the template requires. The Hazina X-Api-Key middleware
+// above skips /mcp (excluded in AddIamMcp), so the MCP key in that header is not rejected early.
+app.MapJengoMcp();
 
 app.MapControllers();
 
