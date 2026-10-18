@@ -25,6 +25,8 @@ bld/
 
 # NuGet
 *.nupkg
+# ...except the vendored Jengo MCP template package (task 5800) that restore needs.
+!src/IAM.API/nuget-local/*.nupkg
 *.snupkg
 .nuget/
 packages/

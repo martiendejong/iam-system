@@ -13,6 +13,10 @@
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
     <PackageReference Include="Fido2.AspNet" Version="4.0.1" />
+    <!-- Task 5800: shared Jengo MCP template (scp-jengo/jengo-mcp-template), vendored as a .nupkg
+         in nuget-local/ (see the repo-root nuget.config). Provides the /mcp streamable-http
+         transport + self-contained auth scheme; IAM's tools live in Mcp/. -->
+    <PackageReference Include="Jengo.Mcp.AspNetCore" Version="1.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.*" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.*">
