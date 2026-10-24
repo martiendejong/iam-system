@@ -197,7 +197,8 @@ builder.Services.AddOpenIddict()
         // not globally, since confidential clients (e.g. open-webui) don't require it.
         options.AllowAuthorizationCodeFlow()
                .AllowRefreshTokenFlow()
-               .AllowClientCredentialsFlow();
+               .AllowClientCredentialsFlow()
+               .AllowPasswordFlow();
 
         // Register scopes (permissions that clients can request)
         options.RegisterScopes(

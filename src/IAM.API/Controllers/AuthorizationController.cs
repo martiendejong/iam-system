@@ -225,6 +225,56 @@ public class AuthorizationController : ControllerBase
             claimsPrincipal.SetScopes(request.GetScopes());
             claimsPrincipal.SetDestinations(GetDestinations);
         }
+        else if (request.IsPasswordGrantType())
+        {
+            var username = request.Username;
+            var password = request.Password;
+
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+                return BadRequest(new { error = Errors.InvalidRequest, error_description = "Username and password are required." });
+
+            var user = await _context.Users
+                .Include(u => u.UserRoles).ThenInclude(ur => ur.Role)
+                .FirstOrDefaultAsync(u => u.Email.ToLower() == username.ToLower() && u.IsActive);
+
+            if (user == null || (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow))
+                return Unauthorized(new { error = Errors.InvalidGrant, error_description = "Invalid credentials." });
+
+            if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+            {
+                user.FailedLoginAttempts++;
+                if (user.FailedLoginAttempts >= 5)
+                {
+                    user.IsLockedOut = true;
+                    user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
+                }
+                await _context.SaveChangesAsync();
+                return Unauthorized(new { error = Errors.InvalidGrant, error_description = "Invalid credentials." });
+            }
+
+            user.FailedLoginAttempts = 0;
+            user.IsLockedOut = false;
+            user.LastLoginAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            var identity = new ClaimsIdentity(
+                authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                nameType: Claims.Name,
+                roleType: Claims.Role);
+
+            identity.SetClaim(Claims.Subject, user.Id.ToString())
+                    .SetClaim(Claims.Email, user.Email)
+                    .SetClaim(Claims.Name, $"{user.FirstName} {user.LastName}")
+                    .SetClaim(Claims.GivenName, user.FirstName)
+                    .SetClaim(Claims.FamilyName, user.LastName);
+
+            var roles = user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray();
+            identity.SetClaims(Claims.Role, roles);
+            identity.SetScopes(request.GetScopes());
+            identity.SetDestinations(GetDestinations);
+
+            claimsPrincipal = new ClaimsPrincipal(identity);
+        }
         else
         {
             return BadRequest(new
