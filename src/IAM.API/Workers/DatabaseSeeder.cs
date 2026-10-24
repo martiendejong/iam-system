@@ -1,4 +1,4 @@
-using Hazina.Security.ApiKeys;
+﻿using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -1241,6 +1241,31 @@ public class DatabaseSeeder : IHostedService
                     OpenIddictConstants.Permissions.Endpoints.Token,
                     OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}{IAM.API.Controllers.ResolverController.ResolverScope}"
+                }
+            }, cancellationToken);
+        }
+        // Squid Proxy (Password grant / ROPC) - used by the Squid basic-auth helper
+        if (await manager.FindByClientIdAsync("squid-proxy", cancellationToken) == null)
+        {
+            var squidSecret = configuration["Clients:SquidProxy:Secret"]
+                ?? (env.IsDevelopment()
+                    ? "squid-proxy-secret-dev"
+                    : throw new InvalidOperationException("Clients:SquidProxy:Secret not configured in production"));
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "squid-proxy",
+                ClientSecret = squidSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Squid Proxy (basic auth helper)",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.Password,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
                 }
             }, cancellationToken);
         }
