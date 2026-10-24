@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      Checkout of the Hazina framework (https://github.com/martiendejong/hazina) that provides the shared
+      Hazina.Security.ApiKeys module. By default it is the sibling of this repo's checkout
+      (C:\projects\hazina next to C:\projects\iam-system-base); override with -p:HazinaRoot=... or the
+      HAZINA_ROOT environment variable (CI does the latter). Must end with a directory separator.
+    -->
+    <HazinaRoot Condition="'$(HazinaRoot)' == '' and '$(HAZINA_ROOT)' != ''">$(HAZINA_ROOT)</HazinaRoot>
+    <HazinaRoot Condition="'$(HazinaRoot)' == ''">$(MSBuildThisFileDirectory)..\hazina\</HazinaRoot>
+  </PropertyGroup>
+</Project>

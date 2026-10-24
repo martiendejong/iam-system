@@ -54,9 +54,16 @@ public class ApprovalStep
     public int QuorumCount { get; set; } = 1;
 
     /// <summary>
-    /// Number of approvals received so far (for quorum tracking).
+    /// Number of approvals received so far (for quorum tracking). Steps created before task 4711
+    /// carry approvals that were never attributed to a person; this counter keeps them, and each
+    /// new distinct approver (one <see cref="Votes"/> row) adds one on top.
     /// </summary>
     public int ApprovalsReceived { get; set; } = 0;
+
+    /// <summary>
+    /// One row per approver who approved this step; unique per (step, user).
+    /// </summary>
+    public ICollection<ApprovalVote> Votes { get; set; } = new List<ApprovalVote>();
 
     /// <summary>
     /// When the decision was made.

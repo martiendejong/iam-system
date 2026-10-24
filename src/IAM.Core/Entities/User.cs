@@ -30,6 +30,17 @@ public class User
     public string? PasswordResetToken { get; set; }
     public DateTime? PasswordResetTokenExpiry { get; set; }
 
+    // Org hierarchy + principal classification (task 4057)
+    /// <summary>
+    /// Optional manager (another user). FK with ON DELETE SET NULL.
+    /// No org data is seeded; admins set this via PUT /api/users/{id}/principal.
+    /// </summary>
+    public Guid? ManagerUserId { get; set; }
+    public User? ManagerUser { get; set; }
+
+    /// <summary>Human / Agent / Service. Users default to Human.</summary>
+    public PrincipalKind PrincipalKind { get; set; } = PrincipalKind.Human;
+
     // Timestamps
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

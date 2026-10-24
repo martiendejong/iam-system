@@ -34,6 +34,17 @@ public interface IScimService
     Task<List<ScimProvisioningLog>> GetProvisioningLogsAsync(Guid tenantId, int skip = 0, int take = 50, CancellationToken ct = default);
 }
 
+/// <summary>
+/// An email address or phone number is already used by another account (task 4699); controllers answer 409
+/// without naming the other account.
+/// </summary>
+public class ScimUniquenessException : InvalidOperationException
+{
+    public ScimUniquenessException(string message) : base(message)
+    {
+    }
+}
+
 // ---- SCIM DTO models ----
 
 public class ScimUserResource
@@ -136,4 +147,13 @@ public class ScimError
     public string? Detail { get; set; }
     public int Status { get; set; }
     public string? ScimType { get; set; }
+}
+
+/// <summary>
+/// A SCIM filter that cannot be parsed or is not supported. The controller answers 400 with
+/// scimType "invalidFilter"; it is never swallowed into an unfiltered result.
+/// </summary>
+public class ScimFilterException : Exception
+{
+    public ScimFilterException(string message) : base(message) { }
 }

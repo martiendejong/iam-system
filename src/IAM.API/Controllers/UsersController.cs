@@ -1,3 +1,4 @@
+using Hazina.Security.ApiKeys;
 using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -16,11 +17,13 @@ public class UsersController : ControllerBase
 {
     private readonly IAMDbContext _context;
     private readonly IAuthService _authService;
+    private readonly IApiKeyCache? _apiKeyCache;
 
-    public UsersController(IAMDbContext context, IAuthService authService)
+    public UsersController(IAMDbContext context, IAuthService authService, IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
         _authService = authService;
+        _apiKeyCache = apiKeyCache;
     }
 
     /// <summary>
@@ -55,6 +58,8 @@ public class UsersController : ControllerBase
             twoFactorEnabled = user.TwoFactorEnabled,
             isActive = user.IsActive,
             createdAt = user.CreatedAt,
+            managerUserId = user.ManagerUserId,
+            principalKind = user.PrincipalKind,
             roles = user.UserRoles.Select(ur => new
             {
                 id = ur.Role.Id,
@@ -226,6 +231,8 @@ public class UsersController : ControllerBase
                 isActive = u.IsActive,
                 createdAt = u.CreatedAt,
                 lastLoginAt = u.LastLoginAt,
+                managerUserId = u.ManagerUserId,
+                principalKind = u.PrincipalKind,
                 roles = u.UserRoles.Select(ur => ur.Role.Name)
             })
         });
@@ -269,6 +276,8 @@ public class UsersController : ControllerBase
             isActive = user.IsActive,
             createdAt = user.CreatedAt,
             lastLoginAt = user.LastLoginAt,
+            managerUserId = user.ManagerUserId,
+            principalKind = user.PrincipalKind,
             roles = user.UserRoles.Select(ur => new
             {
                 id = ur.Role.Id,
@@ -297,17 +306,12 @@ public class UsersController : ControllerBase
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
 
-        // Revoke all refresh tokens
-        var tokens = await _context.RefreshTokens
-            .Where(rt => rt.UserId == id && rt.RevokedAt == null)
-            .ToListAsync();
-
-        foreach (var token in tokens)
-        {
-            token.RevokedAt = DateTime.UtcNow;
-        }
+        // Revoke all refresh tokens and API keys: reactivating the user must not bring them back
+        await _context.RevokeRefreshTokensAsync(id);
+        var revokedKeys = await _context.RevokeApiKeysAsync(id);
 
         await _context.SaveChangesAsync();
+        _apiKeyCache.Forget(revokedKeys);
 
         return Ok(new { message = "User deactivated successfully" });
     }
@@ -444,6 +448,50 @@ public class UsersController : ControllerBase
     }
 
     /// <summary>
+    /// Set or clear a user's manager and principal kind in one PUT (task 4057).
+    /// PUT replaces BOTH fields: managerUserId = null explicitly clears the manager.
+    /// SuperAdmin and SystemAdmin only; service-account tokens carry no roles and
+    /// are therefore rejected by the role gate. Cross-tenant managers are allowed
+    /// only for SuperAdmin callers. A disabled manager may still be stored.
+    /// </summary>
+    [HttpPut("{id}/principal")]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
+    public async Task<IActionResult> SetPrincipal(
+        Guid id,
+        [FromBody] SetPrincipalRequest request,
+        [FromServices] IPrincipalDirectoryService principalDirectory)
+    {
+        if (request.PrincipalKind == null)
+            return BadRequest(new { error = "principalKind is required (Human, Agent or Service)" });
+
+        if (!Enum.IsDefined(request.PrincipalKind.Value))
+            return BadRequest(new { error = "principalKind must be Human, Agent or Service" });
+
+        var actorIdRaw = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        Guid? actorId = Guid.TryParse(actorIdRaw, out var parsedActor) ? parsedActor : null;
+
+        var result = await principalDirectory.SetUserPrincipalAsync(
+            id,
+            request.ManagerUserId,
+            request.PrincipalKind.Value,
+            actorId,
+            callerIsSuperAdmin: User.IsInRole("SuperAdmin"),
+            HttpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            PrincipalAssignmentStatus.TargetNotFound => NotFound(new { error = "User not found" }),
+            PrincipalAssignmentStatus.ValidationFailed => BadRequest(new { error = result.Error }),
+            _ => Ok(new
+            {
+                id,
+                managerUserId = request.ManagerUserId,
+                principalKind = request.PrincipalKind.Value
+            })
+        };
+    }
+
+    /// <summary>
     /// Change password for any user (SuperAdmin only)
     /// </summary>
     [HttpPost("{id}/change-password")]
@@ -462,6 +510,9 @@ public class UsersController : ControllerBase
         user.IsLockedOut = false;
         user.UpdatedAt = DateTime.UtcNow;
 
+        // The old password is gone, so every session opened with it ends, as on password reset.
+        await _context.RevokeRefreshTokensAsync(id);
+
         await _context.SaveChangesAsync();
 
         return Ok(new { message = "Password changed successfully" });
@@ -473,3 +524,10 @@ public record AssignRoleRequest(Guid RoleId, Guid? TenantId, DateTime? ExpiresAt
 public record AdminChangePasswordRequest(string NewPassword);
 public record AdminCreateUserRequest(string? Email, string? Password, string? FirstName, string? LastName);
 public record AdminUpdateUserRequest(string? FirstName, string? LastName, string? Email, string? PhoneNumber);
+
+/// <summary>
+/// PUT body for /users/{id}/principal and /service-accounts/{id}/principal.
+/// Replaces both fields; ManagerUserId = null clears the manager.
+/// PrincipalKind is required so a forgotten field can never silently reset a kind.
+/// </summary>
+public record SetPrincipalRequest(Guid? ManagerUserId, PrincipalKind? PrincipalKind);

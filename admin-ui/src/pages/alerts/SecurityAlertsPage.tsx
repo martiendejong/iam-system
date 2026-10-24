@@ -165,7 +165,7 @@ export default function SecurityAlertsPage() {
         name: siem.name,
         type: siem.type,
         endpointUrl: siem.endpointUrl,
-        authConfig: siem.authConfig || '',
+        authConfig: '', // credentials are write-only; blank keeps the stored value
         format: siem.format,
         eventFilter: siem.eventFilter || '',
         isActive: siem.isActive,
@@ -643,7 +643,7 @@ export default function SecurityAlertsPage() {
                       onChange={(e) => setSiemForm({ ...siemForm, authConfig: e.target.value })}
                       rows={2}
                       className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm font-mono"
-                      placeholder='{"apiKey": "...", "hecToken": "..."}'
+                      placeholder={editingSiem?.hasAuthConfig ? 'Stored credentials are hidden - leave blank to keep them' : '{"apiKey": "...", "hecToken": "..."}'}
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">

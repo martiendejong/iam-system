@@ -9,7 +9,30 @@ export interface User {
   phoneNumber?: string;
   createdAt: string;
   updatedAt: string;
+  /** Optional manager (another user); null = no manager (task 4057) */
+  managerUserId?: string | null;
+  /** Human / Agent / Service; users default to Human (task 4057) */
+  principalKind?: PrincipalKindValue;
+  /** Role assignments as returned by GET /users/me (task 5222) */
+  roles?: CurrentUserRole[];
 }
+
+/** One role assignment of the signed-in user: tenantId null = global; expiresAt set = time-boxed. */
+export interface CurrentUserRole {
+  id: string;
+  name: string;
+  tenantId?: string | null;
+  expiresAt?: string | null;
+}
+
+// Principal kind (task 4057) - shared by users and service accounts
+export const PrincipalKind = {
+  Human: 'Human',
+  Agent: 'Agent',
+  Service: 'Service',
+} as const;
+
+export type PrincipalKindValue = typeof PrincipalKind[keyof typeof PrincipalKind];
 
 export interface UserRole {
   userId: string;
@@ -26,6 +49,8 @@ export interface Role {
   description?: string;
   category?: string;
   isSystem: boolean;
+  /** Null/absent = global role (all tenants). */
+  tenantId?: string | null;
 }
 
 // Tenant types
@@ -63,6 +88,19 @@ export interface RegisterRequest {
   firstName: string;
   lastName: string;
   phoneNumber?: string;
+}
+
+/**
+ * Payload for the admin create-user flow (POST /users → AdminCreateUserRequest).
+ * Mirrors the backend record exactly: no phoneNumber field (the admin endpoint
+ * ignores it). Kept separate from RegisterRequest so the form cannot silently
+ * send fields the endpoint does not accept.
+ */
+export interface CreateUserRequest {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
 }
 
 export interface LoginResponse {
@@ -105,6 +143,18 @@ export interface IdentityProvider {
   defaultRoleName?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Shape returned by the anonymous GET /identity-providers/public endpoint.
+ * Only the fields the login page needs to render social login buttons;
+ * secrets and tenant-internal metadata are never exposed here.
+ */
+export interface PublicIdentityProvider {
+  id: string;
+  name: string;
+  displayName: string;
+  type: IdentityProviderTypeValue;
 }
 
 export interface ExternalLoginAccount {

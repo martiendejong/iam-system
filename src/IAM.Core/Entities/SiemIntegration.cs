@@ -30,6 +30,7 @@ public class SiemIntegration
     /// JSON authentication configuration (API keys, tokens, certificates)
     /// Example: { "apiKey": "...", "index": "iam-events" }
     /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore] // credentials are write-only: never serialized into a response (task 4703)
     public string? AuthConfig { get; set; }
 
     /// <summary>

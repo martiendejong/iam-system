@@ -1,3 +1,4 @@
+using System.Text.Json;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -7,16 +8,73 @@ namespace IAM.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize]
+// Task 4703: alerts, rules and SIEM connections are platform security data (and SIEM credentials), so every
+// action needs a platform security administrator. Device and service-account tokens carry no roles and get 403.
+[Authorize(Roles = "SuperAdmin,SecurityAdmin")]
 public class SecurityAlertsController : ControllerBase
 {
     private readonly ISecurityAlertService _alertService;
     private readonly ILogger<SecurityAlertsController> _logger;
+    private readonly IWebhookUrlGuard _urlGuard;
 
-    public SecurityAlertsController(ISecurityAlertService alertService, ILogger<SecurityAlertsController> logger)
+    public SecurityAlertsController(
+        ISecurityAlertService alertService,
+        ILogger<SecurityAlertsController> logger,
+        IWebhookUrlGuard urlGuard)
     {
         _alertService = alertService;
         _logger = logger;
+        _urlGuard = urlGuard;
+    }
+
+    /// <summary>Placeholder shown instead of a stored SIEM credential; sending it back keeps the stored value.</summary>
+    private const string MaskedCredential = "********";
+
+    private static SiemIntegrationResponse ToResponse(SiemIntegration s) => new(
+        s.Id, s.TenantId, s.Name, s.Type, s.EndpointUrl,
+        HasAuthConfig: !string.IsNullOrEmpty(s.AuthConfig),
+        AuthConfigMasked: string.IsNullOrEmpty(s.AuthConfig) ? null : MaskedCredential,
+        s.Format, s.EventFilter, s.IsActive, s.CreatedAt, s.UpdatedAt);
+
+    /// <summary>
+    /// A rule with an automatic response (lock account, kill sessions, force MFA) can act on other users'
+    /// accounts, so only a SuperAdmin may save one.
+    /// </summary>
+    private ActionResult? CheckAutoResponseAllowed(string? action) =>
+        !string.IsNullOrWhiteSpace(action) && !User.IsInRole("SuperAdmin")
+            ? StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only a SuperAdmin can save an alert rule with an automatic response." })
+            : null;
+
+    /// <summary>Webhook and Slack channel targets must be public http(s) URLs. Returns an error or null.</summary>
+    private async Task<string?> CheckChannelsAsync(string? channelsJson, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(channelsJson))
+            return null;
+
+        List<RuleChannel>? channels;
+        try
+        {
+            channels = JsonSerializer.Deserialize<List<RuleChannel>>(channelsJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (JsonException)
+        {
+            return "Channels must be a JSON array of { type, target } objects.";
+        }
+
+        foreach (var channel in channels ?? new List<RuleChannel>())
+        {
+            var type = channel.Type?.ToLowerInvariant();
+            if (type is not ("webhook" or "slack") || string.IsNullOrEmpty(channel.Target))
+                continue;
+
+            var blocked = await _urlGuard.CheckAsync(channel.Target, ct);
+            if (blocked != null)
+                return $"Channel target rejected: {blocked}";
+        }
+
+        return null;
     }
 
     // ────────────────────────────────────────────────────────────
@@ -57,6 +115,12 @@ public class SecurityAlertsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest("Rule name is required");
 
+        if (CheckAutoResponseAllowed(request.AutoResponseAction) is { } denied)
+            return denied;
+
+        if (await CheckChannelsAsync(request.Channels, ct) is { } channelError)
+            return BadRequest(channelError);
+
         var rule = new AlertRule
         {
             TenantId = request.TenantId,
@@ -82,6 +146,12 @@ public class SecurityAlertsController : ControllerBase
         [FromBody] CreateAlertRuleRequest request,
         CancellationToken ct = default)
     {
+        if (CheckAutoResponseAllowed(request.AutoResponseAction) is { } denied)
+            return denied;
+
+        if (await CheckChannelsAsync(request.Channels, ct) is { } channelError)
+            return BadRequest(channelError);
+
         try
         {
             var rule = new AlertRule
@@ -151,7 +221,7 @@ public class SecurityAlertsController : ControllerBase
     [HttpPost("{id:guid}/acknowledge")]
     public async Task<ActionResult<SecurityAlert>> AcknowledgeAlert(Guid id, CancellationToken ct = default)
     {
-        var userIdClaim = User.FindFirst("sub")?.Value;
+        var userIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
         if (!Guid.TryParse(userIdClaim, out var userId))
             return Unauthorized("User ID not found in token");
 
@@ -168,30 +238,30 @@ public class SecurityAlertsController : ControllerBase
     /// Get all SIEM integrations
     /// </summary>
     [HttpGet("siem")]
-    public async Task<ActionResult<List<SiemIntegration>>> GetSiemIntegrations(
+    public async Task<ActionResult<List<SiemIntegrationResponse>>> GetSiemIntegrations(
         [FromQuery] Guid? tenantId,
         CancellationToken ct = default)
     {
         var integrations = await _alertService.GetSiemIntegrationsAsync(tenantId, ct);
-        return Ok(integrations);
+        return Ok(integrations.Select(ToResponse).ToList());
     }
 
     /// <summary>
     /// Get a SIEM integration by ID
     /// </summary>
     [HttpGet("siem/{id:guid}")]
-    public async Task<ActionResult<SiemIntegration>> GetSiemIntegration(Guid id, CancellationToken ct = default)
+    public async Task<ActionResult<SiemIntegrationResponse>> GetSiemIntegration(Guid id, CancellationToken ct = default)
     {
         var integration = await _alertService.GetSiemIntegrationAsync(id, ct);
         if (integration == null) return NotFound();
-        return Ok(integration);
+        return Ok(ToResponse(integration));
     }
 
     /// <summary>
     /// Create a SIEM integration
     /// </summary>
     [HttpPost("siem")]
-    public async Task<ActionResult<SiemIntegration>> CreateSiemIntegration(
+    public async Task<ActionResult<SiemIntegrationResponse>> CreateSiemIntegration(
         [FromBody] CreateSiemIntegrationRequest request,
         CancellationToken ct = default)
     {
@@ -200,6 +270,9 @@ public class SecurityAlertsController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(request.EndpointUrl))
             return BadRequest("Endpoint URL is required");
+
+        if (await _urlGuard.CheckAsync(request.EndpointUrl, ct) is { } urlError)
+            return BadRequest(urlError);
 
         var integration = new SiemIntegration
         {
@@ -214,18 +287,24 @@ public class SecurityAlertsController : ControllerBase
         };
 
         var created = await _alertService.CreateSiemIntegrationAsync(integration, ct);
-        return CreatedAtAction(nameof(GetSiemIntegration), new { id = created.Id }, created);
+        return CreatedAtAction(nameof(GetSiemIntegration), new { id = created.Id }, ToResponse(created));
     }
 
     /// <summary>
     /// Update a SIEM integration
     /// </summary>
     [HttpPut("siem/{id:guid}")]
-    public async Task<ActionResult<SiemIntegration>> UpdateSiemIntegration(
+    public async Task<ActionResult<SiemIntegrationResponse>> UpdateSiemIntegration(
         Guid id,
         [FromBody] CreateSiemIntegrationRequest request,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(request.EndpointUrl))
+            return BadRequest("Endpoint URL is required");
+
+        if (await _urlGuard.CheckAsync(request.EndpointUrl, ct) is { } urlError)
+            return BadRequest(urlError);
+
         try
         {
             var integration = new SiemIntegration
@@ -233,14 +312,15 @@ public class SecurityAlertsController : ControllerBase
                 Name = request.Name,
                 Type = request.Type,
                 EndpointUrl = request.EndpointUrl,
-                AuthConfig = request.AuthConfig,
+                // Omitted/blank or the masked placeholder keeps the stored credential (write-only field).
+                AuthConfig = request.AuthConfig == MaskedCredential ? null : request.AuthConfig,
                 Format = request.Format ?? "JSON",
                 EventFilter = request.EventFilter,
                 IsActive = request.IsActive
             };
 
             var updated = await _alertService.UpdateSiemIntegrationAsync(id, integration, ct);
-            return Ok(updated);
+            return Ok(ToResponse(updated));
         }
         catch (KeyNotFoundException)
         {
@@ -272,6 +352,27 @@ public class CreateAlertRuleRequest
     public int CooldownMinutes { get; set; } = 15;
     public string? AutoResponseAction { get; set; }
     public bool IsActive { get; set; } = true;
+}
+
+/// <summary>SIEM connection as returned by the API: the credential is never included, only whether one is stored.</summary>
+public record SiemIntegrationResponse(
+    Guid Id,
+    Guid? TenantId,
+    string Name,
+    SiemType Type,
+    string EndpointUrl,
+    bool HasAuthConfig,
+    string? AuthConfigMasked,
+    string Format,
+    string? EventFilter,
+    bool IsActive,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+internal class RuleChannel
+{
+    public string? Type { get; set; }
+    public string? Target { get; set; }
 }
 
 public class CreateSiemIntegrationRequest

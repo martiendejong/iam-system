@@ -50,6 +50,17 @@ public class ServiceAccount
 
     public bool IsActive { get; set; } = true;
 
+    // Org hierarchy + principal classification (task 4057)
+    /// <summary>
+    /// Optional manager (a user). FK with ON DELETE SET NULL.
+    /// API keys use their owning user's manager; this field is for service accounts.
+    /// </summary>
+    public Guid? ManagerUserId { get; set; }
+    public User? ManagerUser { get; set; }
+
+    /// <summary>Human / Agent / Service. Service accounts default to Service.</summary>
+    public PrincipalKind PrincipalKind { get; set; } = PrincipalKind.Service;
+
     /// <summary>
     /// Certificate thumbprint for mTLS authentication. Null if mTLS is not used.
     /// </summary>

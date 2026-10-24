@@ -1,3 +1,4 @@
+﻿using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -42,6 +43,11 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
+        await WordPressSsoSeeder.SeedAppRolesAsync(
+            context,
+            WordPressSsoSeeder.ResolveSites(_configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
+            _logger,
+            cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
 
         // Security check: alert if test accounts exist in non-development environment
@@ -53,6 +59,125 @@ public class DatabaseSeeder : IHostedService
         }
 
         await AuditAdminRolesAsync(context, cancellationToken);
+        await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
+        await BackfillApiKeysOfInactiveUsersAsync(scope.ServiceProvider, cancellationToken);
+        await AuditDefaultClientSecretsAsync(scope.ServiceProvider, cancellationToken);
+    }
+
+    /// <summary>
+    /// Task 4094: startup audit — alert when any OAuth client still authenticates with a
+    /// client secret that has ever shipped in this repository as a dev fallback. The stored
+    /// value is a PBKDF2 hash, so the comparison goes through the manager's own secret
+    /// validation rather than string equality. Critical outside Development (a published
+    /// secret on a live confidential client lets anyone with repo access mint tokens as
+    /// that client); informational in Development, where the fallbacks are intentional.
+    /// </summary>
+    private async Task AuditDefaultClientSecretsAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        // Every literal that has ever shipped in DatabaseSeeder.cs as a client secret, dev
+        // fallback or hard-coded (git history sweep, 2026-09-30). Add new ones here too.
+        string[] knownDefaultSecrets =
+        {
+            "postman_secret_dev_only",
+            "backend_secret_dev_only",
+            "jengo-agi-svc-secret-dev",
+            "jengo-mcp-iam-secret-dev",
+            // open-webui was seeded with a hard-coded secret from 2026-06-12 until the 2026-09-10
+            // auth-hardening commit made it configuration-only; a row created (or restored from a
+            // backup) in that window would still carry it.
+            "Ow9kP2mXqR5vN8dL3jT7"
+        };
+
+        try
+        {
+            var manager = services.GetRequiredService<IOpenIddictApplicationManager>();
+            await foreach (var application in manager.ListAsync(cancellationToken: cancellationToken))
+            {
+                foreach (var secret in knownDefaultSecrets)
+                {
+                    if (!await manager.ValidateClientSecretAsync(application, secret, cancellationToken))
+                        continue;
+
+                    var clientId = await manager.GetClientIdAsync(application, cancellationToken);
+                    if (_env.IsDevelopment())
+                        _logger.LogInformation(
+                            "Client '{ClientId}' uses a published dev fallback secret (expected in Development).",
+                            clientId);
+                    else
+                        _logger.LogCritical(
+                            "SECURITY ALERT: OAuth client '{ClientId}' authenticates with a client secret that is published in the repository. Rotate it immediately (task 4094).",
+                            clientId);
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // The audit only reports; it must never take IAM down.
+            _logger.LogError(ex, "Default-client-secret audit failed");
+        }
+    }
+
+    /// <summary>
+    /// Task 4056: idempotent group-role backfill. Canonicalizes legacy role value casing only -
+    /// it never removes memberships and never promotes anyone (pre-enforcement owner/admin rows
+    /// cannot be trusted). Groups without an active owner are logged here and listed for global
+    /// admins at GET /api/groups/ownerless.
+    /// </summary>
+    private async Task BackfillGroupRolesAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var groupService = services.GetRequiredService<Core.Services.IGroupService>();
+            var result = await groupService.BackfillGroupRolesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Group-role backfill: {Normalized} membership role value(s) canonicalized, {Ownerless} active group(s) without an active owner",
+                result.NormalizedRoleValues, result.GroupsWithoutActiveOwner);
+
+            if (result.GroupsWithoutActiveOwner > 0)
+            {
+                _logger.LogWarning(
+                    "{Count} group(s) have no active owner; global admins can list them via GET /api/groups/ownerless",
+                    result.GroupsWithoutActiveOwner);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never block startup on the backfill; enforcement itself does not depend on it.
+            _logger.LogError(ex, "Group-role backfill failed");
+        }
+    }
+
+    /// <summary>
+    /// Task 5224: idempotent clean-up of the API keys that outlived their owner's deactivation. Task 5155 revokes a
+    /// user's keys when the account is deactivated, but users deactivated before it shipped still own keys marked
+    /// active; the key store only blocks them while the owner is inactive, so reactivating the account would revive
+    /// them. This revokes every active key owned by an inactive user (through the same helper the deactivation routes
+    /// use) and does nothing on the next start. It is a startup step, not an EF migration: IAM creates its schema
+    /// with EnsureCreated and never calls Migrate(), so a migration holding an UPDATE would never run.
+    /// </summary>
+    private async Task BackfillApiKeysOfInactiveUsersAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var context = services.GetRequiredService<IAMDbContext>();
+            var revokedKeyHashes = await context.RevokeApiKeysOfInactiveUsersAsync(cancellationToken);
+            if (revokedKeyHashes.Count > 0)
+            {
+                await context.SaveChangesAsync(cancellationToken);
+                services.GetService<IApiKeyCache>().Forget(revokedKeyHashes);
+            }
+
+            _logger.LogInformation(
+                "API key backfill: {Revoked} active key(s) owned by inactive users revoked",
+                revokedKeyHashes.Count);
+        }
+        catch (Exception ex)
+        {
+            // Never block startup on the backfill; the key store already rejects keys of inactive owners.
+            _logger.LogError(ex, "API key backfill for inactive users failed");
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -158,66 +283,131 @@ public class DatabaseSeeder : IHostedService
         await context.SaveChangesAsync(cancellationToken);
     }
 
-    private static async Task SeedScopesAsync(IServiceProvider provider, CancellationToken cancellationToken)
+    /// <summary>
+    /// Task 4099 audience naming convention: audiences are stable logical resource identifiers
+    /// in snake_case (iam_api, taskmanager_api, jengo_mcp), decoupled from URLs and client ids.
+    /// Each API scope maps to the audience of the resource server it grants access to; OpenIddict
+    /// emits the mapped resources as the access token's aud claim (see AuthorizationController).
+    /// </summary>
+    public const string IamApiAudience = "iam_api";
+    public const string TaskManagerAudience = "taskmanager_api";
+    public const string JengoMcpAudience = "jengo_mcp";
+
+    /// <summary>
+    /// Seeds/upserts the OAuth scopes and their scope→audience ("resource") mapping.
+    /// Idempotent: creates missing scopes, and for existing scopes only ADDS missing resources
+    /// (display name, description and already-present resources on existing rows are never
+    /// touched or removed), so re-running against a populated database is always safe.
+    /// Public + static so tests can run it in-process against the test host (the hosted-service
+    /// path is stripped from the test factory).
+    /// </summary>
+    public static async Task SeedScopesAsync(IServiceProvider provider, CancellationToken cancellationToken)
     {
         var manager = provider.GetRequiredService<IOpenIddictScopeManager>();
 
-        // OpenID Connect standard scopes
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.OpenId, cancellationToken) == null)
+        // OpenID Connect standard scopes — identity data served by IAM itself (userinfo), so
+        // they map to the iam_api audience.
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.OpenId,
-                DisplayName = "OpenID",
-                Description = "OpenID Connect authentication",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.OpenId,
+            DisplayName = "OpenID",
+            Description = "OpenID Connect authentication",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.Profile, cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.Profile,
-                DisplayName = "Profile",
-                Description = "Access to user profile information",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.Profile,
+            DisplayName = "Profile",
+            Description = "Access to user profile information",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.Email, cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.Email,
-                DisplayName = "Email",
-                Description = "Access to user email address",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.Email,
+            DisplayName = "Email",
+            Description = "Access to user email address",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
-        if (await manager.FindByNameAsync(OpenIddictConstants.Scopes.Roles, cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = OpenIddictConstants.Scopes.Roles,
-                DisplayName = "Roles",
-                Description = "Access to user roles",
-                Resources = { "iam_api" }
-            }, cancellationToken);
-        }
+            Name = OpenIddictConstants.Scopes.Roles,
+            DisplayName = "Roles",
+            Description = "Access to user roles",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
 
         // Custom scope for tenant access
-        if (await manager.FindByNameAsync("tenants", cancellationToken) == null)
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
         {
-            await manager.CreateAsync(new OpenIddictScopeDescriptor
-            {
-                Name = "tenants",
-                DisplayName = "Tenants",
-                Description = "Access to user's tenant assignments",
-                Resources = { "iam_api" }
-            }, cancellationToken);
+            Name = "tenants",
+            DisplayName = "Tenants",
+            Description = "Access to user's tenant assignments",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
+
+        // Task 4099: per-resource-server API scopes. Requesting one of these scopes is how a
+        // client asks for a token usable at that resource server; the mapped resource becomes
+        // the token's aud claim. TaskManager (task 3231) and the MCP validator (task 1748)
+        // enable aud validation on their side individually.
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = TaskManagerAudience,
+            DisplayName = "TaskManager API",
+            Description = "Access to the TaskManager (JengoWork) API",
+            Resources = { TaskManagerAudience }
+        }, cancellationToken);
+
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = JengoMcpAudience,
+            DisplayName = "Jengo MCP",
+            Description = "Access to the Jengo VPS MCP server",
+            Resources = { JengoMcpAudience }
+        }, cancellationToken);
+
+        // Task 4059: resolver scope — vault confidential client only.
+        // Maps to iam_api audience because the endpoint lives on IAM itself.
+        // Not advertised in discovery (not added to RegisterScopes in Program.cs discovery list).
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = IAM.API.Controllers.ResolverController.ResolverScope,
+            DisplayName = "IAM Resolver",
+            Description = "Allows the vault to call the who-decides resolver endpoint",
+            Resources = { IamApiAudience }
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Create the scope when missing; when it exists, add any resources it is missing and leave
+    /// everything else (display name, description, extra resources someone added by hand) alone.
+    /// </summary>
+    private static async Task UpsertScopeAsync(
+        IOpenIddictScopeManager manager,
+        OpenIddictScopeDescriptor descriptor,
+        CancellationToken cancellationToken)
+    {
+        var existing = await manager.FindByNameAsync(descriptor.Name!, cancellationToken);
+        if (existing is null)
+        {
+            await manager.CreateAsync(descriptor, cancellationToken);
+            return;
         }
+
+        var current = new OpenIddictScopeDescriptor();
+        await manager.PopulateAsync(current, existing, cancellationToken);
+
+        var changed = false;
+        foreach (var resource in descriptor.Resources)
+        {
+            if (current.Resources.Add(resource))
+                changed = true;
+        }
+
+        if (changed)
+            await manager.UpdateAsync(existing, current, cancellationToken);
     }
 
     private static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, IWebHostEnvironment env, CancellationToken cancellationToken)
@@ -394,6 +584,45 @@ public class DatabaseSeeder : IHostedService
                 PostLogoutRedirectUris =
                 {
                     new Uri("https://intake.sprout2grow.com/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // CoachOS coachingplatform — coaching.martiendejong.nl/coaching, platform-breed voor alle
+        // tenants: de tenant reist mee via een cookie in de app zelf, dus één vaste redirect_uri
+        // volstaat (Authorization Code Flow with PKCE, public client). Taak 4448.
+        if (await manager.FindByClientIdAsync("coachos", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "coachos",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "CoachOS coachingplatform",
+                RedirectUris =
+                {
+                    new Uri("https://coaching.martiendejong.nl/coaching/api/auth/iam/callback"),
+                    new Uri("http://localhost:5188/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://coaching.martiendejong.nl/coaching/")
                 },
                 Permissions =
                 {
@@ -736,7 +965,286 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
-        // Squid Proxy (Password grant / ROPC) - used by the Squid basic-auth helper on therealm
+        // Wave — autonomous trading dashboard (Authorization Code Flow with PKCE, public
+        // client). Prod runs standalone on trading.prospergenics.com (Fastify backend
+        // handles the callback); local dev uses the Vite dev server (8080, /api proxied)
+        // or the backend directly (3001).
+        if (await manager.FindByClientIdAsync("wave", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "wave",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Wave Trading",
+                RedirectUris =
+                {
+                    new Uri("https://trading.prospergenics.com/api/v1/auth/callback"),
+                    new Uri("http://localhost:8080/api/v1/auth/callback"),
+                    new Uri("http://localhost:3001/api/v1/auth/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://trading.prospergenics.com/"),
+                    new Uri("http://localhost:8080/"),
+                    new Uri("http://localhost:3001/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // Jengo AGI Service Account — machine-to-machine auth (Client Credentials Flow).
+        // JengoAGI uses this to obtain access tokens autonomously (no user interaction).
+        // ClientSecret is configurable via JengoAgiSvc:ClientSecret in appsettings;
+        // falls back to a dev placeholder so local runs require no extra config.
+        // Scopes: openid (identity), roles (agent role claims), tenants (tenant context).
+        // This is intentionally separate from the "jengo-agi" dashboard PKCE client —
+        // the dashboard client handles interactive admin-user logins; this client handles
+        // background agent automation.
+        if (await manager.FindByClientIdAsync("jengo-agi-svc", cancellationToken) == null)
+        {
+            var jengoAgiSecret = configuration["JengoAgiSvc:ClientSecret"]
+                ?? (env.IsDevelopment()
+                    ? "jengo-agi-svc-secret-dev"
+                    : throw new InvalidOperationException("JengoAgiSvc:ClientSecret not configured in production"));
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-agi-svc",
+                ClientSecret = jengoAgiSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo AGI Service Account",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}tenants",
+                    // Task 4099: allow requesting per-resource-server tokens (aud claim comes
+                    // from the scope→resource mapping in SeedScopesAsync). Existing databases
+                    // need these two scope permissions added via the OAuth clients admin API —
+                    // client seeding is create-if-missing only.
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{TaskManagerAudience}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{JengoMcpAudience}"
+                }
+            }, cancellationToken);
+        }
+
+        // Jengo Cloud Plane — commercial control plane for Jengo Cloud Workspace
+        // (registration/plans/tenancy/usage; JengoWork epic 3629, task 3632).
+        // Public client + PKCE, same recipe as taskmanager/sinema: cookie session in the
+        // app, claims from the id_token. Runs behind the /plane path on maendeleo;
+        // localhost URIs cover local development.
+        if (await manager.FindByClientIdAsync("jengo-cloud-plane", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-cloud-plane",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Cloud Plane",
+                RedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/plane/signin-oidc"),
+                    new Uri("http://localhost:5210/signin-oidc")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://maendeleo.martiendejong.nl/plane/"),
+                    new Uri("http://localhost:5210/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // Jengo Commerce Admin — pay.prospergenics.com (Authorization Code Flow with PKCE, public client)
+        if (await manager.FindByClientIdAsync("jengo-commerce", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-commerce",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Commerce Admin",
+                RedirectUris =
+                {
+                    new Uri("https://pay.prospergenics.com/admin/"),
+                    new Uri("http://localhost:5292/admin/")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://pay.prospergenics.com/admin/"),
+                    new Uri("http://localhost:5292/admin/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        if (await manager.FindByClientIdAsync("jengo-knowledge", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-knowledge",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Knowledge",
+                RedirectUris =
+                {
+                    new Uri("https://knowledge.prospergenics.com/callback"),
+                    new Uri("http://localhost:5173/callback"),
+                    new Uri("http://localhost:5280/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://knowledge.prospergenics.com/login"),
+                    new Uri("http://localhost:5173/login"),
+                    new Uri("http://localhost:5280/login")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // Fedha Boekhouding — PKCE public client (task 5933, board boekhouding)
+        if (await manager.FindByClientIdAsync("fedha-app", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "fedha-app",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Fedha Boekhouding",
+                RedirectUris =
+                {
+                    new Uri("https://fedha.martiendejong.nl/api/auth/iam/callback"),
+                    new Uri("http://localhost:5054/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://fedha.martiendejong.nl"),
+                    new Uri("http://localhost:5054")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // WordPress SSO (task 5804, board 44): one confidential PKCE client per WordPress site that runs the
+        // Jengo IAM SSO plugin - test.prospergenics.com built in, further sites from the WordPressSso:Sites
+        // configuration section. See WordPressSsoSeeder for the recipe (secrets come from configuration on
+        // the IAM host, never from git; a site without a secret is not registered).
+        await WordPressSsoSeeder.SeedClientsAsync(
+            manager,
+            WordPressSsoSeeder.ResolveSites(configuration, provider.GetRequiredService<ILogger<DatabaseSeeder>>()),
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>(),
+            cancellationToken);
+
+        // Task 4059: Vault resolver client — confidential, client_credentials only.
+        // Secret is read from config key "VaultResolver:ClientSecret" (never committed to git).
+        // In production the value comes from the vault or an environment variable.
+        // If the key is absent the client is not seeded and all resolver calls will return 401.
+        var vaultClientSecret = configuration["VaultResolver:ClientSecret"];
+        if (string.IsNullOrEmpty(vaultClientSecret))
+        {
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>().LogWarning(
+                "VaultResolver:ClientSecret is not configured — the 'jengo-vault' OAuth client " +
+                "will NOT be seeded. All calls to GET /api/resolver/* will return 401. " +
+                "Set VaultResolver:ClientSecret to enable the who-decides resolver (task 4059).");
+        }
+
+        if (!string.IsNullOrEmpty(vaultClientSecret)
+            && await manager.FindByClientIdAsync("jengo-vault", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-vault",
+                ClientSecret = vaultClientSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Vault (who-decides resolver)",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{IAM.API.Controllers.ResolverController.ResolverScope}"
+                }
+            }, cancellationToken);
+        }
+        // Squid Proxy (Password grant / ROPC) - used by the Squid basic-auth helper
         if (await manager.FindByClientIdAsync("squid-proxy", cancellationToken) == null)
         {
             var squidSecret = configuration["Clients:SquidProxy:Secret"]

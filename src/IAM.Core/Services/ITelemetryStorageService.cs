@@ -9,6 +9,9 @@ public interface ITelemetryStorageService
     Task<TelemetryQueryResult> QueryAsync(TelemetryQuery query, CancellationToken ct = default);
     Task<List<TelemetryAggregation>> AggregateAsync(TelemetryAggregationQuery query, CancellationToken ct = default);
     Task<List<string>> GetMetricNamesAsync(string? deviceId = null, CancellationToken ct = default);
+
+    /// <summary>Metric names, limited to one tenant's records when <paramref name="tenantId"/> is set.</summary>
+    Task<List<string>> GetMetricNamesAsync(string? deviceId, Guid? tenantId, CancellationToken ct = default);
     Task<TelemetryStatistics> GetStatisticsAsync(Guid? tenantId = null, CancellationToken ct = default);
     Task<int> CleanupOldDataAsync(int retentionDays = 90, CancellationToken ct = default);
 

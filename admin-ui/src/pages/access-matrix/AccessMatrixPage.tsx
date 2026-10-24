@@ -148,17 +148,17 @@ export default function AccessMatrixPage() {
         {loading ? (
           <div className="text-gray-500 py-12 text-center">Loading access matrix...</div>
         ) : (
-          <div className="bg-white rounded-xl shadow overflow-x-auto">
+          <div className="bg-white rounded-xl shadow overflow-auto max-h-[70vh]">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="sticky left-0 bg-gray-50 z-10 text-left px-4 py-3 font-semibold text-gray-700 min-w-[220px]">
+                  <th className="sticky top-0 left-0 z-30 bg-gray-50 text-left px-4 py-3 font-semibold text-gray-700 min-w-[220px]">
                     User
                   </th>
                   {applications.map((app) => (
                     <th
                       key={app.clientId}
-                      className="px-3 py-3 font-semibold text-gray-700 text-center whitespace-nowrap"
+                      className="sticky top-0 z-10 bg-gray-50 px-3 py-3 font-semibold text-gray-700 text-center whitespace-nowrap"
                       title={`Base role: ${app.baseRole}${app.source === 'registered' ? ' (auto from OAuth client)' : ''}`}
                     >
                       {app.displayName}
@@ -169,7 +169,7 @@ export default function AccessMatrixPage() {
               <tbody>
                 {users.map((user) => (
                   <tr key={user.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="sticky left-0 bg-white z-10 px-4 py-2">
+                    <td className="sticky left-0 z-20 bg-white px-4 py-2">
                       <div className="font-medium text-gray-900">
                         {user.firstName || user.lastName
                           ? `${user.firstName} ${user.lastName}`.trim()
@@ -223,10 +223,10 @@ export default function AccessMatrixPage() {
                             <>
                               {/* click-away backdrop */}
                               <div
-                                className="fixed inset-0 z-20"
+                                className="fixed inset-0 z-40"
                                 onClick={() => setOpenMenu(null)}
                               />
-                              <div className="absolute z-30 right-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg text-left">
+                              <div className="absolute z-50 right-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg text-left">
                                 <div className="px-3 py-2 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase">
                                   {app.displayName} permissions
                                 </div>

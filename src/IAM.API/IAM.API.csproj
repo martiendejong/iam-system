@@ -13,6 +13,10 @@
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
     <PackageReference Include="Fido2.AspNet" Version="4.0.1" />
+    <!-- Task 5800: shared Jengo MCP template (scp-jengo/jengo-mcp-template), vendored as a .nupkg
+         in nuget-local/ (see the repo-root nuget.config). Provides the /mcp streamable-http
+         transport + self-contained auth scheme; IAM's tools live in Mcp/. -->
+    <PackageReference Include="Jengo.Mcp.AspNetCore" Version="1.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.*" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.*" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.*">
@@ -20,8 +24,11 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
-    <PackageReference Include="OpenIddict.AspNetCore" Version="5.9.0" />
-    <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="5.9.0" />
+    <!-- 5.9.0 was never a published version (latest 5.x is 5.8.0), so NuGet silently
+         resolved the next available version (6.0.0) instead. Pin exactly so a future
+         restore can't silently drift to whatever is newest at that time. -->
+    <PackageReference Include="OpenIddict.AspNetCore" Version="[6.0.0]" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="[6.0.0]" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
   </ItemGroup>
 

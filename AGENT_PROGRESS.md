@@ -410,3 +410,421 @@ Full `IAM.API.Tests` suite: 141 passed / 2 skipped (pre-existing) / 0 failed. No
 change this round — the `RememberMe` column and its additive migration from round 1 are
 unchanged and were already verified against the real dev `iam_db`.
 Left: nothing for this task's scope.
+
+## 2026-09-14 — task 3314
+Done: PR #114. Generated a dedicated RSA (2048-bit, KeyEncipherment) encryption cert,
+wired `OpenIddict:EncryptionCertificatePath`/`Password` into `Program.cs` (mirrors the
+signing-cert pattern incl. fail-fast), removed `AddEphemeralEncryptionKey()`. Cert placed
+at `C:/Services/IAM/encryption.pfx`, password in vault (project 6, cred 218), deployed
+`appsettings.Production.json` updated with the new keys — inert until the new binary is
+built+deployed+the service restarted (deliberately not done this session, per the
+never-redeploy-without-explicit-permission rule).
+Verified: `dotnet build` clean (0 errors) on `src/IAM.API` and `tests/IAM.API.Tests`.
+4 new tests (`OpenIddictEncryptionCertificateTests`) all pass, proving directly against
+the real OpenIddict `AddEncryptionCertificate` API and RSA-OAEP/JWE mechanism: (1) a
+DigitalSignature-only cert is rejected (PR #110's crash, regression guard), (2) the new
+KeyEncipherment cert is accepted, (3) a token encrypted by one process instance decrypts
+with an independently-loaded instance of the SAME on-disk cert (the actual restart-
+survival property this task requires), (4) the same does NOT hold for two independently
+generated ephemeral keys (proves the bug being fixed, and that the test methodology is
+sound). Also fixed the two pre-existing compile errors in
+`TokenLifetimeConfigurationTests.cs`/`EmailTwoFactorLoginTests.cs` (missing
+`ILogger<AuthService>` ctor arg) that were blocking the whole test project from building
+at all.
+Found and did NOT fix (out of scope, filed separately): `IAMTestWebApplicationFactory`
+(`WebApplicationFactory<Program>`/`HostFactoryResolver`) currently fails ~119 of 160
+tests in this suite with `JWT secret key not configured` even on an unmodified `develop`
+checkout (`git diff origin/develop` on `Program.cs`/the factory = empty) — a pre-existing,
+repo-wide, unrelated environment regression that blocks every controller/integration test,
+not just this task's own. Worked around it for this task's own verification by testing
+the OpenIddict API and crypto mechanism directly, without going through that factory.
+Left: build+deploy the new binary and restart the IAM service (human/deploy decision);
+separately, the WebApplicationFactory regression above needs its own investigation.
+
+## 2026-09-15 — task 3419
+Done: fixed the `WebApplicationFactory` regression flagged above (PR pending). Test
+project already compiled clean on this develop HEAD (someone else's fix had already
+landed the `ILogger<AuthService>` ctor arg). Root cause was `Program.cs:273` reading
+`Jwt:SecretKey` as a bare top-level statement, before `builder.Build()` — moved that read
+(and the `AddJwtBearer` key construction) inside the `.AddJwtBearer(options => {...})`
+delegate, which only runs lazily post-`Build()`, after `IAMTestWebApplicationFactory`'s
+config override is visible. Also pinned `OpenIddict.AspNetCore`/`OpenIddict.EntityFrameworkCore`
+to `[6.0.0]` (exact) — `5.9.0` was never a published version, so NuGet was silently
+floating to whatever the newest resolvable version was.
+Verified: `dotnet test tests/IAM.API.Tests` now 157 passed / 3 skipped (all pre-existing,
+documented, unrelated to this fix: a CNG-keyset host limitation and a pre-existing
+Policy Testing Sandbox 404-vs-500 bug) / 0 failed — down from 119/160 failing. Also fixed
+one newly-surfaced failure: `MagicLinkServiceTests.ValidateMagicLinkAsync_WithValidToken_*`
+was validating against the DB's already-hashed token value instead of the plaintext token
+from the emailed link, double-hashing it — a pre-existing test bug that never got to run
+before this fix.
+Left: nothing for this task. `Program.cs:185`'s `Jwt:Issuer` read (inside the OpenIddict
+`AddServer` builder) has the same before-Build() timing shape but doesn't throw and no
+OpenIddict-flow test broke because of it — left as-is per the task's own scope (real
+non-test startup unchanged).
+
+## 2026-09-20 — task 3670
+Done: Access Matrix table now scrolls in its own bounded region (`overflow-auto
+max-h-[70vh]`) instead of the whole page. Header row and first (username) column are
+both `sticky` (top-0 / left-0), the corner `th` combines both with `z-30` (above the
+column-only `z-20` and header-only `z-10` cells) so nothing bleeds through on diagonal
+scroll. Bumped the per-cell permissions dropdown's backdrop/menu to `z-40`/`z-50` so it
+still renders above the new sticky layers.
+Verified: build clean (`tsc -b && vite build`), existing suite 36/36 passed (no prior
+test covered this page). Live Playwright check against the dev server (mocked
+`/access-matrix` + `/users/me` API responses, 60 users x 12 apps) confirmed: header row
+stays at the container's top y-offset after scrolling down 800px, username column stays
+at the container's left x-offset after scrolling right 600px, the corner cell renders
+cleanly with no overlapping text, `main`'s own `scrollTop` stayed 0 (only the table's
+container scrolled), and the permissions dropdown still opens above the sticky layers.
+Left: nothing for this task.
+
+## 2026-09-24 — task 3481
+Done: `DisableAccessTokenEncryption()` so access tokens are signed RS256 JWTs (Martien picked option B), plus
+the requested security round: refresh/code grant now refuses deactivated or deleted users, userinfo returns 400
+instead of 500 for a machine token, claim destinations are deny-by-default, and `docs/ACCESS-TOKEN-VALIDATION.md`
+tells resource servers how to verify. PR #128.
+Verified: `dotnet test` IAM.API.Tests 165 passed / 3 skipped (baseline 157 / 3), 8 new in-process tests that run
+the real login/authorize/token/client_credentials/refresh flow with in-memory RSA keys (the Development dev certs
+hit the host's CNG limitation); without the Program.cs change 5 of them fail. Not verified: live deploy.
+Left: deploy is Martien's call; further hardening follow-ups are tracked as JengoWork tasks 4094-4099.
+
+## 2026-09-24 - task 3911
+Done: IAM now authenticates X-Api-Key through the shared Hazina.Security.ApiKeys middleware (Hazina PR #318); its own
+ApiKeyAuthenticationMiddleware is deleted. EfApiKeyStore = IAM's table behind the module, hash-only, raw key archived in
+Vault. New: key scope (read/write/admin, migration AddApiKeyScopeAndVaultReference), POST /api/api-keys/introspect for the
+other apps, no-escalation guard on POST /api/api-keys, tenant-scoped keys 403 on the global app-role endpoints. See docs/API-KEYS.md.
+Verified: IAM.API.Tests 180 passed / 3 skipped (pre-existing) / 0 failed, IAM.Core.Tests 1/1; 23 new tests (HTTP-level scope,
+tenant, revoked/expired, rate limit, audit, introspection incl. Hazina HttpApiKeyLookup against this IAM, issue guard); mutation-checked the tenant guard.
+Left: not deployed. Before starting the new build apply the two ALTER TABLE statements in docs/API-KEYS.md to iam_db and set
+ApiKeys__Vault__*; merge Hazina PR #318 first (IAM references it by project). Owner: Martien / whoever deploys IAM.
+
+## 2026-09-25 - task 3481 (continuation)
+Done: merged develop (3911 API-key work) into PR #128, resolved the AGENT_PROGRESS conflict, dropped a stray staged revert of
+the hardening left in the worktree, marked the PR ready with the deploy prerequisites; dependency scan clean; commented on 3231/1748, reopened 3231.
+Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
+Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
+
+## 2026-09-30 - task 4094
+Done: live rotation done earlier today (jengo-agi-svc new random secret in vault 9/212, backend_service + postman_client dropped); PR #143 adds a startup audit that logs Critical when a client secret matches a published repo default. Review added the open-webui literal that shipped 2026-06-12..2026-09-10 to the list plus DefaultClientSecretAuditTests.
+Verified: live DB read-only hash check of all 28 clients vs 8 published literals = 0 matches; old jengo-agi-svc default 401 invalid_client, vault secret 200 (3-part JWT); IAM.API.Tests 279 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; new test fails without the added literal.
+Left: the critical log only appears once IAM is redeployed (Martien's call; develop also carries other unreleased work).
+
+## 2026-10-02 - task 4701
+Done: POST /api/api-keys now follows the caller's real authority: platform-wide keys need SuperAdmin/SystemAdmin, tenant keys need SuperAdmin/SystemAdmin or a TenantAdmin UserRole for that tenant (omitted tenant = own tenant, never platform-wide); plain users get 403. Permissions (lowercase resource:action, no wildcards, max 25) and rate limit (1-1000) validated in the service (400).
+Verified: IAM.API.Tests 303 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 28 new/changed tests; mutation-checked (no-op authority check fails 9, no-op validation fails 11).
+Left: deploy is Martien's call; existing keys are not reviewed or revoked - list live keys with a null tenant for suspicious ones (read-only SELECT).
+
+## 2026-10-02 - task 4697
+Done: POST/PUT/DELETE /api/identity-providers now need SuperAdmin/SystemAdmin or a TenantAdmin UserRole scoped to the provider's stored tenant (no moving/platform-wide for tenant admins); the service validates DefaultRoleId (exists, not privileged, fits the tenant); AutoCreateUsers defaults to false; login auto-create skips a privileged default role on pre-existing rows. PR #144.
+Verified: IAM.API.Tests 375 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; 96 new tests, mutation-checked (disabling the authority checks fails 15, the role/move checks 24).
+Left: deploy is Martien's call; on the live DB check existing providers for a privileged default role (read-only SELECT); follow-ups filed for OrganizationSettings authz and the identity-provider GET endpoints.
+
+## 2026-10-02 - task 4714
+Done: PR #146 - new AuditAccessResolver used by GET /api/audit/events, GET /statistics and POST /reports: admins only, tenant admins (TenantAdmin/BuildingOwner/BuildingManager UserRoles row in that tenant) pinned to their tenant, foreign tenantId = 403, SuperAdmin/SecurityAdmin cross-tenant.
+Verified: build clean; AuditControllerTests 54/54 pass (36 of them fail on the old controller); full IAM.API.Tests 321 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped.
+Left: nothing code-wise; deploy of IAM stays Martien's call. Nothing in the repo calls /api/audit (admin-ui, SDKs, Terraform), so no client breaks.
+
+## 2026-10-02 - task 4702
+Done: webhook targets must be public addresses (shared PublicAddress classifier, IPv4+IPv6 incl. mapped/NAT64/6to4; WebhookUrlGuard checks at save, at every delivery and in the HttpClient connect callback; no redirects, no proxy); blocked deliveries are recorded failed with no body and not retried. Every /api/webhooks action except event-types needs SuperAdmin or an admin of the subscription tenant (WebhookAccessResolver, privilege check before lookup).
+Verified: IAM.API.Tests 441 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 120 new tests incl. real loopback sockets for the connect guard; mutation-checked (no-op tenant check fails 7, no-op delivery guard fails 5).
+Left: deploy is Martien call; existing subscriptions with internal URLs now fail at delivery - list them (read-only SELECT on WebhookSubscriptions) and tell owners; optional Webhooks:AllowedHosts for local dev receivers.
+
+## 2026-10-02 - task 4706
+Done: PR #149 - SocialAuthService.HandleCallbackAsync refuses a deactivated user ("Account is inactive", as AuthService does) before any write, on both the linked-identity and the email-match branch; no tokens, RefreshToken, LastLoginAt, ExternalLogin.LastUsedAt change or new ExternalLogin. SocialAuthController already answers 400 with no cookie on a failed result. Lockout deliberately not enforced.
+Verified: build clean; 18 new tests (SocialLoginInactiveUserTests: Google/Microsoft/GitHub, stub HTTP, in-memory DB, fresh-context read-back) pass; the 8 refusal tests fail on the old code (mutation-checked); full IAM.API.Tests 579 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy of IAM is Martien's call. Out of scope, own tasks: 2FA on social login 4573, refresh tokens ignoring IsActive 4709, unverified-email linking 4707.
+
+## 2026-10-02 - task 4699
+Done: PR #162 - SCIM user list/get/replace/patch/delete only see in-tenant users (non-expired UserRoles row, or a successful Create in the token tenant's SCIM log); anything else is 404 and list counts exclude it. Replace/patch/delete also 404 for users who hold a tenant-less or other-tenant role (expired rows count, fail closed). Moving an email (or phone) onto another account is 409 without naming it; PATCH edits are dropped on conflict. Filters/sort/paging start from the scoped query so they only narrow it.
+Verified: build clean; 21 new ScimUserTenantScopeTests pass; 5 mutations (get, list, multi-tenant guard, collision check, log-row scope) fail 1-5 tests each; full IAM.API.Tests 600 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; SCIM-provisioned users from before this fix with no log row and no role become invisible to SCIM. Group member adds still accept any user id (own task). ApplyUserFilter unchanged (PR #157 / 4710 touches it).
+
+## 2026-10-02 - task 4712
+Done: PR #153 - delegations follow the caller's authority in DelegationService: create only as yourself (or a SuperAdmin/SystemAdmin for someone) and only for permissions the delegator holds in the tenant; wildcard grants always need approval; approve needs a different admin of the tenant (never delegator/delegate); revoke = delegator, delegate or admin; delegation reads and effective-permissions scoped to the caller; SoD constraint create/update/delete = SuperAdmin/SystemAdmin only. Expired roles no longer count as held.
+Verified: IAM.API.Tests 664 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 85 new tests (41 fail on the old code); 13 mutations of the checks each fail at least 1 test.
+Left: deploy is Martien's call; wildcard-forces-approval and TenantAdmin-only tenant authority are my assumptions (one line each to change); SoD violation resolve and SoD reads are still open, filed as task 4741.
+
+## 2026-10-02 - task 4709
+Done: PR #152 - refresh refuses inactive users (same generic error); SCIM delete/PUT/PATCH, directory-sync disable and security-alert lock_account now revoke refresh tokens, via one shared helper (RefreshTokenRevocation) that merge, erasure, admin deactivate and password reset also use; admin password change revokes; replay of a rotated token revokes all of the user's active tokens (warning + audit row). Rotation is marked by successor.CreatedAt == predecessor.RevokedAt, so no migration.
+Verified: build clean; 23 new tests (RefreshTokenSessionEndingTests) pass; each fix mutation-checked (disabling it fails its test); full IAM.API.Tests 602 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; access tokens already issued live to their expiry (5 min default). Follow-ups: portal self-service password change 4748, directory sync disables other tenants' LDAP users 4749.
+
+## 2026-10-02 - task 4711
+Done: access-request approvals count distinct approvers (new ApprovalVotes table, unique per step+user, additive migration 20261002120000; ApprovalsReceived kept and still incremented, in-flight steps keep their count and their last approver cannot double-count) and the requester can neither approve nor deny their own request (checked first, before role/SuperAdmin/named-approver).
+Verified: build clean; 14 new AccessRequestApprovalTests pass; disabling the self-check or the duplicate-check fails 7 / 3 of them; migration SQL scripted (CREATE TABLE + 2 indexes only); full IAM.API.Tests 593 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: migration must be applied before the IAM deploy (Martien call); the earlier 20260926120000 migration has no [Migration] attribute so EF does not discover it - pre-existing, not touched.
+
+## 2026-10-02 - task 4708
+Done: PR #164 - one TelemetryAccessAuthorizer behind the telemetry hub and REST API: a device token acts only for its own device (publish/status/receive, never commands), users read tenants they belong to (SuperAdmin all), publish/status/commands need SuperAdmin/BuildingOwner/BuildingManager of the device's tenant, tenant and type come from the device registry, the device-type stream is per tenant, query/export/aggregate/statistics/metrics/latest are tenant-pinned, cleanup is SuperAdmin/SystemAdmin only.
+Verified: IAM.API.Tests 701 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; 37 new tests drive the hub with a real SignalR client and the REST endpoints with a token per caller type (30 fail on untouched develop, 4 mutations of the gates each fail tests).
+Left: deploy is Martien's call; SubscribeToDeviceType now joins the caller's single tenant (multi-tenant callers and SuperAdmin use the new SubscribeToTenantDeviceType); DevicesController is task 4726 / PR #151; DeviceAuth/MQTT is 4718.
+
+## 2026-10-02 - task 4707
+Done: PR #163 - SocialAuthService only matches an existing account by e-mail when the provider verifies it: Google email_verified (bool or "true"), GitHub verified primary from /user/emails, Apple email_verified id_token claim; Microsoft never (refused with a clear message, link it explicitly instead). Refusals write nothing; linked identities and LinkAccountAsync are unchanged; auto-created users get EmailConfirmed only when verified. Apple id_token claims are now read under both claim-type spellings.
+Verified: build clean; 29 new tests (Google/GitHub/Microsoft/Apple, 6 guard mutations each fail them); 4706 stubs updated (verified e-mail, Microsoft e-mail-match cases moved); full IAM.API.Tests 606 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; follow-up task 4765 (auto-create with an unverified e-mail can still pre-create an account a later verified login matches).
+
+## 2026-10-02 - task 4710
+Done: SCIM user/group filters parse once with no recursion; unparseable, unsupported or over-limit (512 chars, 10 and-terms) filters throw ScimFilterException -> 400 invalidFilter instead of overflowing the stack or returning everyone.
+Verified: build clean; 35 new ScimFilterTests pass (bad-filter cases crash the test host with a stack overflow on develop); full IAM.API.Tests 614 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien call; known-but-unsupported attribute/operator pairs and bad values now 400 (was silently unfiltered) - integrations relying on that will see 400s. SCIM tenant scoping is 4699.
+
+## 2026-10-02 - task 4705
+Done: PR #161 - risk thresholds (GET/GET id/POST/DELETE) and the dashboard need SuperAdmin or SecurityAdmin; scores, trusted devices (list/add/remove) and manual assess only work for the caller's own user id (taken from the token, omitted = own, another id = 403) unless platform admin; device, service-account and API-key tokens are not users (403); threshold validation: 0 <= Low < Medium < High < Block, Block 1-100, RequireMfaAbove 0-99 and below Block.
+Verified: build clean; 33 new tests pass (4 of 5 guard mutations fail them; the 5th is equivalent because the Block ordering already implies the MFA cap); full IAM.API.Tests 612 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; AuthService login-time evaluation untouched and its tests still pass.
+Left: deploy is Martien's call; existing stored thresholds that violate the new rules are not changed (check the live RiskThresholds table read-only); admin-ui riskApi sends userId as before and needs no change.
+
+## 2026-10-02 - task 4698
+Done: PR #159 - every /api/directory-sync action needs SuperAdmin or an active BuildingOwner row for the config's tenant (403 before lookups; create uses the body TenantId). Group-to-role mapping to platform-wide roles (SuperAdmin, SystemAdmin, SecurityAdmin, ComplianceOfficer, EmergencyAccess, Admin, by name) is 400 at save and ignored at sync. The sync loop only touches its tenant's users (regular accounts of other tenants untouched, no phone/re-enable for them, disable-missing limited to this tenant's LDAP-managed users). ldaps:// only, public address outside SuperAdmin; bind password stored encrypted via the vault (legacy rows encrypted by the worker sweep or on first use), never returned.
+Verified: build clean; 49 new DirectorySync tests pass; 5 mutations fail 1-3 tests each (tenant check, other-tenant users, disable scope, platform mapping, plain password); full IAM.API.Tests 628 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; existing ldap:// configs stop syncing until moved to ldaps://. SuperAdmin-saved internal hosts also need DirectorySync:AllowedHosts at connect time (no schema change). Connect-time DNS is checked then re-resolved by the LDAP library (no pinning).
+
+## 2026-10-02 - task 4698 (review)
+Done: reviewed PR #159; merged develop in (4709's disable-missing token test needed the new DirectorySyncService constructor and a tenant with members - fixed); added TenantAdmin to the platform-wide role set a directory group can never be mapped to (it gates the temporal-access endpoints, which take any tenant id from the body) plus a test that fails when a role used in [Authorize(Roles)] is not classified.
+Verified: build clean; full IAM.API.Tests 738 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; the two new tests fail with TenantAdmin removed.
+Left: sync-created users with no mapped role belong to no tenant, so any tenant's sync can still adopt them (needs an ownership marker = schema change); deploy is Martien's call.
+
+## 2026-10-02 - task 4738
+Done: PR #150 - GET/PUT /api/organization-settings/{tenantId} need SuperAdmin/SystemAdmin or an active TenantAdmin UserRole for that tenant (403 before the tenant lookup; a token scoped to another tenant fails closed); PUT validates DefaultRoleId via shared DefaultRoleRules (exists, non-privileged, global or the tenant's, else 400, nothing written); bulk invites refuse an already-stored privileged/foreign default role per row. Active-TenantAdmin query extracted to TenantAdminAuthority, shared with SocialAuthService.
+Verified: build clean; 58 OrganizationSettings tests pass; full IAM.API.Tests 637 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; mutation-checked (no-op authority check fails 15, no-op default-role check fails 19).
+Left: deploy of IAM is Martien's call; on the live DB check existing OrganizationSettings rows for a privileged DefaultRoleId (read-only SELECT) - bulk invites already refuse them. BuildingOwner/BuildingManager are not tenant admins here (TenantAdmin only, as in #144).
+
+## 2026-10-02 - task 4704
+Done: PR #158 - all 8 /api/secrets actions need SuperAdmin or an administrator (TenantAdmin/BuildingOwner/BuildingManager UserRoles row) of the secret's own tenant (SecretsAccessResolver; privilege checked before lookup); global secrets are SuperAdmin only; list is filtered to manageable secrets; create for a foreign/global tenant is refused; idp-client-secret-* entries cannot be updated, rotated or deleted (or created/renamed to) through the API; the service is untouched so SocialAuthService and SecretRotationWorker keep working.
+Verified: build clean; 19 new tests pass (5 guard mutations each fail them); full IAM.API.Tests 598 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call; admin-ui is the only client (user JWT) and needs no change; API keys and service accounts are refused on purpose.
+
+## 2026-10-02 - task 4703
+Done: PR #155 - all 13 /api/securityalerts actions need SuperAdmin or SecurityAdmin; SIEM responses are a DTO without AuthConfig (hasAuthConfig + masked, update keeps the stored credential when blank or masked); rule webhook/Slack targets and SIEM URLs go through IWebhookUrlGuard at save and at send time; rules with an automatic response are SuperAdmin-only; acknowledge reads the user id from NameIdentifier or sub.
+Verified: build clean; 32 new tests pass (5 guard mutations each fail them); full IAM.API.Tests 611 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; admin-ui change not built (no node_modules in the worktree).
+Left: deploy is Martien's call; SIEM credentials already stored stay plain JSON in the DB (vault move out of scope); SecurityAdmin editing a rule that has an auto-response and omitting it clears it.
+
+## 2026-10-02 - task 4700
+Done: PR #156 - members list/role change/removal and invitations send/bulk/list/pending/revoke need SuperAdmin or an active BuildingOwner/BuildingManager row in the request's tenant (403 before lookups). One shared rule (TenantRoleGrantRules, by role name): platform roles SuperAdmin-only, BuildingOwner/TenantAdmin/OrganizationOwner owner-only, other-tenant custom roles refused; no self role change/removal, managers cannot touch owner-level members, last BuildingOwner protected (409). Acceptance re-checks the sender (platform role needs a SuperAdmin sender now). Service accounts keep their gate but cannot grant platform roles.
+Verified: build clean; 47 new TenantMemberManagementAuthorizationTests pass; mutation-checked (no tenant scope fails 8, no grant rule fails 17); full IAM.API.Tests 626 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Not stacked on #151/#150 (own helpers; InvitationService bulk-invite region may need a trivial merge with #150). Open: TenantAdmin/OrganizationOwner treated as owner-level (not in the ticket's list).
+
+## 2026-10-02 - task 4726
+Done: PR #151 - new ITenantAccessResolver (users via UserRoles rows, API keys via scope + CanAccessTenant, device and service-account tokens refused, tenant_id claim pins the tenant) gates all 9 /api/devices actions: reads need membership (foreign device 404, foreign tenant in the URL 403, lists limited to the caller's tenants), register/update/deactivate need SuperAdmin or a TenantAdmin/BuildingOwner/BuildingManager row in the stored device's tenant (register checks before the duplicate-id check); ProvisionedByUserId comes from the caller. Python SDK list_devices() without a tenant now calls GET /api/devices.
+Verified: build clean; 34 new tests (HTTP matrix + API-key controller tests) pass and 6 mutations of the guards each fail them; full IAM.API.Tests 613 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; Python SDK admin tests 5 passed.
+Left: deploy of IAM is Martien's call. Task 4708 (telemetry hub/REST) should reuse ITenantAccessResolver and add the device-token-acts-on-itself case itself (the resolver refuses device tokens on purpose).
+
+## 2026-10-02 - task 4739
+Done: GET /api/identity-providers and /{id} now admin-only: SuperAdmin/SystemAdmin read all; a TenantAdmin (active UserRole, tenant_id claim narrows) reads their tenants' providers plus platform-wide ones, another tenant's = 403; plain users 403 whatever the id. New actor-aware service reads (GET by id queries one row); /public and its service method untouched; response shape unchanged.
+Verified: build clean; 18 new IdentityProviderReadAuthorizationTests + the flipped AdminListing test pass (10 of the 18 fail on the old source); full IAM.API.Tests 597 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Branched from develop, not stacked on #150 (own private tenant-admin helper in SocialAuthService, same as #144's).
+
+## 2026-10-02 - task 4764
+Done: SCIM group create, replace and patch(add) only add users of the token's own tenant (UsersInTenant from 4699, one shared InTenantUserIdsAsync); foreign ids are skipped like unknown ids; group get/list/response builders list only in-tenant members, so already stored foreign memberships are hidden.
+Verified: build clean; 9 new ScimGroupMemberTenantScopeTests (7 fail on unchanged develop); Scim filter 71 passed; full IAM.API.Tests 1122 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Foreign membership rows already stored are hidden, not deleted.
+
+## 2026-10-02 - task 4741
+Done: PR #167 - SoD violation resolve = global admin or admin of the violation's tenant, never the affected user (even an admin); violations list = all for a global admin (no tenant) or admin of the asked tenant, otherwise only your own; check for another user needs a global admin or an admin of every tenant the user holds roles in (own id always works); constraint list/get = admin of the tenant only. All checks in DelegationService (actor parameter), controller only builds the actor and maps 403; refusals happen before any write.
+Verified: build clean; 26 SodAuthority tests (13 fail on unchanged develop), DelegationAuthority + SodAuthority 111 passed; full IAM.API.Tests 1139 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped. The old 4712 "SoD reads stay open for a plain user" test was flipped on purpose.
+Left: deploy is Martien's call. Admin UI reads these endpoints as admin only (no change needed); the existing check records one violation per role row (pre-existing duplicate quirk, untouched).
+
+## 2026-10-02 - task 4765
+Done: PR #165 - a verified social login (Google/GitHub/Apple) whose e-mail matches an existing account that is not e-mail confirmed is refused before any write (no ExternalLogin, no tokens, no user change); a confirmed account still links and signs in (4707 unchanged), an already linked identity and explicit linking are untouched. Stops the unverified-Microsoft-auto-create (or never-confirmed password registration) pre-hijack of the real owner.
+Verified: build clean; 12 new test cases in SocialLoginVerifiedEmailTests (5 of them fail on unchanged develop, incl. the pre-hijack sequence); SocialLogin filter 57 passed; full IAM.API.Tests 1125 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Accounts auto-created through Microsoft before 4707 were stored with EmailConfirmed = true, so the guard cannot see them; a data audit is filed as a follow-up. A legit user who registered but never confirmed is refused with a "confirm your e-mail" message.
+
+## 2026-10-05 - task 4573
+Done: PR #171 - passkey login and social/SSO login (existing, linked and auto-created accounts) now go through IAuthService.CompletePasswordlessLoginAsync like magic-link/OTP. A 2FA account gets { requiresTwoFactor: true, userId } with no cookie/token and finishes through the existing verify-code endpoint; accounts without 2FA sign in as before. SocialAuthService no longer mints tokens (its duplicated token code is gone; it takes IAuthService, drops IClaimsMappingService).
+Verified: build clean; 14 new tests in PasskeySocialTwoFactorLoginTests, and re-introducing any one bypass makes 1 to 6 of them fail; full IAM.API.Tests 1174 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: TOTP is only gated once PR #142 (4521) merges, because it extends the same method; then the two new 2FA responses should also carry twoFactorMethod. Deploy is Martien's call.
+
+## 2026-10-05 - task 4992
+Done: PR (this branch): migration AddPrincipalKindAndManager + snapshot + docs/manual-migrations SQL for #137 (Users/ServiceAccounts ManagerUserId, PrincipalKind), which shipped no migration; separate commit fixes the ApprovalStep Navigation("Votes") snapshot entry that stopped EF loading the snapshot. a005238 is deployed live on maendeleo (SQL applied first, config and certs kept).
+Verified: 05-10 rollback reproduced on a copy of live data ("column u.ManagerUserId does not exist"), gone after the SQL; live token carries aud=iam_api; EF generates the same SQL as the manual script; a throwaway `migrations add` no longer mentions the new columns; IAM.API.Tests 1160 passed / 2 failed (PkceMethodsTests, same on untouched a005238) / 3 skipped.
+Left: develop HEAD (~20 security PRs + AddApprovalVotes) is NOT deployed; it needs docs/manual-migrations SQL for ApprovalVotes first. Live __EFMigrationsHistory has no row for the new migration (the app only uses EnsureCreated).
+
+## 2026-10-08 - task 5097 (AUTH-00)
+Done: docs/auth-00/ - inventory of IAM / Password Manager / Jengo web / Lango / Bitwarden, ADR-0001 (D1-D10), threat model (23 threats), compatibility matrix, key custody decision, estimate. Chosen: the fresh-confirmation verifier sits next to the seeds in Password Manager (not in IAM); trusted browser = named registration owning a refresh-token family; owned TOTP component, not Bitwarden. Companion PoC is passwordmanager branch feat/5097-auth-00-authenticator-adr (flag off, fictional data). Follow-up packages AUTH-01..05 exist as 5102-5107 (planned, dependencies in their descriptions). No IAM code changed.
+Verified: PoC rebuilt clean and its 92 authenticator tests pass (real ES256 virtual authenticator). Not verified: real Android/desktop browser, live host key custody, Bitwarden `bw serve` security notes.
+Left: Martien confirms ADR section 7 (D1/D2, recovery-package holders, pilot account); AUTH-01 waits on 5053 and the develop deploy (5000).
+
+## 2026-10-09 - task 5164
+Done: PR #177 - the six building-management controllers (Location, Building, Floor, Room, RoomGroup, IoTDevice) share BuildingManagementControllerBase on top of ITenantAccessResolver (4726): device / service-account / token-exchange tokens get 403, writes need SuperAdmin or TenantAdmin/BuildingOwner/BuildingManager in the tenant, reads need tenant membership; tenant = tenant_id claim, else ?tenantId, else the caller's only tenant. Create/update bind input models (BuildingManagementRequests.cs); parent ids must belong to the tenant.
+Verified: build clean; 16 new BuildingManagementAuthorizationTests (15 fail on the old controllers); IAM.API.Tests 1190 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Device tokens lose these endpoints (no repo client used them); a read-only device endpoint is not added. Update does Update(entity) on a loaded graph, so child rows get redundant UPDATEs (pre-existing service behaviour).
+## 2026-10-09 - task 5003
+Done: PR #176 - IdentityProviders.AllowedRedirectUris is text in the model snapshot (one line) and in 20260926120000_AddAllowedRedirectUrisToIdentityProvider, which now has [DbContext]/[Migration] so EF registers it; manual SQL already said text.
+Verified: `migrations list --no-connect` shows 20260926120000; a throwaway `migrations add Probe` gave an empty Up() and Down() (probe files removed, nothing applied to any database); IAM.API.Tests 1174 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 1 passed.
+Left: nothing for this task. Live __EFMigrationsHistory still has no row for this migration (the app uses EnsureCreated; never run `database update` there).
+## 2026-10-09 - task 5163
+Done: PR #181 - GET /api/roles and /api/roles/{id} are administrator-only (SuperAdmin/SystemAdmin/SecurityAdmin see all; a tenant administrator sees global roles plus their tenants' roles; others 403). Holders (names, e-mails, userCount) are limited to the tenants the caller administers, so a tenant admin never sees who holds SuperAdmin. POST /api/roles: a BuildingOwner may only create a plain role in a tenant they own (tenant from their own BuildingOwner rows, never the body); no tenant, another tenant, an "app:" category, a "*" permission or a platform role name = 403. SuperAdmin unchanged.
+Verified: build clean; 43 new API tests (HTTP matrix + API-key cases) and 25 Core rule tests pass; three mutations (no admin gate, no holder tenant filter, no create check) fail 9, 2 and 15 of them; full IAM.API.Tests 1217 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. The admin-ui role form sends no tenantId, so a BuildingOwner creating a role there now gets 403 (follow-up 5222: tenant picker). Not done: requiring an app: category to match a registered client (SuperAdmin-only now).
+## 2026-10-09 - task 5166
+Done: PR #182 - LoginAsync answers an unknown email, a wrong password and a wrong password on a locked account with the same "Invalid email or password" after one BCrypt check each (dummy hash for unknown emails); password failures no longer set IsLockedOut/LockoutEnd/FailedLoginAttempts. New in-memory LoginThrottle (per typed email + IP: 3 free failures, then 2/4/8..60 s as 429 + Retry-After; per-IP cap 30 failures / 15 min; IPv6 keyed on /64; config RateLimiting:Login*). The 2FA lock (4523) is only reported after a correct password, without a timestamp, and a correct password no longer resets the 2FA counter while a second factor is pending (an expired lock is still cleared).
+Verified: build clean; 37 new tests (throttle unit, AuthService, real HTTP pipeline incl. spoofed X-Forwarded-For and another IP); removing the dummy BCrypt check or the 2FA counter guard each fails tests; full IAM.API.Tests 1211 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped. Not verified: live POST /api/auth/login (no deploy) and a stopwatch timing check on the live host.
+Left: merges with PR #142 (4521/4523): conflicts only in AGENT_PROGRESS.md and the two test constructors; add `AuthServiceTestFactory.CreateLoginThrottle()` to every `new AuthService(` (incl. the new TotpTwoFactorLoginTests). Deploy is Martien's call; throttle state is in memory, so a restart clears it.
+## 2026-10-09 - task 5147
+Done: PR #178 - TenantRoleGrantRules.Check (the one rule behind role change, invitation, bulk invite and acceptance) now refuses federated app roles (Category app:* or a client:role name) and other PrivilegedRoles.IsPrivileged roles (admin-like name, wildcard permissions) for everyone but a SuperAdmin; new problems FederatedAppRole / PrivilegedRole. BuildingManager and the owner-level roles keep their old handling; decided on name and category, never only TenantId.
+Verified: build clean; 29 new unit test cases (TenantRoleGrantRulesTests) and 7 new controller tests over all four grant paths (5 fail on the old rule); IAM.API.Tests 1181 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. App-role grants already given to members are not revoked (a data audit would be a separate task). A custom tenant role whose name merely contains "admin" or has wildcard permissions is now SuperAdmin-only too.
+## 2026-10-09 - task 5165
+Done: PR #179 - new CertificateAuthoritySettings resolves Ca:* once at startup and refuses to start outside Development without Ca:CertificatePassword (before any CA file is read); the hardcoded default is gone (Development uses a documented dev-only password); a key file made with an older version's password is re-saved with the configured one on first start, same key and thumbprint, only when Ca:LegacyCertificatePassword is explicitly configured; default path is outside the app folder, but an existing ./ca-certs/ca.pfx is kept in place (a new CA would orphan every device certificate).
+Verified: build clean; 17 new CertificateAuthorityPasswordTests (missing/wrong password, re-protect with same thumbprint and chain, no default fallback); Production start without the password fails with the clear message; IAM.API.Tests 1191 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy prerequisite (Martien): back up the live ca.pfx, then set Ca:CertificatePassword (strong, from vault) AND one-time Ca:LegacyCertificatePassword (the old default, see git history) in the IAMSystem configuration, start once, then remove the legacy setting.
+## 2026-10-09 - task 5002
+Done: PR #180 - AuthorizationController.Exchange: the authorization_code grant now rebuilds the role claims from the user's stored roles and sets destinations (as the refresh branch does). Cause: SuperAdminClaimsTransformation also runs on the principal read from the code and adds 7 implied role claims with no destinations, so OpenIddict could not build the refresh token (empty 500 "Conflicting destinations for the claim 'role'"). Implied roles never get a destination, so tokens carry exactly the stored roles.
+Verified: build clean; 12 new SuperAdminOfflineAccessTests (real login/authorize/token/refresh, in-memory RSA keys; SuperAdmin alone, SuperAdmin + app roles, several app roles, one role at two tenants, with and without offline_access; the 4 SuperAdmin cases fail on develop); RefreshTokenRoleRecheck + AccessTokenFormat tests still pass; IAM.API.Tests 1186 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. Not tested against the OpenIddict 7.x bump in open PRs #122/#123; a curl round trip on a local copy was not run (the in-process test uses the real pipeline).
+## 2026-10-10 - task 5153
+Done: PR #188 - RegionsController is SuperAdmin/SystemAdmin only on every action (reads too: they return endpoints and stored error text); register/update refuse endpoints the webhook guard refuses (private, loopback, link-local, non-http(s), credentials) with 400; the "RegionHealth" HttpClient now uses WebhookHttpHandler (connection-time address guard, no redirects, no proxy, 10 s timeout), so the on-demand check and RegionHealthWorker (both RegionService) never dial a private address.
+Verified: build clean; 37 new tests (RegionAuthorizationTests, RegionHealthClientTests with real loopback sockets incl. redirect to private/metadata address), 24 fail on develop sources; IAM.API.Tests 1247 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. Regions already stored with private endpoints are not migrated; their health check now reports Offline. The admin-ui RegionDashboardPage (platform admins) was not checked in a browser; non-admins now get 403 there.
+## 2026-10-10 - task 5150
+Done: PR #190 - tenant branding is restricted to safe values (new IAM.Core BrandingSanitizer): custom CSS is an allow-list (no @-rules, url()/image-set/expression, attribute selectors, escapes, nesting, non-presentation properties), login title/subtitle plain text, e-mail header/footer HTML sanitized to a tag/attribute allow-list (also again at send time), colors hex, image URLs http(s) or site-relative; all checked on save (400 with the reasons), on read (public endpoints) and by a startup BrandingCleanup pass. A custom domain must be a plain host, never a platform host (Branding:PlatformHosts, issuer host, localhost, request host) or another tenant's, and is only served by by-domain after a DNS TXT proof (_iam-verify.<domain> = HMAC-derived value over server secret + tenant + domain, looked up over DNS-over-HTTPS; no schema change, no migration). On a platform host /api/branding/public/{slug} is 404, so ?tenant= shows the default look; admin-ui LoginPage re-checks CSS and image URLs before the DOM.
+Verified: build clean; 148 new IAM.Core.Tests (sanitizer, incl. case/escape/comment/nesting/markup bypasses) + 27 new IAM.API.Tests (TenantBrandingSafetyTests: 26 fail on develop) + 30 admin-ui tests; IAM.API.Tests 1237 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 178 passed; admin-ui vitest 69 passed, tsc clean.
+Left: deploy is Martien's call: set Branding:PlatformHosts if the login host differs from the issuer host; every custom domain stored before this stops being served until its tenant publishes the TXT record (GET /api/branding/{tenantId}/domain-verification shows it); the server needs outbound HTTPS to cloudflare-dns.com. Who may write branding stays with the IDOR PR #141 (it edits the same controller; expect a small merge conflict). Real DNS lookup not exercised (fake resolver in tests).
+## 2026-10-10 - task 5152
+Done: PR #187 - workflow templates are now an administrator surface: SuperAdmin manages all (global ones only SuperAdmin), an active BuildingOwner/BuildingManager (TenantManagementAuthority) manages their tenant's templates and can read global ones, everyone else (ordinary users, device/service tokens, API keys) gets 403. Auto-approve rules need a narrowing condition (RoleId or MaxPriority below Critical) on save (400) and at approval time (stored wildcard rules are skipped; rule names are now case-insensitive); access requests need an existing role and active tenant (400).
+Verified: build clean; 41 new tests (WorkflowTemplateAuthorizationTests, 28 fail on develop, incl. the full attack sequence staying Pending); IAM.API.Tests 1251 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: before deploy check live data for stored templates with an empty rule (they stop auto-approving), Martien's call. TenantAdmin alone does not manage templates (same rule as invitations). admin-ui WorkflowTemplatesPage not checked in a browser (needs a logged-in manager).
+
+## 2026-10-09 - task 5053
+Done: PR #183 - /connect/authorize honours prompt=none: no session, inactive user or no user id -> redirect to the app's redirect_uri with error=login_required (+ original state); app-role denial -> access_denied; no HTML page, no 400, no login redirect. Without prompt=none nothing changes. IAM.Session cookie SameSite Strict -> Lax (Program.cs; only /connect/authorize reads it); refreshToken stays Strict. docs/SILENT-SIGN-IN.md also records the Remember me default: A (no reply to the decision comment, so it ships as stated in the task).
+Verified: build clean; 11 new PromptNoneTests (real login -> authorize, PKCE client, in-memory RSA keys; 5 fail with the src change stashed, the other 6 are unchanged-behaviour guards); IAM.API.Tests 1221 passed / 2 failed (PkceMethodsTests, same two as on untouched develop in earlier entries) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is gated on task 5000 and is Martien's call; cross-domain cookie delivery needs one manual browser check after deploy. Out of scope and unchanged: only password/2FA login creates IAM.Session (magic link, OTP, passkey, social do not), prompt=login and max_age are still ignored.
+
+## 2026-10-10 - task 5157
+Done: portal POST /api/portal/change-password now ends the user's other sessions (refresh tokens via the shared RevokeRefreshTokensAsync, which got an optional "keep this one" id, plus UserSessions via SessionService) and keeps the caller's own refresh token (the signed refresh_token_id claim; the X-Session-Id header only picks the UserSession to keep). A wrong current password counts toward the login lockout (5 tries, 15 min, 423 while locked, refused even with the right password); a correct one resets the counter. The lockout rule is now one class, LoginLockout (IAM.Core), used by AuthService login, the 2FA step and the portal.
+Verified: build clean (0 errors); 11 new PortalChangePasswordTests (removing the revoke call fails 4, removing the failure count fails 3); full IAM.API.Tests 1221 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30/30. Not verified: a live request against the deployed portal (no deploy).
+Left: open PRs #182 (5166, removes the password-failure lockout from LoginAsync) and #142 (4521/4523) edit the same AuthService lines, so whichever merges second resolves a small conflict; after #182 the portal would be the only place a wrong password locks the account (Martien's call). Concurrent wrong tries can still slip past the counter, same as at login.
+## 2026-10-10 - task 5155
+Done: PR #192 - EfApiKeyStore.ToRecord reports a key inactive while its owner is inactive (middleware and introspection both read it); one helper (ApiKeyRevocation.RevokeApiKeysAsync) revokes the owner's keys from admin deactivate, lock_account, SCIM delete/patch/replace, directory sync, account merge and GDPR erasure, then drops the revoked hashes from the key module's cache so the 2-minute cache cannot keep a dead key alive in this process.
+Verified: build clean; 11 new end-to-end tests through the real pipeline (each of the 8 routes: key 200 -> deactivate -> 401 + introspection inactive + row revoked, other users' and ownerless keys untouched, reactivation does not revive it) and 6 helper tests; the 9 route/store tests fail on untouched develop (the 2 ownerless/active-owner tests pass there, as intended); IAM.API.Tests 1227 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. Other apps validating through introspection keep their own 2-minute cache, so a deactivated owner's key stops there within about 2 minutes. Keys of users deactivated BEFORE this ships are rejected by the store check but stay marked active in the table, so reactivating such a user would revive them: follow-up task 5224 (one-time revoke).
+## 2026-10-10 - task 5160
+Done: PR #189 - all 13 NetworkPolicyController routes (IP allowlist, geo restriction, geofences, blocked log, check-ip) need SuperAdmin/SystemAdmin or an active TenantAdmin/BuildingOwner/BuildingManager row in the addressed tenant (new TenantAdminAuthority.HasAdministratorRoleInTenantAsync / ...InAnyTenantAsync; the TenantAdmin-only IsAdminOfTenantAsync of org settings is unchanged). Id routes load the stored entry's tenant after a coarse admin gate; a caller who may not act gets the same 403 for foreign and unknown ids, a global admin still gets 404. Role claims, other-tenant tokens, device / service-account tokens and API keys are refused.
+Verified: build clean; 21 new NetworkPolicyAuthorizationTests, 14 fail on develop sources; IAM.API.Tests 1231 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. The admin-ui pages for network policy (tenant admins) were not checked in a browser; users without an admin role now get 403 there. Enforcing the rules at login stays out of scope.
+## 2026-10-10 - task 5156
+Done: PR #191 - one shared rule (UserRoleActivity.WhereActive, IAM.Core) now filters expired role assignments at every site: JWT sink (AuthService.GenerateAccessToken), OIDC initial/refresh grants, userinfo roles and tenants, the app sign-in check (and the tenant it picks), and ClaimsMappingService (tenant lookup, preview roles, role-based rules). The authorizers that already filtered are untouched.
+Verified: build clean; 24 new tests (service-level JWT, in-process OIDC login/refresh/userinfo, rule unit tests), 17 fail on untouched develop; IAM.API.Tests 1251 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 37 passed.
+Left: deploy is Martien's call. Tokens issued before an expiry stay valid until they time out (JWT 5 min, OIDC 15 min), as the task accepts; capping lifetime at the role expiry is out of scope.
+## 2026-10-10 - task 5166 (review)
+Done: reviewed PR #182 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). The two HTTP throttle tests used the wall clock, so on a busy host the 2 s wait after the 4th failure ran out between requests (ASpoofedXForwardedForDoesNotEscapeTheThrottle failed once in a full-suite run); the test factory now swaps in a LoginThrottle on a frozen ManualTimeProvider.
+Verified: build clean; IAM.API.Tests 1268 passed / 2 failed (PkceMethodsTests, same failures noted on untouched develop in tasks 5147/5165/5002/5160) / 3 skipped, run on the merged head.
+Left: nothing in code. Deploy is Martien's call; live POST /api/auth/login 6x check and the stopwatch timing check need the deploy; throttle state is in memory (restart clears it).
+## 2026-10-10 - task 5156 (review)
+Done: reviewed PR #191 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Read every role/UserRoles site that feeds a token (JWT sink, OIDC authorize/code/refresh, userinfo, app sign-in gate, ClaimsMappingService); none missed, authorizers untouched. The filter translates to the same `ExpiresAt IS NULL OR ExpiresAt > @utcNow` SQL on Npgsql as the existing authorizers.
+Verified: build clean on the merged head; IAM.API.Tests 1331 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 61 passed; the 24 new tests: 17 fail with develop's three source files put back, 7 (the "issued as before" cases) pass either way.
+Left: nothing in code. Deploy is Martien's call.
+## 2026-10-10 - task 5152 (review)
+Done: reviewed PR #187 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Read the controller gate, the stored-tenant checks (update cannot move a template to another tenant), the shared AutoApproveRules rule used on save and at approval time, and the request validation; no other path creates templates or access requests.
+Verified: build clean on the merged head; IAM.API.Tests 1399 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 61 passed; with develop's controller and service put back, 28 of the 41 new tests fail.
+Left: nothing in code. Before deploy (Martien): check live templates for empty-rule auto-approve, which now stop approving; stored camelCase "roleId" rules now narrow instead of matching everything.
+## 2026-10-10 - task 5145
+Done: PR (see ClickUp) - ServiceAccountService.ExchangeTokenAsync now runs every check before issuing: subject token must be the caller's own (new callerId parameter, taken from the bearer in the controller), a user or service-account token only (exchanged and device tokens refused), account still active, requested scopes within the subject's permissions (service account: its current Permissions; user: permissions of roles in force, since user tokens carry no scope claim), IAM's own audience refused as target, expiry = earlier of 15 min and the subject token's expiry. All failures return the same invalid_grant; the TokenExchanges audit row is still written on success.
+Verified: build clean; 17 new TokenExchangeHardeningTests (15 fail with the old logic); IAM.API.Tests 1248 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call; check external callers first (none in this repo). Device-token subjects are now refused (no account check defined for them). The user-scope rule is the refinement's proposal, unconfirmed.
+## 2026-10-10 - task 5145 (review)
+Done: reviewed PR #194 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides) and switched the role-in-force filter to the shared UserRoleActivity.WhereActive rule from #191 (same behaviour).
+Verified: clean build on the merged head; 17/17 TokenExchangeHardening tests; disabling each guard in turn (own token, token type, expiry cap, active user, scope cap) fails its tests; IAM.API.Tests 1375 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 61 passed.
+Left: deploy is Martien's call; check external callers first. Wildcard permissions ("*", "x:*") are not expanded, so a wildcard holder cannot request a narrower concrete scope (fails closed). Locked-out users are not refused (login does), bounded by the subject token's own lifetime.
+## 2026-10-10 - task 5150 (review)
+Done: reviewed PR #190 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Probed the CSS and e-mail sanitizers with ~30 bypass inputs (case, comments inside url(), escapes, image-set, attribute selectors, nested blocks, entity-encoded and split javascript: links, event handlers): all rejected or stripped, nothing unsafe accepted.
+Verified: build clean on the merged head; IAM.API.Tests 1443 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; admin-ui 69 passed, tsc -p tsconfig.app.json clean; with develop's controller, service and interface put back, 24 of the 27 new API tests fail.
+Left: nothing in code. Before deploy (Martien): existing custom domains stay unserved until their TXT record is published; set Branding:PlatformHosts if the login host differs from the issuer host. Follow-up idea: an unverified claim still blocks the real owner (unique index) - squatting only blocks, never serves.
+## 2026-10-10 - task 5153 (review)
+Done: reviewed PR #188 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Checked that the class-level SuperAdmin/SystemAdmin gate covers all 10 region actions (no AllowAnonymous), that the only HTTP call to a region endpoint is RegionService's health check on the "RegionHealth" client (now the shared WebhookHttpHandler: connect-time address guard, no redirects, no proxy), and that register and update both run IWebhookUrlGuard.
+Verified: build clean on the merged head; IAM.API.Tests 1480 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; with develop's controller put back, 23 of the 31 region tests fail.
+Left: nothing in code. Before deploy (Martien): regions already stored with a private endpoint will report Offline; the admin-ui region page was not checked in a browser.
+## 2026-10-10 - task 5157 (review)
+Done: reviewed PR #193 (approved). Merged develop (AuthService + progress file conflicted): kept develop's login, where wrong passwords no longer count (task 5166), and routed its lock check/reset through LoginLockout. Rewrote the portal test that assumed login failures share the counter.
+Verified: clean build on merged head; IAM.API.Tests 1427 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; removing the failure count, the revoke or the reset each fails portal tests.
+Left: deploy is Martien's call. The portal is now the only place wrong passwords lock the account; a lock set there also blocks login for 15 min.
+
+## 2026-10-10 - task 5162
+Done: PR #184 - all four /api/authorize routes (evaluate, batch, test, permissions/{type}/{id}) decide from the token: self (user or device), administrator of the queried tenant (shared ITenantAccessResolver), or a service account holding the exact authorize:evaluate permission (a tenant_id claim keeps it in its tenant). Everyone else gets one 403; a batch with any disallowed item is rejected whole; only administrators get the evaluation path and matched policy/permission (self callers get verdict plus a neutral reason).
+Verified: build clean; 87 new AuthorizeEvaluationAccessTests (64 fail on the old controller); IAM.API.Tests 1445 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped. No other caller of /api/authorize found under C:/projects (admin-ui, SDKs, other apps).
+Left: deploy is Martien's call. Service accounts that call these routes today need the authorize:evaluate permission added; none were found in the repos.
+
+## 2026-10-10 - task 5162 (review)
+Done: reviewed PR #184 (approved after one fix). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Found a cross-tenant read the access check could not see: GET /api/authorize/permissions/device/{id} ignored tenantId for devices, so an admin of tenant A (or a service account pinned to A) could read tenant B's device permissions by naming tenant A. UnifiedAuthorizationService.GetDeviceEffectivePermissionsAsync now answers only inside the device's own tenant (a foreign device looks like a missing one, same rule as the evaluate path).
+Verified: build clean on the merged head; 3 new tests (2 fail with the old service file put back, the third guards own-tenant device reads); IAM.API.Tests 1581 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped on the merged head; IAM.Core.Tests 209 passed.
+Left: nothing in code. Deploy is Martien's call; service accounts that call these routes today need authorize:evaluate. Not changed: the evaluate routes still tell an admin 'device not found' from 'device belongs to another tenant' (GUID existence only).
+## 2026-10-10 - task 5222
+Done: admin-ui Create Role form has a Tenant picker (BuildingOwner: owned tenants only, required; SuperAdmin: Global default or any root tenant; owner with no active tenant sees a message and cannot submit). Refusals show the API's {error} text. Role list shows each role's tenant or Global; api.ts maps isSystemRole to isSystem so the System badge, no-Delete rule and edit warning work.
+Verified: tsc/build clean, eslint 0 errors, vitest 52 passed (13 new); Playwright on the built UI with the API mocked at the network layer (create as owner/SuperAdmin, refusal text, no-tenant state, role list). Not verified: a real round trip against a local IAM API (iam_user cannot create a throwaway database).
+Left: reviewer may do the real-API walkthrough; child tenants are not selectable for SuperAdmin (GET /api/tenants returns roots only).
+
+## 2026-10-10 - task 5222 (review)
+Done: reviewed PR #198 (approved after one fix). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Fixed: the login response user carries no roles (only GET /users/me does), so right after a fresh sign-in the form saw a SuperAdmin/BuildingOwner as owning nothing and blocked submit until a reload; the create form now fetches the current user when the context user has no roles.
+Verified: admin-ui tests 84 passed (2 new fail on the old form), build clean, lint 0 errors.
+Left: nothing in code. Deploy is Martien's call; a real-API walkthrough was not run (network-mocked UI tests only).
+## 2026-10-10 - task 5155 (review)
+Done: reviewed PR #192 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Checked that every user-deactivation site in src is covered (admin, lock_account, SCIM x3, directory sync, account merge, GDPR) and that both key lookups include the user.
+Verified: clean build on the merged head; IAM.API.Tests 1598 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; removing the store owner check or the SCIM-delete revoke each fails a test.
+Left: deploy is Martien's call; users deactivated before the deploy need follow-up 5224 before they are reactivated.
+## 2026-10-10 - task 5161
+Done: GroupsController read routes (get group, by-tenant, members, effective-permissions) now decide from the stored group's tenant via ITenantAccessResolver: tenant member or SuperAdmin reads; an active, unexpired member of the group reads that one group; device/service tokens, other-tenant tokens and everyone else get one identical 403 (unknown id too, SuperAdmin alone sees 404). Effective permissions: that user, a tenant admin of the tenant, or SuperAdmin.
+Verified: build clean; 9 new GroupReadAuthorizationTests (7 fail on the old controller); IAM.API.Tests 1277 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped.
+Left: deploy is Martien's call. API keys never get the group-member exception (they only read tenants their scope reaches). my-groups and ownerless unchanged.
+
+## 2026-10-10 - task 5161 (review)
+Done: reviewed PR #196 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). All four read routes (get group, list by tenant, list members, effective permissions) decide from the stored group tenant via ITenantAccessResolver; device/service/other-tenant tokens and unknown ids get the same 403; group-member exception is user-token only.
+Verified: build clean on the merged head; IAM.API.Tests 1590 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; Group filter 62/62.
+## 2026-10-10 - task 5148
+Done: PR #197 - /api/ca issue, renew, revoke, info and expiring now go through ITenantAccessResolver: SuperAdmin or TenantAdmin/BuildingOwner/BuildingManager of the device's own tenant (tenant read from the stored device/certificate); members and outsiders 403, another tenant's manager 404 (same as unknown id), device/service-account tokens 403; expiring is filtered to the caller's tenants. Public CA certificate, CRL and validate stay open. New CertificateIssuingRules: ValidityDays 1-825 (default 365), key size 2048/3072/4096, names max 64 chars without control characters; subject built with X500DistinguishedNameBuilder so ", OU=x" cannot add a name part; renew reads the old subject from the parsed name and caps validity at 825.
+Verified: build clean; 36 new CertificateAuthorityAuthorizationTests (25 fail on develop sources); IAM.API.Tests 1367 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 61 passed.
+Left: deploy is Martien's call. Key size under 2048 used to be raised to 2048 silently, it is now a 400. No admin-ui page calls /api/ca (grep), so no UI change.
+
+## 2026-10-10 - task 5148 (review)
+Done: reviewed PR #197 (approved). Merged develop into the branch (only AGENT_PROGRESS.md conflicted, kept both sides). Checked every /api/ca action: authorization runs before the device/certificate lookup, tenant comes from the stored row, foreign and unknown ids give the same 404 body, device/service-account tokens refused, private key only reaches a manager of the device's tenant.
+Verified: build clean on the merged head; IAM.API.Tests 1617 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; the 53 CertificateAuthority tests pass. On a throwaway real PostgreSQL 17 (not the shared server, stopped and deleted afterwards): the tenant-filtered expiring query runs (ANY(@tenantIds) with the HashSet from TenantAccess), both tenant lookups work, and issue then renew of a certificate named "dev-1, OU=x" keeps one CN part.
+Left: nothing in code. Deploy is Martien's call.
+## 2026-10-10 - task 5149
+Done: PoliciesController now decides every action from the caller's UserRoles in the policy's own tenant (role attributes stay as a coarse gate). Create and simulate need SuperAdmin or an active BuildingOwner/BuildingManager row in the body's tenant (TenantManagementAuthority), checked before any lookup; update takes the tenant from the stored policy (403 when the caller manages no tenant, 404 for another tenant's policy). List is pinned to the caller's tenants, get/inherited-by need membership of the policy's tenant or of a tenant that inherits it (404 otherwise), effective and evaluate need membership of the addressed tenant (403). Reads use ITenantAccessResolver; delete is unchanged (SuperAdmin).
+Verified: build clean; 15 new PolicyAuthorizationTests over SuperAdmin, own-tenant owner/manager, other-tenant manager, plain member, claim-only manager, outsider and expired role (12 fail on untouched develop); IAM.API.Tests 1246 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 30 passed.
+Left: deploy is Martien's call. The policy admin-ui pages were not checked in a browser (manual item of the task). Policies of a tenant are now invisible to non-members, including in lists the UI may build without a tenant filter.
+
+## 2026-10-10 - task 5149 (review)
+Done: reviewed PR #195 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Read every Policy API action: manage = SuperAdmin or active owner/manager row in the stored policy's tenant (create checked before any lookup, update/simulate never from body tenant), reads/evaluate = membership via ITenantAccessResolver, foreign policy = 404, parent-tenant policies stay readable for child-tenant members; delete untouched (SuperAdmin only).
+Verified: build clean on the merged head; IAM.API.Tests 1658 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; PolicyAuthorization filter 36/36.
+Left: nothing in code. Deploy is Martien's call; the policy admin-ui pages were not checked in a browser. Not changed: create still accepts a RoleId/UserId from any tenant (only checks they exist).
+## 2026-10-10 - task 5154
+Done: TenantsController update/create-under-parent now need SuperAdmin or an active BuildingOwner/BuildingManager row on the tenant or an ancestor (new TenantManagementAuthority.ResolveWithAncestorsAsync, same resolver as the member actions); list, get, hierarchy and building-structure return only the caller's tenants plus their descendants (platform admins SuperAdmin/SystemAdmin see all), others 404, and a parent outside the scope is not disclosed.
+Verified: clean build; 11 new TenantScopeAuthorizationTests (9 fail on develop's controller); IAM.API.Tests 1502 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed.
+Left: deploy is Martien's call. Root tenant creation (no parent) is unchanged (SuperAdmin or BuildingOwner): decide with Martien whether it should be platform-admin only. Admin UI list screens are only used by platform admins; not checked in a browser.
+## 2026-10-10 - task 5154 (review)
+Done: reviewed PR #200 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Checked every TenantsController action: update/create-under-parent use the per-tenant resolver, list/get/hierarchy/building-structure are scoped to the caller's tenants and foreign ids give 404, my-tenants and the member actions are unchanged.
+Verified: clean build on the merged head; IAM.API.Tests 1654 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; with develop's controller put back 9 of the 11 new tests fail. Throwaway probes (removed): a BuildingOwner who creates a root tenant gets 201 but 404 on reading or updating it; a token pinned to tenant A still reads and updates tenant B when the user is a member of both.
+Left: deploy is Martien's call. Decide whether root tenant creation becomes platform-admin only (a BuildingOwner-created root is now invisible to its creator). Follow-up: tenant_id-pinned tokens, API keys and service accounts are not narrowed by the tenant list/update checks (same as the member actions); ITenantAccessResolver already handles them.
+## 2026-10-10 - task 5146
+Done: bulk user import (BulkOperationService.ImportUsersAsync) now runs TenantRoleGrantRules.Check on every row's role, in the dry run too; the grantor comes from the token in BulkOperationsController (SuperAdmin -> SuperAdmin, SystemAdmin -> owner-level but no platform roles). A refused row is a row error and creates no user or role.
+Verified: clean build; 15 new BulkImportRoleGrantTests (12 fail with the check disabled); IAM.API.Tests 1469 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed.
+Left: deploy is Martien's call. EmailConfirmed for passwordless login stays out on purpose (it would lock out every imported user). Unknown role names behave as before (user created, row note).
+## 2026-10-10 - task 5146 (review)
+Done: reviewed PR #199 (approved). Merged develop (only AGENT_PROGRESS.md conflicted, kept both sides). Checked the grant check runs before any user/role row is added, in the dry run too, with the grantor taken from the token (SuperAdmin role claim only); both ImportUsersAsync callers pass it.
+Verified: clean build on the merged head; IAM.API.Tests and IAM.Core.Tests results in the PR comment; BulkImportRoleGrantTests all pass.
+Left: deploy is Martien's call.
+## 2026-10-10 - task 5224
+Done: PR #201. DatabaseSeeder runs a try/catch-wrapped startup step (after the group-role backfill) that revokes every active API key owned by an inactive user through the 5155 helper (new ApiKeyRevocation.RevokeApiKeysOfInactiveUsersAsync, then save, then cache Forget) and logs the count. Ownerless keys, keys of active users and locked-out-but-active users are untouched; a second start reports 0.
+Verified: clean build; 6 new tests (startup path with a second run = 0, cache eviction, no cache registered, failure never throws, helper matrix, locked-out user); with the seeder call removed the startup test fails; IAM.API.Tests 1690 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; generated Postgres SQL is a plain EXISTS + ANY(@ids) (not run against a live database).
+Left: deploy is Martien's call; the clean-up runs on the first start after deploy and logs "API key backfill: N active key(s)...".
+
+## 2026-10-13 - task 5158
+Done: PR #185 - InvitationService.AcceptInvitationAsync: for an existing account whose e-mail is not confirmed it removes social logins, passkeys, refresh tokens, 2FA recovery codes, remembered devices, unused magic-link/one-time codes (also those for its old phone number), revokes OAuth tokens/authorizations, sessions and API keys, clears the 2FA secret, phone number and reset/verification tokens, and requires a new password (refused without one, account untouched). Cleanup, e-mail confirmation, role grant and invitation status are one SaveChanges, with an audit entry. Confirmed and brand-new accounts unchanged. Accept page hint text now says an unconfirmed account needs a new password.
+Verified: build clean (0 errors); 15 new InvitationAcceptUnconfirmedAccountTests, 7 of them fail on the old service code; invitation filter 33 passed; IAM.API.Tests 1705 passed / 2 failed (PkceMethodsTests, same on untouched develop) / 3 skipped; IAM.Core.Tests 209 passed; admin-ui tsc clean.
+Left: deploy is Martien's call. Already-issued access tokens stay valid until they expire (no revocation list). Roles an attacker was already given on this account before the invitation are kept (only credentials are cleaned).
+
+## 2026-10-13 - task 5158 (review)
+Done: review of PR #185. Found one gap and fixed it on the branch: the reset revoked API keys by hand and never dropped them from the key cache (validated keys stay cached for 2 minutes), so the previous holder's key kept working briefly. InvitationService now takes the optional IApiKeyCache, uses the shared ApiKeyRevocation.RevokeApiKeysAsync and calls Forget after the save, like the other revoke routes (task 5155).
+Verified: build clean (0 errors); 2 new tests (revoked key leaves the cache; confirmed account leaves the cache alone), the first fails with the Forget call removed; invitation filter 35 passed; IAM.API.Tests 1707 passed / 2 failed (PkceMethodsTests, OpenIddict flow config, unrelated) / 3 skipped.
+Left: deploy is Martien's call. Access tokens already issued stay valid until they expire.
+
+## 2026-10-18 - task 5804
+Done: PR #207 - Jengo IAM SSO WordPress plugin (wordpress-plugin/jengo-iam-sso/), second round fixing the six review items. Plugin: RS256 id_token validation against the IAM JWKS (iss, aud/azp, exp/iat, nonce, sub), email_verified === true required before any e-mail match or auto-provision, browser-bound single-use state, IAM-only mode with fallback to the form + secret-URL / wp-config constant / WP-CLI bypass, auto-provision off by default, privileged roles never a default role, optional IAM logout. IAM: email_verified in the id_token, /connect/logout end_session endpoint (honours registered post_logout_redirect_uri), config-driven WordPressSso:Sites seeder (test.prospergenics.com built in). Packaging: build-zip.ps1 (dist/jengo-iam-sso-1.1.0.zip) + INSTALL.md.
+Verified: dotnet build 0 errors; IAM.API.Tests 1734 passed / 2 failed (PkceMethodsTests, standalone OpenIddict options, same on untouched develop) / 3 skipped, 27 of them the new WordPressSso tests; composer test (PHPUnit 12, WP stubs, test JWKS) 157 tests / 379 assertions OK; zip lists 10 files, forward-slash paths. Not verified: live flow against a deployed IAM + test.prospergenics.com (needs the IAM deploy first).
+Left: deploy IAM with Clients:WordPressTestProspergenics:Secret set (Martien's call), then one Playwright login pass per mode on test.prospergenics.com; redirect URI may need the final host now WordPress moved to staging (task 5813).
+
+## 2026-10-18 - task 5804 (review round 2)
+Done: reviewed PR #207 round 2 and fixed two gaps on the branch (plugin 1.1.1): "WordPress only" and the JENGO_IAM_SSO_BYPASS kill switch only hid the button, a full SSO login still completed - now refused; IAM-only mode kept redirecting to a dead IAM while the 12 h discovery cache was warm - now a live reachability check (remembered 60 s) brings the form back.
+Verified: composer test 162 tests / 393 assertions OK (5 new, all fail without the fix); IAM.API.Tests 1734 passed / 2 failed (PkceMethodsTests, same 2 fail on untouched develop fb62a16) / 3 skipped; real IAM JWK from the live JWKS converts to a working RSA-2048 key.
+Left: IAM deploy with the client secret (Martien's call), then one login pass per mode on test.prospergenics.com.

@@ -23,6 +23,7 @@ public class BulkOperationService : IBulkOperationService
         Stream fileStream,
         string fileName,
         BulkOperationFormat format,
+        TenantGrantor grantor,
         bool dryRun = false,
         CancellationToken ct = default)
     {
@@ -73,6 +74,29 @@ public class BulkOperationService : IBulkOperationService
                     continue;
                 }
 
+                // Resolve the role first, in the dry run too: the same grant rule as invitations (task 5146), decided
+                // on the role NAME. A refused row is a row error and no user or role row is created for it.
+                Role? role = null;
+                if (!string.IsNullOrWhiteSpace(row.RoleName))
+                {
+                    var roleName = row.RoleName.Trim().ToLower();
+                    role = await _context.Roles
+                        .FirstOrDefaultAsync(r =>
+                            r.Name.ToLower() == roleName &&
+                            (r.TenantId == tenantId || r.TenantId == null), ct);
+
+                    if (role != null)
+                    {
+                        var problem = TenantRoleGrantRules.Check(role, tenantId, grantor);
+                        if (problem != RoleGrantProblem.None)
+                        {
+                            operation.ErrorRows++;
+                            errors.Add(new { row = index + 1, errors = new[] { TenantRoleGrantRules.Describe(problem, role.Name) } });
+                            continue;
+                        }
+                    }
+                }
+
                 if (!dryRun)
                 {
                     var user = new User
@@ -94,11 +118,6 @@ public class BulkOperationService : IBulkOperationService
                     // Assign role if specified
                     if (!string.IsNullOrWhiteSpace(row.RoleName))
                     {
-                        var role = await _context.Roles
-                            .FirstOrDefaultAsync(r =>
-                                r.Name.ToLower() == row.RoleName.Trim().ToLower() &&
-                                (r.TenantId == tenantId || r.TenantId == null), ct);
-
                         if (role != null)
                         {
                             _context.UserRoles.Add(new UserRole

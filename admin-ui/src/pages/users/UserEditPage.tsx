@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import DashboardLayout from '../../components/layout/DashboardLayout';
+import PrincipalEditor from '../../components/common/PrincipalEditor';
 import { api } from '../../services/api';
 import type { User, Role } from '../../types';
 
@@ -51,6 +52,7 @@ export default function UserEditPage() {
   const [pwdSuccess, setPwdSuccess] = useState('');
   const [userRoles, setUserRoles] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<Role[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
   const [assigningRole, setAssigningRole] = useState<string | null>(null);
 
@@ -65,7 +67,7 @@ export default function UserEditPage() {
   } = useForm<PasswordFormData>();
 
   useEffect(() => {
-    if (id) Promise.all([loadUser(), loadRoles()]);
+    if (id) Promise.all([loadUser(), loadRoles(), loadUsers()]);
   }, [id]);
 
   const loadUser = async () => {
@@ -88,6 +90,19 @@ export default function UserEditPage() {
       const roles = await api.getRoles();
       setAllRoles(Array.isArray(roles) ? roles : []);
     } catch { /* ignore */ }
+  };
+
+  const loadUsers = async () => {
+    try {
+      const users = await api.getUsers();
+      setAllUsers(Array.isArray(users) ? users : []);
+    } catch { /* non-critical: manager picker falls back to the current value */ }
+  };
+
+  const handleSavePrincipal = async (managerUserId: string | null, principalKind: string) => {
+    await api.setUserPrincipal(id!, managerUserId, principalKind);
+    const data = await api.getUser(id!);
+    setUser(data);
   };
 
   const reloadUserRoles = async () => {
@@ -266,6 +281,21 @@ export default function UserEditPage() {
               </button>
             </div>
           </form>
+        </div>
+
+        {/* Manager & Kind (task 4057) */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
+          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-1">Manager &amp; Kind</h2>
+          <p className="text-xs text-gray-400 mb-4">
+            Optional manager (used for access-request routing) and what kind of principal this is.
+          </p>
+          <PrincipalEditor
+            managerUserId={user.managerUserId ?? null}
+            principalKind={user.principalKind ?? 'Human'}
+            users={allUsers}
+            excludeUserId={user.id}
+            onSave={handleSavePrincipal}
+          />
         </div>
 
         {/* Jengo Access Matrix */}

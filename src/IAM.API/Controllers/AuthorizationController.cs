@@ -1,5 +1,6 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Security.Claims;
+using IAM.Core.Services;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore;
@@ -21,7 +22,7 @@ public class AuthorizationController : ControllerBase
 {
     /// <summary>
     /// Same claim name machine auth already issues for tenant scoping — see
-    /// ApiKeyAuthenticationMiddleware, ServiceAccountService, DeviceAuthenticationService.
+    /// Hazina.Security.ApiKeys, ServiceAccountService, DeviceAuthenticationService.
     /// </summary>
     public const string TenantIdClaimType = "tenant_id";
 
@@ -69,12 +70,21 @@ public class AuthorizationController : ControllerBase
         var request = HttpContext.GetOpenIddictServerRequest() ??
                       throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
+        // Task 5053: prompt=none is the app's silent-renewal probe (OIDC Core 3.1.2.1). It must never
+        // show IAM UI - no login redirect, no HTML "No access" page, no bare 400 - so every outcome
+        // below that would normally render something is answered with an OAuth error redirect back to
+        // the app instead. OpenIddict adds the original state to that redirect.
+        var silent = request.HasPromptValue(PromptValues.None);
+
         // Try to retrieve the user principal stored in the IAM session cookie
         var result = await HttpContext.AuthenticateAsync("IAM.Session");
 
         // If the user is not authenticated, redirect to React login page with return URL
         if (!result.Succeeded || result.Principal == null)
         {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "The user is not signed in to IAM.");
+
             var returnUrl = Request.Path + QueryString.Create(
                 Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
             return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
@@ -84,6 +94,9 @@ public class AuthorizationController : ControllerBase
         var userId = result.Principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId))
         {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "The IAM session does not identify a user.");
+
             return BadRequest(new { error = "invalid_request", error_description = "User ID not found in claims" });
         }
 
@@ -94,53 +107,30 @@ public class AuthorizationController : ControllerBase
 
         if (user == null || !user.IsActive)
         {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "The IAM session belongs to an account that is no longer active.");
+
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
         }
 
-        // Federated app-role gate: when an application has registered a role catalog
-        // (Roles with Category "app:{clientId}" — see AppRolesController), only users
-        // holding at least one of that app's roles may sign in to it. Applications
-        // without a catalog keep the historic everyone-active behavior. FAIL-OPEN on
-        // any error: a bug here must never lock every application out of the SSO.
-        //
-        // When the app does have a catalog, the matching UserRole's TenantId (see
-        // UsersController.AssignRole / TenantsController.ChangeMemberRole — assignments
-        // are already tenant-scopable) becomes the token's tenant_id claim, mirroring the
-        // tenant_id claim machine auth already issues (ApiKeyAuthenticationMiddleware,
-        // ServiceAccountService, DeviceAuthenticationService) but for human logins.
-        Guid? tenantIdForToken = null;
-        try
+        // Federated app-role gate — shared with the refresh_token grant in Exchange, see
+        // EvaluateAppRoleGateAsync. Only the denial rendering differs: login shows an HTML
+        // page, refresh returns an OAuth invalid_grant error, prompt=none returns access_denied.
+        var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
+        if (!gate.Allowed)
         {
-            var clientIdLower = (request.ClientId ?? string.Empty).ToLowerInvariant();
-            if (clientIdLower.Length > 0)
-            {
-                var category = $"app:{clientIdLower}";
-                var appHasCatalog = await _context.Roles.AnyAsync(r => r.Category == category);
-                if (appHasCatalog)
-                {
-                    var rolePrefix = clientIdLower + ":";
-                    var appRoleAssignments = user.UserRoles
-                        .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    if (appRoleAssignments.Count == 0)
-                    {
-                        _logger.LogWarning("App access denied: {Email} has no {ClientId} role", user.Email, clientIdLower);
-                        return Content(
-                            "<!doctype html><html><head><meta charset=\"utf-8\"><title>No access</title>" +
-                            "<style>body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
-                            ".card{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:420px}</style></head>" +
-                            $"<body><div class=\"card\"><h2>No access to this application</h2><p>Your account ({System.Net.WebUtility.HtmlEncode(user.Email)}) is not authorized for <strong>{System.Net.WebUtility.HtmlEncode(clientIdLower)}</strong>.</p>" +
-                            "<p>Ask your administrator to assign you a role for this application in the IAM system.</p></div></body></html>",
-                            "text/html");
-                    }
-                    tenantIdForToken = ResolveAppRoleTenantId(appRoleAssignments);
-                }
-            }
+            if (silent)
+                return SilentSignInDenied(Errors.AccessDenied, "The user has no role for this application.");
+
+            return Content(
+                "<!doctype html><html><head><meta charset=\"utf-8\"><title>No access</title>" +
+                "<style>body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}" +
+                ".card{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center;max-width:420px}</style></head>" +
+                $"<body><div class=\"card\"><h2>No access to this application</h2><p>Your account ({System.Net.WebUtility.HtmlEncode(user.Email)}) is not authorized for <strong>{System.Net.WebUtility.HtmlEncode((request.ClientId ?? string.Empty).ToLowerInvariant())}</strong>.</p>" +
+                "<p>Ask your administrator to assign you a role for this application in the IAM system.</p></div></body></html>",
+                "text/html");
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "App-role gate failed for client {ClientId} - failing open", request.ClientId);
-        }
+        Guid? tenantIdForToken = gate.TenantId;
 
         // Retrieve the application details from the database
         var application = await _applicationManager.FindByClientIdAsync(request.ClientId!) ??
@@ -159,8 +149,13 @@ public class AuthorizationController : ControllerBase
                 .SetClaim(Claims.GivenName, user.FirstName)
                 .SetClaim(Claims.FamilyName, user.LastName);
 
+        // Task 5804: email_verified travels in the id_token as a real JSON boolean (OIDC Core 5.1) so a
+        // relying party can refuse to match or create accounts from an address IAM never verified. Added
+        // as a typed claim: SetClaim(string) would serialise it as the JSON string "true".
+        identity.AddClaim(new Claim(Claims.EmailVerified, user.EmailConfirmed ? "true" : "false", ClaimValueTypes.Boolean));
+
         // Add role claims
-        var roles = user.UserRoles.Select(ur => ur.Role.Name).ToImmutableArray();
+        var roles = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray();
         identity.SetClaims(Claims.Role, roles);
 
         // Add tenant claim (only set when the app-role gate above resolved one — see
@@ -173,6 +168,10 @@ public class AuthorizationController : ControllerBase
 
         // Set scopes
         identity.SetScopes(request.GetScopes());
+
+        // Task 4099: map the granted scopes to their resource servers so the access token
+        // carries an aud claim and only works at its target service (confused-deputy fix).
+        identity.SetResources(await GetResourcesAsync(identity.GetScopes()));
 
         // Set destinations for claims (which token types they should appear in)
         identity.SetDestinations(GetDestinations);
@@ -192,6 +191,20 @@ public class AuthorizationController : ControllerBase
     }
 
     /// <summary>
+    /// Answers a prompt=none authorization request that cannot be completed silently: OpenIddict turns
+    /// the Forbid into a redirect to the already-validated redirect_uri carrying error, error_description
+    /// and the request's state (same idiom as the Forbid calls in Exchange).
+    /// </summary>
+    private IActionResult SilentSignInDenied(string error, string description) =>
+        Forbid(
+            authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+            properties: new AuthenticationProperties(new Dictionary<string, string?>
+            {
+                [OpenIddictServerAspNetCoreConstants.Properties.Error] = error,
+                [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = description
+            }));
+
+    /// <summary>
     /// OAuth2 Token Endpoint - exchanges authorization code for access token
     /// </summary>
     [HttpPost("token")]
@@ -208,6 +221,98 @@ public class AuthorizationController : ControllerBase
         {
             // Retrieve the claims principal stored in the authorization code/refresh token
             claimsPrincipal = (await HttpContext.AuthenticateAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme)).Principal!;
+
+            // A refresh token outlives the login (7 days, sliding), and access tokens are now readable and
+            // verifiable offline by any resource server (task 3481). Re-check the account so a user who was
+            // deactivated or deleted after signing in cannot keep minting access tokens.
+            var user = await FindTokenUserAsync(claimsPrincipal);
+            if (user == null || !user.IsActive)
+            {
+                _logger.LogWarning("Refused {GrantType} for subject {Subject}: user is missing or inactive",
+                    request.GrantType, claimsPrincipal.GetClaim(Claims.Subject));
+                return Forbid(
+                    authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                    properties: new AuthenticationProperties(new Dictionary<string, string?>
+                    {
+                        [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
+                        [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
+                            "The user account is no longer active."
+                    }));
+            }
+
+            // Task 4096: roles can be revoked while a refresh token is still valid. Do NOT copy the
+            // role/tenant_id claims stored inside the refresh token into the new access token — re-run
+            // the same app-role gate the login applies and rebuild both claims from the database.
+            if (request.IsRefreshTokenGrantType())
+            {
+                var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
+                if (!gate.Allowed)
+                {
+                    _logger.LogWarning("Refused refresh_token for {Email}: no longer holds any {ClientId} role",
+                        user.Email, request.ClientId);
+                    return Forbid(
+                        authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                        properties: new AuthenticationProperties(new Dictionary<string, string?>
+                        {
+                            [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
+                            [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
+                                "The user no longer has access to this application."
+                        }));
+                }
+
+                // Rebuild the identity from the stored principal (keeps sub/scopes/authorization id),
+                // then overwrite the role and tenant_id claims with the current database state.
+                // SetClaim(type, null) removes the claim, so a tenant scope that no longer applies
+                // disappears instead of being carried over.
+                var identity = new ClaimsIdentity(claimsPrincipal.Claims,
+                    authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                    nameType: Claims.Name,
+                    roleType: Claims.Role);
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray());
+                if (!gate.Errored)
+                {
+                    identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
+                }
+                // On a fail-open gate error the tenant_id copied from the stored principal is
+                // kept as-is: stripping it would silently WIDEN the token (tenant-less can mean
+                // platform-wide to resource servers), which is worse than a stale scope.
+                identity.SetDestinations(GetDestinations);
+                claimsPrincipal = new ClaimsPrincipal(identity);
+            }
+            else
+            {
+                // Task 5002: the principal read from the authorization code has already been through
+                // IClaimsTransformation, and SuperAdminClaimsTransformation adds the admin roles a SuperAdmin
+                // implies as extra "role" claims. They have no destinations, so OpenIddict cannot build the
+                // refresh token for offline_access (empty HTTP 500, "Conflicting destinations for the claim
+                // 'role'"). Rebuild the role claims from the stored roles, exactly as the refresh branch does:
+                // SetClaims replaces every role claim (implied ones included) and the destinations are set
+                // again. Implied roles are never given a destination, so they cannot leak into a token.
+                var identity = new ClaimsIdentity(claimsPrincipal.Claims,
+                    authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                    nameType: Claims.Name,
+                    roleType: Claims.Role);
+                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
+                identity.SetDestinations(GetDestinations);
+                claimsPrincipal = new ClaimsPrincipal(identity);
+            }
+
+            // Task 4099: re-resolve the scope→resource mapping on every exchange (authorization
+            // code AND refresh token) instead of trusting what was stored when the code/refresh
+            // token was minted, so audience mapping changes take effect on the next token, not
+            // only on the next login. Runs AFTER the 4096 claim rebuild so the resources land
+            // on the rebuilt principal.
+            //
+            // RFC 6749 §6 allows a refresh request to DOWNSCOPE with a narrower scope parameter;
+            // OpenIddict applies that narrowing to the scope claim, so the audience must follow
+            // the effective (narrowed) scopes — never the stored ones — or an attenuated token
+            // would still pass audience validation at services its scopes no longer cover.
+            var effectiveScopes = claimsPrincipal.GetScopes();
+            if (request.IsRefreshTokenGrantType() && request.GetScopes() is { Length: > 0 } requestedScopes)
+            {
+                effectiveScopes = effectiveScopes.Intersect(requestedScopes).ToImmutableArray();
+            }
+            claimsPrincipal.SetResources(await GetResourcesAsync(effectiveScopes));
         }
         else if (request.IsClientCredentialsGrantType())
         {
@@ -223,6 +328,11 @@ public class AuthorizationController : ControllerBase
             claimsPrincipal = new ClaimsPrincipal(identity);
 
             claimsPrincipal.SetScopes(request.GetScopes());
+
+            // Task 4099: machine tokens get the same scope→resource audience mapping as
+            // interactive logins — a jengo-agi-svc token for taskmanager_api must not be
+            // accepted at jengo_mcp once resource servers validate aud.
+            claimsPrincipal.SetResources(await GetResourcesAsync(claimsPrincipal.GetScopes()));
             claimsPrincipal.SetDestinations(GetDestinations);
         }
         else if (request.IsPasswordGrantType())
@@ -303,10 +413,16 @@ public class AuthorizationController : ControllerBase
             return BadRequest(new { error = "invalid_token", error_description = "User ID not found in token" });
         }
 
+        // A client-credentials token's subject is a client id, not a user GUID: refuse it instead of throwing (500).
+        if (!Guid.TryParse(userId, out var userGuid))
+        {
+            return BadRequest(new { error = "invalid_token", error_description = "Token does not belong to a user" });
+        }
+
         var user = await _context.Users
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(u => u.Id == Guid.Parse(userId));
+            .FirstOrDefaultAsync(u => u.Id == userGuid);
 
         if (user == null)
         {
@@ -337,7 +453,7 @@ public class AuthorizationController : ControllerBase
         // Roles scope
         if (User.HasScope("roles"))
         {
-            claims[Claims.Role] = user.UserRoles.Select(ur => ur.Role.Name).ToArray();
+            claims[Claims.Role] = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToArray();
         }
 
         // Custom tenants scope
@@ -345,6 +461,7 @@ public class AuthorizationController : ControllerBase
         {
             var tenants = await _context.UserRoles
                 .Where(ur => ur.UserId == user.Id && ur.TenantId != null)
+                .WhereActive()
                 .Select(ur => new
                 {
                     id = ur.TenantId,
@@ -360,19 +477,28 @@ public class AuthorizationController : ControllerBase
     }
 
     /// <summary>
-    /// OAuth2 Logout Endpoint - handles logout requests
+    /// OIDC RP-Initiated Logout / end_session endpoint (task 5804). OpenIddict has already validated the
+    /// request before this action runs: the client must hold the end_session endpoint permission and a
+    /// post_logout_redirect_uri is only accepted when it is registered on a client, so an unregistered
+    /// address is never redirected to. This action ends the IAM single sign-on session (the IAM.Session
+    /// cookie that /connect/authorize reads); the relying party's own session is its business.
+    ///
+    /// SignOut hands control back to OpenIddict, which redirects to the validated post_logout_redirect_uri
+    /// (echoing state) or, when none was sent, to the IAM login page.
     /// </summary>
     [HttpGet("logout")]
     [HttpPost("logout")]
+    [IgnoreAntiforgeryToken]
     public async Task<IActionResult> Logout()
     {
-        // Ask the OpenIddict server to sign out
-        await HttpContext.SignOutAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        _ = HttpContext.GetOpenIddictServerRequest() ??
+            throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
-        // TODO: Also sign out from the cookie authentication scheme if using cookies
-        // await HttpContext.SignOutAsync("Identity.Application");
+        await HttpContext.SignOutAsync("IAM.Session");
 
-        return Ok(new { message = "Logged out successfully" });
+        return SignOut(
+            authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+            properties: new AuthenticationProperties { RedirectUri = $"{_loginBasePath}/login" });
     }
 
     /// <summary>
@@ -416,10 +542,99 @@ public class AuthorizationController : ControllerBase
                 yield return Destinations.IdentityToken;
                 yield break;
 
-            // For other claims, only include in access token if scope is present
+            // Anything else is deliberately NOT serialized. Access tokens are signed-only JWTs (task 3481), so
+            // every claim in one is readable by whoever holds the token; a new claim must be added to an
+            // explicit case above rather than leaking into the access token by default.
             default:
-                yield return Destinations.AccessToken;
                 yield break;
+        }
+    }
+
+    /// <summary>
+    /// Task 4099: resolves the audiences ("resources") mapped to the granted scopes via the
+    /// OpenIddict scope store (DatabaseSeeder.SeedScopesAsync maintains the mapping). OpenIddict
+    /// emits every resource set on the principal as an aud claim in the access token. Scopes
+    /// that map to no resource contribute nothing; a token whose scopes map to no resource at
+    /// all is issued without an aud claim, exactly as before this task — resource servers that
+    /// do not validate aud are unaffected (backwards-compatible step 1 of the migration).
+    /// </summary>
+    private async Task<ImmutableArray<string>> GetResourcesAsync(ImmutableArray<string> scopes)
+    {
+        var resources = ImmutableArray.CreateBuilder<string>();
+        await foreach (var resource in _scopeManager.ListResourcesAsync(scopes, HttpContext.RequestAborted))
+        {
+            if (!resources.Contains(resource))
+                resources.Add(resource);
+        }
+        return resources.ToImmutable();
+    }
+
+    /// <summary>
+    /// Loads the user behind an authorization code / refresh token, roles included, so callers can both
+    /// re-check the account (existing, active) and rebuild role/tenant claims from the database.
+    /// Interactive flows always issue a user id (GUID) as the subject; anything else yields null (refused).
+    /// </summary>
+    private async Task<User?> FindTokenUserAsync(ClaimsPrincipal principal)
+    {
+        if (!Guid.TryParse(principal.GetClaim(Claims.Subject), out var userId))
+            return null;
+
+        return await _context.Users.AsNoTracking()
+            .Include(u => u.UserRoles)
+            .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId, HttpContext.RequestAborted);
+    }
+
+    /// <summary>
+    /// Outcome of the federated app-role gate: whether the user may receive tokens for the app at all,
+    /// and, when the app has a role catalog, which tenant the token is scoped to (null = unscoped).
+    /// </summary>
+    private readonly record struct AppRoleGateResult(bool Allowed, Guid? TenantId, bool Errored = false);
+
+    /// <summary>
+    /// Federated app-role gate, shared by login (Authorize) and token refresh (Exchange) so the two
+    /// checks can never drift apart. When an application has registered a role catalog (Roles with
+    /// Category "app:{clientId}" — see AppRolesController), only users holding at least one of that
+    /// app's roles pass. Applications without a catalog keep the historic everyone-active behavior.
+    /// FAIL-OPEN on any unexpected error: a bug here must never lock every application out of the SSO.
+    ///
+    /// When the app does have a catalog, the matching UserRole's TenantId (see
+    /// UsersController.AssignRole / TenantsController.ChangeMemberRole — assignments are already
+    /// tenant-scopable) becomes the token's tenant_id claim, mirroring the tenant_id claim machine
+    /// auth already issues (Hazina.Security.ApiKeys, ServiceAccountService,
+    /// DeviceAuthenticationService) but for human logins.
+    /// </summary>
+    /// <param name="user">User with UserRoles + Role loaded.</param>
+    private async Task<AppRoleGateResult> EvaluateAppRoleGateAsync(User user, string? clientId)
+    {
+        try
+        {
+            var clientIdLower = (clientId ?? string.Empty).ToLowerInvariant();
+            if (clientIdLower.Length == 0)
+                return new AppRoleGateResult(Allowed: true, TenantId: null);
+
+            var category = $"app:{clientIdLower}";
+            var appHasCatalog = await _context.Roles.AnyAsync(r => r.Category == category);
+            if (!appHasCatalog)
+                return new AppRoleGateResult(Allowed: true, TenantId: null);
+
+            var rolePrefix = clientIdLower + ":";
+            var appRoleAssignments = user.UserRoles
+                .WhereActive()
+                .Where(ur => ur.Role != null && ur.Role.Name.StartsWith(rolePrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (appRoleAssignments.Count == 0)
+            {
+                _logger.LogWarning("App access denied: {Email} has no {ClientId} role", user.Email, clientIdLower);
+                return new AppRoleGateResult(Allowed: false, TenantId: null);
+            }
+
+            return new AppRoleGateResult(Allowed: true, TenantId: ResolveAppRoleTenantId(appRoleAssignments));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "App-role gate failed for client {ClientId} - failing open", clientId);
+            return new AppRoleGateResult(Allowed: true, TenantId: null, Errored: true);
         }
     }
 

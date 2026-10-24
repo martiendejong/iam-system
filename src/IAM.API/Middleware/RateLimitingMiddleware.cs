@@ -5,7 +5,8 @@ namespace IAM.API.Middleware;
 
 /// <summary>
 /// Sliding window rate limiter using IMemoryCache.
-/// Tracks requests by API key prefix, JWT subject claim, or IP address.
+/// Tracks requests by JWT subject claim or IP address. API-key requests are limited per key by
+/// Hazina.Security.ApiKeys (Microsoft.AspNetCore.RateLimiting) and skipped here.
 /// Returns 429 Too Many Requests with appropriate rate limit headers when exceeded.
 /// </summary>
 public class RateLimitingMiddleware
@@ -47,6 +48,13 @@ public class RateLimitingMiddleware
             return;
         }
 
+        // Per-key limiting for API-key callers is done by the shared middleware (Hazina.Security.ApiKeys).
+        if (context.Items.ContainsKey(Hazina.Security.ApiKeys.ApiKeyDefaults.RecordItemKey))
+        {
+            await _next(context);
+            return;
+        }
+
         var clientKey = GetClientIdentifier(context);
         var limit = GetRateLimit(context);
         var cacheKey = $"rl:{clientKey}";
@@ -78,36 +86,27 @@ public class RateLimitingMiddleware
 
     /// <summary>
     /// Determine the client identifier for rate limiting.
-    /// Priority: API key prefix > JWT sub claim > IP address.
+    /// Priority: JWT sub claim > IP address.
     /// </summary>
     private static string GetClientIdentifier(HttpContext context)
     {
-        // 1. API key prefix (set by ApiKeyAuthenticationMiddleware)
-        var apiKeyPrefix = context.Items["ApiKeyPrefix"] as string;
-        if (!string.IsNullOrEmpty(apiKeyPrefix))
-            return $"apikey:{apiKeyPrefix}";
-
-        // 2. JWT subject claim (authenticated user)
+        // 1. JWT subject claim (authenticated user)
         var subClaim = context.User?.FindFirst("sub")?.Value
                     ?? context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         if (!string.IsNullOrEmpty(subClaim))
             return $"user:{subClaim}";
 
-        // 3. IP address (anonymous)
+        // 2. IP address (anonymous)
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return $"ip:{ip}";
     }
 
     /// <summary>
     /// Determine the rate limit for this request.
-    /// API keys can have custom limits; otherwise use configured defaults.
+    /// Authenticated users get the higher configured limit; anonymous callers the lower one.
     /// </summary>
     private int GetRateLimit(HttpContext context)
     {
-        // Check for custom API key rate limit
-        if (context.Items["ApiKeyRateLimit"] is int customLimit)
-            return customLimit;
-
         // Authenticated users get higher limits
         if (context.User?.Identity?.IsAuthenticated == true)
             return _authenticatedLimit;

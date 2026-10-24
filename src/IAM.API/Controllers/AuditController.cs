@@ -1,3 +1,4 @@
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -11,16 +12,30 @@ namespace IAM.API.Controllers;
 public class AuditController : ControllerBase
 {
     private readonly IAuditService _auditService;
+    private readonly IAuditAccessResolver _accessResolver;
     private readonly ILogger<AuditController> _logger;
 
-    public AuditController(IAuditService auditService, ILogger<AuditController> logger)
+    public AuditController(
+        IAuditService auditService,
+        IAuditAccessResolver accessResolver,
+        ILogger<AuditController> logger)
     {
         _auditService = auditService;
+        _accessResolver = accessResolver;
         _logger = logger;
     }
 
     /// <summary>
-    /// Get audit events with filtering
+    /// Maps a non-allowed <see cref="AuditAccessResult"/> to its HTTP response (403 / 400).
+    /// </summary>
+    private ActionResult DenyAccess(AuditAccessResult access) =>
+        access.Decision == AuditAccessDecision.TenantRequired
+            ? BadRequest(new { error = access.Message })
+            : StatusCode(StatusCodes.Status403Forbidden, new { error = access.Message });
+
+    /// <summary>
+    /// Get audit events with filtering. Administrators only; tenant admins are limited to a
+    /// tenant they administer, SuperAdmin / SecurityAdmin may query any tenant (task 4714).
     /// </summary>
     [HttpGet("events")]
     public async Task<ActionResult<List<PolicyAuditEvent>>> GetAuditEvents(
@@ -34,15 +49,19 @@ public class AuditController : ControllerBase
         [FromQuery] int take = 100,
         CancellationToken cancellationToken = default)
     {
+        var access = await _accessResolver.ResolveAsync(User, tenantId, cancellationToken);
+        if (access.Decision != AuditAccessDecision.Allowed)
+            return DenyAccess(access);
+
         var events = await _auditService.GetAuditEventsAsync(
-            startDate, endDate, userId, tenantId, policyId, eventType,
+            startDate, endDate, userId, access.TenantId, policyId, eventType,
             skip, take, cancellationToken);
 
         return Ok(events);
     }
 
     /// <summary>
-    /// Get compliance statistics for a time period
+    /// Get compliance statistics for a time period (same access rules as the events list)
     /// </summary>
     [HttpGet("statistics")]
     public async Task<ActionResult<ComplianceStatistics>> GetComplianceStatistics(
@@ -51,23 +70,32 @@ public class AuditController : ControllerBase
         [FromQuery] Guid? tenantId,
         CancellationToken cancellationToken = default)
     {
+        var access = await _accessResolver.ResolveAsync(User, tenantId, cancellationToken);
+        if (access.Decision != AuditAccessDecision.Allowed)
+            return DenyAccess(access);
+
         if (startDate == default || endDate == default)
             return BadRequest("Start date and end date are required");
 
         var statistics = await _auditService.GetComplianceStatisticsAsync(
-            startDate, endDate, tenantId, cancellationToken);
+            startDate, endDate, access.TenantId, cancellationToken);
 
         return Ok(statistics);
     }
 
     /// <summary>
-    /// Generate compliance report
+    /// Generate compliance report. A report can only be generated for a tenant the caller
+    /// administers; SuperAdmin / SecurityAdmin may also generate an all-tenant report.
     /// </summary>
     [HttpPost("reports")]
     public async Task<ActionResult<ComplianceReport>> GenerateComplianceReport(
         [FromBody] GenerateReportRequest request,
         CancellationToken cancellationToken = default)
     {
+        var access = await _accessResolver.ResolveAsync(User, request.TenantId, cancellationToken);
+        if (access.Decision != AuditAccessDecision.Allowed)
+            return DenyAccess(access);
+
         if (string.IsNullOrWhiteSpace(request.Framework))
             return BadRequest("Framework is required");
 
@@ -83,7 +111,7 @@ public class AuditController : ControllerBase
             request.Framework,
             request.PeriodStart,
             request.PeriodEnd,
-            request.TenantId,
+            access.TenantId,
             userId,
             cancellationToken);
 

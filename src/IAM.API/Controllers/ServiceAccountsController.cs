@@ -46,6 +46,8 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = account.CertificateThumbprint,
             description = account.Description,
             isActive = account.IsActive,
+            managerUserId = account.ManagerUserId,
+            principalKind = account.PrincipalKind,
             createdAt = account.CreatedAt,
             warning = "Save the client secret now. It will NOT be shown again."
         });
@@ -76,6 +78,8 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = a.CertificateThumbprint,
             description = a.Description,
             isActive = a.IsActive,
+            managerUserId = a.ManagerUserId,
+            principalKind = a.PrincipalKind,
             createdAt = a.CreatedAt,
             updatedAt = a.UpdatedAt,
             lastAuthenticatedAt = a.LastAuthenticatedAt
@@ -107,10 +111,57 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = account.CertificateThumbprint,
             description = account.Description,
             isActive = account.IsActive,
+            managerUserId = account.ManagerUserId,
+            principalKind = account.PrincipalKind,
             createdAt = account.CreatedAt,
             updatedAt = account.UpdatedAt,
             lastAuthenticatedAt = account.LastAuthenticatedAt
         });
+    }
+
+    /// <summary>
+    /// Set or clear a service account's manager and principal kind in one PUT
+    /// (task 4057). PUT replaces BOTH fields: managerUserId = null explicitly
+    /// clears the manager. SuperAdmin and SystemAdmin only; service-account
+    /// tokens carry no roles and are rejected by the role gate. Cross-tenant
+    /// managers are allowed only for SuperAdmin callers. A disabled manager may
+    /// still be stored.
+    /// </summary>
+    [HttpPut("{id:guid}/principal")]
+    [Authorize(Roles = "SuperAdmin,SystemAdmin")]
+    public async Task<IActionResult> SetPrincipal(
+        Guid id,
+        [FromBody] SetPrincipalRequest request,
+        [FromServices] IPrincipalDirectoryService principalDirectory)
+    {
+        if (request.PrincipalKind == null)
+            return BadRequest(new { error = "principalKind is required (Human, Agent or Service)" });
+
+        if (!Enum.IsDefined(request.PrincipalKind.Value))
+            return BadRequest(new { error = "principalKind must be Human, Agent or Service" });
+
+        var actorIdRaw = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        Guid? actorId = Guid.TryParse(actorIdRaw, out var parsedActor) ? parsedActor : null;
+
+        var result = await principalDirectory.SetServiceAccountPrincipalAsync(
+            id,
+            request.ManagerUserId,
+            request.PrincipalKind.Value,
+            actorId,
+            callerIsSuperAdmin: User.IsInRole("SuperAdmin"),
+            HttpContext.RequestAborted);
+
+        return result.Status switch
+        {
+            PrincipalAssignmentStatus.TargetNotFound => NotFound(new { error = "Service account not found" }),
+            PrincipalAssignmentStatus.ValidationFailed => BadRequest(new { error = result.Error }),
+            _ => Ok(new
+            {
+                id,
+                managerUserId = request.ManagerUserId,
+                principalKind = request.PrincipalKind.Value
+            })
+        };
     }
 
     /// <summary>
@@ -144,6 +195,8 @@ public class ServiceAccountsController : ControllerBase
             certificateThumbprint = account.CertificateThumbprint,
             description = account.Description,
             isActive = account.IsActive,
+            managerUserId = account.ManagerUserId,
+            principalKind = account.PrincipalKind,
             updatedAt = account.UpdatedAt
         });
     }
@@ -226,8 +279,13 @@ public class ServiceAccountsController : ControllerBase
         if (string.IsNullOrEmpty(request.Resource))
             return BadRequest(new { error = "invalid_request", error_description = "resource (target service) is required" });
 
+        // The subject token must be the caller's own: the service compares it with this id.
+        var callerClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
+        if (!Guid.TryParse(callerClaim, out var callerId))
+            return Unauthorized(new { error = "invalid_grant", error_description = "Token exchange failed. The subject token may be invalid or expired." });
+
         var (success, accessToken, expiresAt) = await _serviceAccountService.ExchangeTokenAsync(
-            request.SubjectToken, request.Resource, request.Scope, HttpContext.RequestAborted);
+            request.SubjectToken, request.Resource, callerId, request.Scope, HttpContext.RequestAborted);
 
         if (!success || accessToken == null)
             return Unauthorized(new { error = "invalid_grant", error_description = "Token exchange failed. The subject token may be invalid or expired." });

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using IAM.Core;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -18,6 +19,17 @@ public class AuthService : IAuthService
     // Today's default when an organization has never saved a Token Configuration.
     private const int DefaultRefreshTokenLifetimeDays = 7;
 
+    // Task 5166: one message for every way a password sign-in can fail before the password is proven.
+    internal const string InvalidCredentialsMessage = "Invalid email or password";
+    internal const string TooManyLoginAttemptsMessage = "Too many failed sign-in attempts. Please wait a moment and try again.";
+    // The 2FA lock (task 4523); deliberately has no timestamp.
+    internal const string AccountLockedMessage = "Account is temporarily locked. Try again later.";
+
+    // Same cost as every stored hash (workFactor 12 is used everywhere passwords are set). Built once
+    // per process; a random password nobody can type, so it never matches.
+    private static readonly string DummyPasswordHash =
+        BCrypt.Net.BCrypt.HashPassword(Guid.NewGuid().ToString("N"), workFactor: 12);
+
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
@@ -25,6 +37,7 @@ public class AuthService : IAuthService
     private readonly IOtpService _otpService;
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
+    private readonly ILoginThrottle _loginThrottle;
 
     public AuthService(
         IAMDbContext context,
@@ -33,7 +46,8 @@ public class AuthService : IAuthService
         IRiskAssessmentService riskAssessmentService,
         IOtpService otpService,
         IClaimsMappingService claimsMappingService,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        ILoginThrottle loginThrottle)
     {
         _context = context;
         _configuration = configuration;
@@ -42,6 +56,32 @@ public class AuthService : IAuthService
         _otpService = otpService;
         _claimsMappingService = claimsMappingService;
         _logger = logger;
+        _loginThrottle = loginThrottle;
+    }
+
+    /// <summary>
+    /// One BCrypt verification whatever the input: against the stored hash when there is a usable one,
+    /// otherwise against a dummy hash of the same cost (unknown email, or a stored value that is not a
+    /// BCrypt hash, which would otherwise throw instantly and show up as a 500).
+    /// </summary>
+    private static bool VerifyPasswordWithUniformCost(string? password, string? storedHash)
+    {
+        var candidate = password ?? string.Empty;
+
+        if (!string.IsNullOrEmpty(storedHash))
+        {
+            try
+            {
+                return BCrypt.Net.BCrypt.Verify(candidate, storedHash);
+            }
+            catch (BCrypt.Net.SaltParseException)
+            {
+                // Not a BCrypt hash: fall through to the dummy check so the cost is still paid.
+            }
+        }
+
+        BCrypt.Net.BCrypt.Verify(candidate, DummyPasswordHash);
+        return false;
     }
 
     /// <summary>
@@ -122,52 +162,60 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
+        // Task 5166: repeated failures slow down THIS caller (typed email + IP) instead of locking the
+        // real account, and the refusal is the same whether or not the account exists. It comes before
+        // any lookup or BCrypt work, so a blocked caller costs next to nothing.
+        var attempt = _loginThrottle.BeginAttempt(email, ipAddress);
+        if (!attempt.Allowed)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = TooManyLoginAttemptsMessage,
+                RetryAfterSeconds = attempt.RetryAfterSeconds
+            };
+        }
+
         var user = await _context.Users
             .Include(u => u.UserRoles)
                 .ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(u => u.Email == email);
 
-        if (user == null)
+        // Every attempt pays for exactly one BCrypt check, against a dummy hash of the same cost when
+        // there is no (usable) account, so response time does not tell an unknown email from a real
+        // one. This runs BEFORE the lock check: a wrong password on a locked account must look just
+        // like any other wrong password.
+        var passwordValid = VerifyPasswordWithUniformCost(password, user?.PasswordHash);
+
+        if (user == null || !passwordValid)
         {
             return new AuthResult
             {
                 Success = false,
-                Error = "Invalid email or password"
+                Error = InvalidCredentialsMessage
             };
         }
 
-        // Check lockout BEFORE any expensive operations (prevents BCrypt timing oracle on locked accounts)
-        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        _loginThrottle.RecordSuccess(email, ipAddress);
+
+        // The persistent lock now only comes from the 2FA step (task 4523). It is reported only to a
+        // caller who has proven the password, and without a timestamp.
+        if (LoginLockout.IsLocked(user))
         {
             return new AuthResult
             {
                 Success = false,
-                Error = $"Account locked. Try again after {user.LockoutEnd:yyyy-MM-dd HH:mm:ss} UTC"
+                Error = AccountLockedMessage
             };
         }
 
-        if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+        // Password failures no longer touch FailedLoginAttempts / IsLockedOut / LockoutEnd; they carry
+        // the 2FA counter. While a second factor is still pending a correct password must NOT reset it
+        // (it would hand out a fresh set of code guesses); an expired lock is the one thing to clear.
+        if (!user.TwoFactorEnabled || user.IsLockedOut)
         {
-            // Increment failed login attempts
-            user.FailedLoginAttempts++;
-            if (user.FailedLoginAttempts >= 5)
-            {
-                user.IsLockedOut = true;
-                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
-            }
-            await _context.SaveChangesAsync();
-
-            return new AuthResult
-            {
-                Success = false,
-                Error = "Invalid email or password"
-            };
+            LoginLockout.Reset(user);
         }
-
-        // Reset failed attempts on successful password verification
-        user.FailedLoginAttempts = 0;
-        user.IsLockedOut = false;
-        user.LockoutEnd = null;
 
         if (!user.EmailConfirmed)
         {
@@ -283,13 +331,53 @@ public class AuthService : IAuthService
                     .ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash);
 
-        if (storedToken == null || !storedToken.IsActive)
+        if (storedToken == null)
         {
-            return new AuthResult
+            return InvalidRefreshToken();
+        }
+
+        if (storedToken.IsRevoked)
+        {
+            // REPLAY DETECTION: a token spent by rotation is only ever held by the party that got
+            // its successor, so seeing it again means the secret was copied. Which of the two
+            // parties is the thief is unknowable here, so end every session of the user.
+            // Tokens revoked for other reasons (logout, password reset, deactivation) are not
+            // a theft signal - a stale browser may legitimately still send one of those.
+            if (await _context.IsRotatedAsync(storedToken))
             {
-                Success = false,
-                Error = "Invalid or expired refresh token"
-            };
+                var revoked = await _context.RevokeRefreshTokensAsync(storedToken.UserId);
+
+                _context.AuditLogs.Add(new AuditLog
+                {
+                    UserId = storedToken.UserId,
+                    Action = "RefreshTokenReplayDetected",
+                    Resource = "User",
+                    Details = JsonSerializer.Serialize(new { refreshTokenId = storedToken.Id, revokedTokens = revoked }),
+                    IpAddress = ipAddress,
+                    UserAgent = userAgent
+                });
+                await _context.SaveChangesAsync();
+
+                _logger.LogWarning(
+                    "Rotated refresh token replayed; all sessions of the user ended. UserId: {UserId}, " +
+                    "TokenId: {TokenId}, RevokedTokens: {RevokedTokens}, ReplayIP: {ReplayIp}, ReplayUA: {ReplayUA}",
+                    storedToken.UserId, storedToken.Id, revoked, ipAddress, userAgent);
+            }
+
+            return InvalidRefreshToken();
+        }
+
+        if (storedToken.IsExpired)
+        {
+            return InvalidRefreshToken();
+        }
+
+        // A deactivated or locked user must not keep minting access tokens. Same generic error as
+        // any other bad token (no account-state oracle), and nothing is written so a user who is
+        // reactivated later is not penalised for this attempt.
+        if (!storedToken.User.IsActive)
+        {
+            return InvalidRefreshToken();
         }
 
         // ANOMALY DETECTION: Check if device fingerprint changed
@@ -311,9 +399,6 @@ public class AuthService : IAuthService
                 storedToken.IpAddress, ipAddress,
                 storedToken.UserAgent, userAgent);
         }
-
-        // SINGLE-USE TOKENS: Revoke the old refresh token immediately
-        storedToken.RevokedAt = DateTime.UtcNow;
 
         // Resolve this organization's configured token lifetime (falls back to today's
         // defaults when the user has no tenant or the tenant has no Token Configuration)
@@ -343,6 +428,10 @@ public class AuthService : IAuthService
             UserAgent = userAgent ?? storedToken.UserAgent,    // Use new UA or fall back to original
             RememberMe = storedToken.RememberMe                // Carry the choice forward through rotation
         };
+
+        // SINGLE-USE TOKENS: Revoke the old refresh token immediately; Rotate also records
+        // that this revocation was a rotation, which is what replay detection above relies on.
+        RefreshTokenRevocation.Rotate(storedToken, newRefreshTokenEntity);
 
         _context.RefreshTokens.Add(newRefreshTokenEntity);
         await _context.SaveChangesAsync();
@@ -458,9 +547,7 @@ public class AuthService : IAuthService
 
         // Update last login
         user.LastLoginAt = DateTime.UtcNow;
-        user.FailedLoginAttempts = 0;
-        user.IsLockedOut = false;
-        user.LockoutEnd = null;
+        LoginLockout.Reset(user);
 
         // Resolve this organization's configured token lifetime (falls back to today's
         // defaults when the user has no tenant or the tenant has no Token Configuration)
@@ -569,12 +656,12 @@ public class AuthService : IAuthService
         }
 
         // Check lockout before attempting OTP verification
-        if (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow)
+        if (LoginLockout.IsLocked(user))
         {
             return new AuthResult
             {
                 Success = false,
-                Error = "Account is temporarily locked. Try again later."
+                Error = AccountLockedMessage
             };
         }
 
@@ -583,11 +670,9 @@ public class AuthService : IAuthService
         if (!valid)
         {
             // Track 2FA failures against the same lockout counter
-            user.FailedLoginAttempts++;
-            if (user.FailedLoginAttempts >= 5)
+            LoginLockout.RegisterFailure(user);
+            if (LoginLockout.IsLocked(user))
             {
-                user.IsLockedOut = true;
-                user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
                 await _context.SaveChangesAsync();
                 return new AuthResult
                 {
@@ -636,18 +721,19 @@ public class AuthService : IAuthService
         user.PasswordResetTokenExpiry = null;
 
         // Revoke all refresh tokens
-        var tokens = await _context.RefreshTokens
-            .Where(rt => rt.UserId == user.Id && rt.RevokedAt == null)
-            .ToListAsync();
-
-        foreach (var t in tokens)
-        {
-            t.RevokedAt = DateTime.UtcNow;
-        }
+        await _context.RevokeRefreshTokensAsync(user.Id);
 
         await _context.SaveChangesAsync();
         return true;
     }
+
+    // One message for every way a refresh token can be unusable (unknown, revoked, rotated,
+    // expired, owner inactive) so the response never reveals which one it was.
+    private static AuthResult InvalidRefreshToken() => new()
+    {
+        Success = false,
+        Error = "Invalid or expired refresh token"
+    };
 
     private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null)
     {
@@ -665,7 +751,7 @@ public class AuthService : IAuthService
         }
 
         // Add roles
-        foreach (var userRole in user.UserRoles)
+        foreach (var userRole in user.UserRoles.WhereActive())
         {
             claims.Add(new Claim(ClaimTypes.Role, userRole.Role.Name));
         }

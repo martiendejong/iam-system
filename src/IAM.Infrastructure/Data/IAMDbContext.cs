@@ -52,6 +52,7 @@ public class IAMDbContext : DbContext
     public DbSet<DirectorySyncLog> DirectorySyncLogs => Set<DirectorySyncLog>();
     public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
     public DbSet<ApprovalStep> ApprovalSteps => Set<ApprovalStep>();
+    public DbSet<ApprovalVote> ApprovalVotes => Set<ApprovalVote>();
     public DbSet<WorkflowTemplate> WorkflowTemplates => Set<WorkflowTemplate>();
     public DbSet<ScimProvisioningLog> ScimProvisioningLogs => Set<ScimProvisioningLog>();
     public DbSet<ScimToken> ScimTokens => Set<ScimToken>();
@@ -133,6 +134,14 @@ public class IAMDbContext : DbContext
                 .WithOne(e => e.User)
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Manager link + principal kind (task 4057)
+            entity.HasIndex(e => e.ManagerUserId);
+            entity.Property(e => e.PrincipalKind).HasConversion<int>();
+            entity.HasOne(e => e.ManagerUser)
+                .WithMany()
+                .HasForeignKey(e => e.ManagerUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // RecoveryCode configuration
@@ -659,6 +668,8 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
             entity.Property(e => e.KeyHash).IsRequired().HasMaxLength(128);
             entity.Property(e => e.KeyPrefix).HasMaxLength(16);
+            entity.Property(e => e.Scope).IsRequired().HasMaxLength(16);
+            entity.Property(e => e.VaultReference).HasMaxLength(64);
             entity.Property(e => e.Permissions).HasColumnType("jsonb");
             entity.Property(e => e.AllowedIps).HasColumnType("jsonb");
             entity.Property(e => e.Description).HasMaxLength(500);
@@ -1109,6 +1120,26 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.DecidedByUserId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // ApprovalVote configuration: one approval per (step, user)
+        modelBuilder.Entity<ApprovalVote>(entity =>
+        {
+            entity.ToTable("ApprovalVotes");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.ApprovalStepId, e.UserId }).IsUnique();
+            entity.HasIndex(e => e.UserId);
+            entity.Property(e => e.Comment).HasMaxLength(2000);
+
+            entity.HasOne(e => e.ApprovalStep)
+                .WithMany(e => e.Votes)
+                .HasForeignKey(e => e.ApprovalStepId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // WorkflowTemplate configuration (approval workflow definitions)
@@ -1649,6 +1680,14 @@ public class IAMDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Manager link + principal kind (task 4057)
+            entity.HasIndex(e => e.ManagerUserId);
+            entity.Property(e => e.PrincipalKind).HasConversion<int>();
+            entity.HasOne(e => e.ManagerUser)
+                .WithMany()
+                .HasForeignKey(e => e.ManagerUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         // TokenExchange configuration (RFC 8693 token exchange audit trail)
