@@ -49,8 +49,15 @@ public class ScimController : ControllerBase
             ExcludedAttributes = excludedAttributes
         };
 
-        var result = await _scimService.ListUsersAsync(tenantId!.Value, options);
-        return Ok(result);
+        try
+        {
+            var result = await _scimService.ListUsersAsync(tenantId!.Value, options);
+            return Ok(result);
+        }
+        catch (ScimFilterException ex)
+        {
+            return BadRequest(new ScimError { Status = 400, Detail = ex.Message, ScimType = "invalidFilter" });
+        }
     }
 
     /// <summary>
@@ -117,6 +124,15 @@ public class ScimController : ControllerBase
             var updated = await _scimService.ReplaceUserAsync(tenantId!.Value, id, scimUser);
             return Ok(updated);
         }
+        catch (ScimUniquenessException ex)
+        {
+            return Conflict(new ScimError
+            {
+                Status = 409,
+                Detail = ex.Message,
+                ScimType = "uniqueness"
+            });
+        }
         catch (InvalidOperationException ex)
         {
             return NotFound(new ScimError
@@ -141,6 +157,15 @@ public class ScimController : ControllerBase
         {
             var updated = await _scimService.PatchUserAsync(tenantId!.Value, id, patchRequest);
             return Ok(updated);
+        }
+        catch (ScimUniquenessException ex)
+        {
+            return Conflict(new ScimError
+            {
+                Status = 409,
+                Detail = ex.Message,
+                ScimType = "uniqueness"
+            });
         }
         catch (InvalidOperationException ex)
         {
@@ -201,8 +226,15 @@ public class ScimController : ControllerBase
             SortOrder = sortOrder
         };
 
-        var result = await _scimService.ListGroupsAsync(tenantId!.Value, options);
-        return Ok(result);
+        try
+        {
+            var result = await _scimService.ListGroupsAsync(tenantId!.Value, options);
+            return Ok(result);
+        }
+        catch (ScimFilterException ex)
+        {
+            return BadRequest(new ScimError { Status = 400, Detail = ex.Message, ScimType = "invalidFilter" });
+        }
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+﻿using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -42,6 +43,11 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
+        await WordPressSsoSeeder.SeedAppRolesAsync(
+            context,
+            WordPressSsoSeeder.ResolveSites(_configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
+            _logger,
+            cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
 
         // Security check: alert if test accounts exist in non-development environment
@@ -54,6 +60,62 @@ public class DatabaseSeeder : IHostedService
 
         await AuditAdminRolesAsync(context, cancellationToken);
         await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
+        await BackfillApiKeysOfInactiveUsersAsync(scope.ServiceProvider, cancellationToken);
+        await AuditDefaultClientSecretsAsync(scope.ServiceProvider, cancellationToken);
+    }
+
+    /// <summary>
+    /// Task 4094: startup audit — alert when any OAuth client still authenticates with a
+    /// client secret that has ever shipped in this repository as a dev fallback. The stored
+    /// value is a PBKDF2 hash, so the comparison goes through the manager's own secret
+    /// validation rather than string equality. Critical outside Development (a published
+    /// secret on a live confidential client lets anyone with repo access mint tokens as
+    /// that client); informational in Development, where the fallbacks are intentional.
+    /// </summary>
+    private async Task AuditDefaultClientSecretsAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        // Every literal that has ever shipped in DatabaseSeeder.cs as a client secret, dev
+        // fallback or hard-coded (git history sweep, 2026-09-30). Add new ones here too.
+        string[] knownDefaultSecrets =
+        {
+            "postman_secret_dev_only",
+            "backend_secret_dev_only",
+            "jengo-agi-svc-secret-dev",
+            "jengo-mcp-iam-secret-dev",
+            // open-webui was seeded with a hard-coded secret from 2026-06-12 until the 2026-09-10
+            // auth-hardening commit made it configuration-only; a row created (or restored from a
+            // backup) in that window would still carry it.
+            "Ow9kP2mXqR5vN8dL3jT7"
+        };
+
+        try
+        {
+            var manager = services.GetRequiredService<IOpenIddictApplicationManager>();
+            await foreach (var application in manager.ListAsync(cancellationToken: cancellationToken))
+            {
+                foreach (var secret in knownDefaultSecrets)
+                {
+                    if (!await manager.ValidateClientSecretAsync(application, secret, cancellationToken))
+                        continue;
+
+                    var clientId = await manager.GetClientIdAsync(application, cancellationToken);
+                    if (_env.IsDevelopment())
+                        _logger.LogInformation(
+                            "Client '{ClientId}' uses a published dev fallback secret (expected in Development).",
+                            clientId);
+                    else
+                        _logger.LogCritical(
+                            "SECURITY ALERT: OAuth client '{ClientId}' authenticates with a client secret that is published in the repository. Rotate it immediately (task 4094).",
+                            clientId);
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // The audit only reports; it must never take IAM down.
+            _logger.LogError(ex, "Default-client-secret audit failed");
+        }
     }
 
     /// <summary>
@@ -84,6 +146,37 @@ public class DatabaseSeeder : IHostedService
         {
             // Never block startup on the backfill; enforcement itself does not depend on it.
             _logger.LogError(ex, "Group-role backfill failed");
+        }
+    }
+
+    /// <summary>
+    /// Task 5224: idempotent clean-up of the API keys that outlived their owner's deactivation. Task 5155 revokes a
+    /// user's keys when the account is deactivated, but users deactivated before it shipped still own keys marked
+    /// active; the key store only blocks them while the owner is inactive, so reactivating the account would revive
+    /// them. This revokes every active key owned by an inactive user (through the same helper the deactivation routes
+    /// use) and does nothing on the next start. It is a startup step, not an EF migration: IAM creates its schema
+    /// with EnsureCreated and never calls Migrate(), so a migration holding an UPDATE would never run.
+    /// </summary>
+    private async Task BackfillApiKeysOfInactiveUsersAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var context = services.GetRequiredService<IAMDbContext>();
+            var revokedKeyHashes = await context.RevokeApiKeysOfInactiveUsersAsync(cancellationToken);
+            if (revokedKeyHashes.Count > 0)
+            {
+                await context.SaveChangesAsync(cancellationToken);
+                services.GetService<IApiKeyCache>().Forget(revokedKeyHashes);
+            }
+
+            _logger.LogInformation(
+                "API key backfill: {Revoked} active key(s) owned by inactive users revoked",
+                revokedKeyHashes.Count);
+        }
+        catch (Exception ex)
+        {
+            // Never block startup on the backfill; the key store already rejects keys of inactive owners.
+            _logger.LogError(ex, "API key backfill for inactive users failed");
         }
     }
 
@@ -995,6 +1088,44 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Jengo Commerce Admin — pay.prospergenics.com (Authorization Code Flow with PKCE, public client)
+        if (await manager.FindByClientIdAsync("jengo-commerce", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "jengo-commerce",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Jengo Commerce Admin",
+                RedirectUris =
+                {
+                    new Uri("https://pay.prospergenics.com/admin/"),
+                    new Uri("http://localhost:5292/admin/")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://pay.prospergenics.com/admin/"),
+                    new Uri("http://localhost:5292/admin/")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
         if (await manager.FindByClientIdAsync("jengo-knowledge", cancellationToken) == null)
         {
             await manager.CreateAsync(new OpenIddictApplicationDescriptor
@@ -1034,6 +1165,54 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Fedha Boekhouding — PKCE public client (task 5933, board boekhouding)
+        if (await manager.FindByClientIdAsync("fedha-app", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "fedha-app",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Fedha Boekhouding",
+                RedirectUris =
+                {
+                    new Uri("https://fedha.martiendejong.nl/api/auth/iam/callback"),
+                    new Uri("http://localhost:5054/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://fedha.martiendejong.nl"),
+                    new Uri("http://localhost:5054")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // WordPress SSO (task 5804, board 44): one confidential PKCE client per WordPress site that runs the
+        // Jengo IAM SSO plugin - test.prospergenics.com built in, further sites from the WordPressSso:Sites
+        // configuration section. See WordPressSsoSeeder for the recipe (secrets come from configuration on
+        // the IAM host, never from git; a site without a secret is not registered).
+        await WordPressSsoSeeder.SeedClientsAsync(
+            manager,
+            WordPressSsoSeeder.ResolveSites(configuration, provider.GetRequiredService<ILogger<DatabaseSeeder>>()),
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>(),
+            cancellationToken);
+
         // Task 4059: Vault resolver client — confidential, client_credentials only.
         // Secret is read from config key "VaultResolver:ClientSecret" (never committed to git).
         // In production the value comes from the vault or an environment variable.
@@ -1062,6 +1241,31 @@ public class DatabaseSeeder : IHostedService
                     OpenIddictConstants.Permissions.Endpoints.Token,
                     OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}{IAM.API.Controllers.ResolverController.ResolverScope}"
+                }
+            }, cancellationToken);
+        }
+        // Squid Proxy (Password grant / ROPC) - used by the Squid basic-auth helper
+        if (await manager.FindByClientIdAsync("squid-proxy", cancellationToken) == null)
+        {
+            var squidSecret = configuration["Clients:SquidProxy:Secret"]
+                ?? (env.IsDevelopment()
+                    ? "squid-proxy-secret-dev"
+                    : throw new InvalidOperationException("Clients:SquidProxy:Secret not configured in production"));
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "squid-proxy",
+                ClientSecret = squidSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Squid Proxy (basic auth helper)",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.Password,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
                 }
             }, cancellationToken);
         }

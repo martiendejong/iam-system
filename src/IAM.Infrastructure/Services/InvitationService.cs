@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using OpenIddict.EntityFrameworkCore.Models;
 
 namespace IAM.Infrastructure.Services;
 
@@ -16,16 +18,19 @@ public class InvitationService : IInvitationService
     private readonly ILogger<InvitationService> _logger;
     private readonly int _defaultExpiryDays;
     private readonly string? _emailBaseUrl;
+    private readonly IApiKeyCache? _apiKeyCache;
 
     public InvitationService(
         IAMDbContext context,
         IEmailService emailService,
         IConfiguration configuration,
-        ILogger<InvitationService> logger)
+        ILogger<InvitationService> logger,
+        IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
         _emailService = emailService;
         _logger = logger;
+        _apiKeyCache = apiKeyCache;
         _defaultExpiryDays = configuration.GetValue("Invitations:DefaultExpiryDays", 7);
         _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
     }
@@ -39,7 +44,7 @@ public class InvitationService : IInvitationService
         return template;
     }
 
-    public async Task<Invitation> SendInvitationAsync(
+    public async Task<InvitationSendResult> SendInvitationAsync(
         string email,
         Guid tenantId,
         Guid roleId,
@@ -125,6 +130,7 @@ public class InvitationService : IInvitationService
         var customTemplate = await _context.Set<EmailTemplate>()
             .FirstOrDefaultAsync(t => t.TenantId == tenantId && t.Key == "Invitation" && t.IsActive, ct);
 
+        bool emailSent;
         if (customTemplate != null)
         {
             var inviteUrl = $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={token}";
@@ -141,7 +147,7 @@ public class InvitationService : IInvitationService
                 ["{{Email}}"] = email
             };
 
-            await _emailService.SendRawEmailAsync(
+            emailSent = await _emailService.SendRawEmailAsync(
                 email,
                 RenderTemplate(customTemplate.Subject, placeholders),
                 RenderTemplate(customTemplate.BodyHtml, placeholders),
@@ -149,14 +155,23 @@ public class InvitationService : IInvitationService
         }
         else
         {
-            await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
+            emailSent = await _emailService.SendInvitationAsync(email, inviterName, tenant.Name, token, ct, tenantId: tenantId);
         }
 
-        _logger.LogInformation(
-            "Invitation sent to {Email} for tenant {TenantName} ({TenantId}) by user {InviterId}",
-            email, tenant.Name, tenantId, invitedByUserId);
+        if (emailSent)
+        {
+            _logger.LogInformation(
+                "Invitation sent to {Email} for tenant {TenantName} ({TenantId}) by user {InviterId}",
+                email, tenant.Name, tenantId, invitedByUserId);
+        }
+        else
+        {
+            _logger.LogError(
+                "Invitation for {Email} (tenant {TenantName}) was created but the email could NOT be sent; the admin must hand over the accept link manually",
+                email, tenant.Name);
+        }
 
-        return invitation;
+        return new InvitationSendResult(invitation, emailSent);
     }
 
     public async Task<BulkInviteResult> SendBulkInvitationsAsync(
@@ -164,8 +179,10 @@ public class InvitationService : IInvitationService
         Guid tenantId,
         Guid invitedByUserId,
         bool callerIsSuperAdmin,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool callerIsTenantOwner = false)
     {
+        var grantor = new TenantGrantor(callerIsSuperAdmin, callerIsSuperAdmin || callerIsTenantOwner);
         var result = new BulkInviteResult();
         var entryList = entries.ToList();
         result.TotalProcessed = entryList.Count;
@@ -178,6 +195,25 @@ public class InvitationService : IInvitationService
         // Get org settings for default role
         var orgSettings = await _context.Set<OrganizationSettings>()
             .FirstOrDefaultAsync(os => os.TenantId == tenantId, ct);
+
+        // The stored default role is only used while it still passes the rule the settings API enforces
+        // (exists, non-privileged, global or this tenant's). A row written before that rule existed, or
+        // straight into the database, may hold an admin role or another tenant's role (task 4738).
+        string? defaultRoleError = null;
+        if (orgSettings?.DefaultRoleId != null)
+        {
+            var storedDefaultRole = await _context.Roles.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == orgSettings.DefaultRoleId.Value, ct);
+
+            defaultRoleError = DefaultRoleRules.Check(storedDefaultRole, tenantId) switch
+            {
+                DefaultRoleProblem.NotFound => "The organization's default role no longer exists",
+                DefaultRoleProblem.Privileged =>
+                    $"The organization's default role '{storedDefaultRole!.Name}' is a privileged role and cannot be assigned by bulk invitation",
+                DefaultRoleProblem.OtherTenant => "The organization's default role belongs to another tenant",
+                _ => null
+            };
+        }
 
         for (var i = 0; i < entryList.Count; i++)
         {
@@ -208,6 +244,18 @@ public class InvitationService : IInvitationService
                 }
                 else if (orgSettings?.DefaultRoleId != null)
                 {
+                    if (defaultRoleError != null)
+                    {
+                        result.Errors.Add(new BulkInviteError
+                        {
+                            Row = i + 1,
+                            Email = entry.Email,
+                            Error = defaultRoleError
+                        });
+                        result.Failed++;
+                        continue;
+                    }
+
                     roleId = orgSettings.DefaultRoleId.Value;
                 }
                 else
@@ -222,24 +270,35 @@ public class InvitationService : IInvitationService
                     continue;
                 }
 
-                if (!callerIsSuperAdmin)
+                // The same grant rule as the single invitation and the member role change (task 4700).
+                var targetRole = tenantRoles.FirstOrDefault(r => r.Id == roleId);
+                if (targetRole != null)
                 {
-                    var targetRole = tenantRoles.FirstOrDefault(r => r.Id == roleId);
-                    if (targetRole != null && targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase))
+                    var problem = TenantRoleGrantRules.Check(targetRole, tenantId, grantor);
+                    if (problem != RoleGrantProblem.None)
                     {
                         result.Errors.Add(new BulkInviteError
                         {
                             Row = i + 1,
                             Email = entry.Email,
-                            Error = "Only a SuperAdmin can grant the SuperAdmin role"
+                            Error = TenantRoleGrantRules.Describe(problem, targetRole.Name)
                         });
                         result.Failed++;
                         continue;
                     }
                 }
 
-                await SendInvitationAsync(entry.Email, tenantId, roleId, invitedByUserId, ct: ct);
+                var sendResult = await SendInvitationAsync(entry.Email, tenantId, roleId, invitedByUserId, ct: ct);
                 result.Succeeded++;
+                if (!sendResult.EmailSent)
+                {
+                    result.Errors.Add(new BulkInviteError
+                    {
+                        Row = i + 1,
+                        Email = entry.Email,
+                        Error = "Invitation created but the email could not be sent - hand over the accept link manually"
+                    });
+                }
             }
             catch (Exception ex)
             {
@@ -289,16 +348,55 @@ public class InvitationService : IInvitationService
             return new InvitationAcceptResult { Success = false, Error = "Invitation has expired" };
         }
 
+        // Acceptance cannot bypass the grant rule (task 4700): an invitation created before the rule existed (or by
+        // someone who has since lost the authority) must not hand out a platform-wide role. Platform-wide roles
+        // need a sender who is a SuperAdmin right now; a role of another tenant is never assigned.
+        var senderIsSuperAdmin = await _context.UserRoles.AnyAsync(ur =>
+            ur.UserId == invitation.InvitedByUserId
+            && ur.Role.Name == "SuperAdmin"
+            && (ur.ExpiresAt == null || ur.ExpiresAt > DateTime.UtcNow), ct);
+        var acceptProblem = TenantRoleGrantRules.Check(invitation.Role, invitation.TenantId, new TenantGrantor(senderIsSuperAdmin, true));
+        if (acceptProblem != RoleGrantProblem.None)
+        {
+            invitation.Status = "Revoked";
+            await _context.SaveChangesAsync(ct);
+            _logger.LogWarning(
+                "Invitation {InvitationId} for {Email} revoked at acceptance: role {RoleName} may not be granted by its sender ({Problem})",
+                invitation.Id, invitation.Email, invitation.Role.Name, acceptProblem);
+            return new InvitationAcceptResult { Success = false, Error = "This invitation can no longer be accepted" };
+        }
+
         // Check if user already exists
         var existingUser = await _context.Users
             .FirstOrDefaultAsync(u => u.Email == invitation.Email, ct);
 
         User user;
+        AccountReset? accountReset = null;
 
         if (existingUser != null)
         {
             // Link existing user to tenant + role
             user = existingUser;
+
+            // Task 5158: an account whose e-mail was never confirmed may have been registered by someone else
+            // for this address (e.g. through a social login whose provider does not verify the address). Handing
+            // it the invited role would give that person the tenant access. So the person holding the invitation
+            // (it was mailed to the real owner) takes the account over: every old way in is removed and a new
+            // password is required. Refused BEFORE anything is touched, so a refusal leaves the account as it was.
+            if (!existingUser.EmailConfirmed)
+            {
+                if (string.IsNullOrWhiteSpace(password))
+                {
+                    return new InvitationAcceptResult
+                    {
+                        Success = false,
+                        Error = "A new password is required to accept this invitation: the e-mail address of the existing account was never confirmed"
+                    };
+                }
+
+                // Only stages changes; they are saved together with the role grant below.
+                accountReset = await ResetUnconfirmedAccountAsync(existingUser, password, firstName, lastName, ct);
+            }
         }
         else
         {
@@ -338,11 +436,44 @@ public class InvitationService : IInvitationService
             _context.UserRoles.Add(userRole);
         }
 
+        if (accountReset != null)
+        {
+            _context.AuditLogs.Add(new AuditLog
+            {
+                UserId = user.Id,
+                TenantId = invitation.TenantId,
+                Action = "UnconfirmedAccountResetOnInvitation",
+                Resource = "User",
+                Details = JsonSerializer.Serialize(new
+                {
+                    invitationId = invitation.Id,
+                    externalLogins = accountReset.ExternalLogins,
+                    passkeys = accountReset.Passkeys,
+                    refreshTokens = accountReset.RefreshTokens,
+                    oauthTokensRevoked = accountReset.OAuthTokens,
+                    otherSignInMethods = accountReset.OtherSignInMethods
+                })
+            });
+        }
+
         // Mark invitation as accepted
         invitation.Status = "Accepted";
         invitation.AcceptedAt = DateTime.UtcNow;
 
+        // One save: the account cleanup (if any), the role grant and the invitation status land together or not at all.
         await _context.SaveChangesAsync(ct);
+
+        if (accountReset != null)
+        {
+            // The key module caches validated keys for a couple of minutes; drop the revoked ones so the old holder's
+            // key stops working on the very next request (task 5155 rule: Forget after the save that revoked them).
+            _apiKeyCache.Forget(accountReset.RevokedApiKeyHashes);
+
+            _logger.LogWarning(
+                "Invitation {InvitationId}: unconfirmed account {UserId} ({Email}) was reset before granting role {RoleName} - removed {ExternalLogins} social login(s), {Passkeys} passkey(s), {RefreshTokens} refresh token(s), revoked {OAuthTokens} OAuth token(s), {OtherSignInMethods} other sign-in item(s)",
+                invitation.Id, user.Id, user.Email, invitation.Role.Name, accountReset.ExternalLogins, accountReset.Passkeys,
+                accountReset.RefreshTokens, accountReset.OAuthTokens, accountReset.OtherSignInMethods);
+        }
 
         // Get welcome message from org settings
         var orgSettings = await _context.Set<OrganizationSettings>()
@@ -364,6 +495,93 @@ public class InvitationService : IInvitationService
             WelcomeMessage = orgSettings?.WelcomeMessage,
             MfaSetupRequired = orgSettings?.RequireMfa == true && !user.TwoFactorEnabled
         };
+    }
+
+    private sealed record AccountReset(
+        int ExternalLogins, int Passkeys, int RefreshTokens, int OAuthTokens, int OtherSignInMethods,
+        IReadOnlyList<string> RevokedApiKeyHashes);
+
+    /// <summary>
+    /// Stages (does not save) the take-over of an existing account whose e-mail was never confirmed: every way of
+    /// signing in or staying signed in that the account had is removed or revoked, and the password becomes the
+    /// accepter's. Roles and group memberships are left alone; only the credentials go. The caller saves the
+    /// result together with the role grant.
+    /// </summary>
+    private async Task<AccountReset> ResetUnconfirmedAccountAsync(
+        User user, string newPassword, string? firstName, string? lastName, CancellationToken ct)
+    {
+        var userId = user.Id;
+        var now = DateTime.UtcNow;
+
+        // Social logins (the attacker's way back in), passkeys and the login refresh tokens.
+        var externalLogins = await _context.ExternalLogins.Where(e => e.UserId == userId).ToListAsync(ct);
+        var passkeys = await _context.Credentials.Where(c => c.UserId == userId).ToListAsync(ct);
+        var refreshTokens = await _context.RefreshTokens.Where(t => t.UserId == userId).ToListAsync(ct);
+        _context.ExternalLogins.RemoveRange(externalLogins);
+        _context.Credentials.RemoveRange(passkeys);
+        _context.RefreshTokens.RemoveRange(refreshTokens);
+
+        // OAuth/OIDC refresh tokens and consents issued to apps for this subject. Their roles are rebuilt from the
+        // database on every refresh, so a surviving one would pick up the role granted below.
+        var subject = userId.ToString();
+        var revoked = OpenIddict.Abstractions.OpenIddictConstants.Statuses.Revoked;
+        var oauthTokens = await _context.Set<OpenIddictEntityFrameworkCoreToken>()
+            .Where(t => t.Subject == subject && t.Status != revoked).ToListAsync(ct);
+        var oauthAuthorizations = await _context.Set<OpenIddictEntityFrameworkCoreAuthorization>()
+            .Where(a => a.Subject == subject && a.Status != revoked).ToListAsync(ct);
+        foreach (var token in oauthTokens) token.Status = revoked;
+        foreach (var authorization in oauthAuthorizations) authorization.Status = revoked;
+
+        // Other saved sign-in methods: 2FA recovery codes, remembered devices, unused magic-link / one-time codes
+        // (including codes addressed to the old phone number), API keys owned by the account, open sessions.
+        var recoveryCodes = await _context.RecoveryCodes.Where(r => r.UserId == userId).ToListAsync(ct);
+        var trustedDevices = await _context.TrustedDevices.Where(d => d.UserId == userId).ToListAsync(ct);
+        var magicLinks = await _context.MagicLinkTokens.Where(m => m.UserId == userId && m.UsedAt == null).ToListAsync(ct);
+        var oldPhone = user.PhoneNumber;
+        var otpCodes = await _context.OtpCodes
+            .Where(o => o.UsedAt == null && (o.UserId == userId || (oldPhone != null && o.PhoneNumber == oldPhone)))
+            .ToListAsync(ct);
+        var revokedApiKeyHashes = await _context.RevokeApiKeysAsync(userId, ct);
+        var sessions = await _context.UserSessions.Where(s => s.UserId == userId && !s.IsRevoked).ToListAsync(ct);
+        _context.RecoveryCodes.RemoveRange(recoveryCodes);
+        _context.TrustedDevices.RemoveRange(trustedDevices);
+        _context.MagicLinkTokens.RemoveRange(magicLinks);
+        _context.OtpCodes.RemoveRange(otpCodes);
+        foreach (var session in sessions)
+        {
+            session.IsRevoked = true;
+            session.RevokedAt = now;
+            session.RevokedReason = "invitation_account_reset";
+        }
+
+        // The account row itself: new password, no leftover tokens, 2FA secret, phone number (SMS one-time-code
+        // login finds the account by it) or lockout state from the previous holder. The e-mail is now proven by the
+        // invitation, which was mailed to it.
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword, workFactor: 12);
+        user.EmailConfirmed = true;
+        user.EmailVerificationToken = null;
+        user.EmailVerificationTokenExpiry = null;
+        user.PasswordResetToken = null;
+        user.PasswordResetTokenExpiry = null;
+        user.TwoFactorEnabled = false;
+        user.TwoFactorSecret = null;
+        user.TwoFactorMethod = TwoFactorMethod.None;
+        user.PhoneNumber = null;
+        user.AvatarUrl = null;
+        user.FailedLoginAttempts = 0;
+        user.IsLockedOut = false;
+        user.LockoutEnd = null;
+        if (!string.IsNullOrWhiteSpace(firstName)) user.FirstName = firstName;
+        if (!string.IsNullOrWhiteSpace(lastName)) user.LastName = lastName;
+        user.UpdatedAt = now;
+
+        return new AccountReset(
+            externalLogins.Count,
+            passkeys.Count,
+            refreshTokens.Count,
+            oauthTokens.Count + oauthAuthorizations.Count,
+            recoveryCodes.Count + trustedDevices.Count + magicLinks.Count + otpCodes.Count + revokedApiKeyHashes.Count + sessions.Count,
+            revokedApiKeyHashes);
     }
 
     public async Task<bool> RevokeInvitationAsync(Guid invitationId, CancellationToken ct = default)

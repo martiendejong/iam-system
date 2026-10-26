@@ -231,6 +231,56 @@ public class TenantBrandingAccessControlTests : IClassFixture<IAMTestWebApplicat
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    // ----- domain-verification (added to develop by task 5150, same cross-tenant exposure) -----
+
+    private async Task<Tenant> CreateTenantWithCustomDomainAsync()
+    {
+        var tenant = await CreateTenantAsync();
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+        db.TenantBrandings.Add(new TenantBranding
+        {
+            TenantId = tenant.Id,
+            CustomDomain = $"login-{Guid.NewGuid():N}.example.com"
+        });
+        await db.SaveChangesAsync();
+        return tenant;
+    }
+
+    [Fact]
+    public async Task DomainVerification_OwnTenant_PasswordLoginToken_Succeeds()
+    {
+        var tenant = await CreateTenantWithCustomDomainAsync();
+        var admin = await CreateUserAsync(memberOfTenant: tenant.Id);
+
+        var response = await ClientAs(admin).GetAsync($"/api/branding/{tenant.Id}/domain-verification");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DomainVerification_OtherTenant_IsForbidden()
+    {
+        var tenantA = await CreateTenantAsync();
+        var tenantB = await CreateTenantWithCustomDomainAsync();
+        var adminOfA = await CreateUserAsync(memberOfTenant: tenantA.Id);
+
+        var response = await ClientAs(adminOfA).GetAsync($"/api/branding/{tenantB.Id}/domain-verification");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DomainVerification_AsSuperAdmin_CanReadAnyTenant()
+    {
+        var tenant = await CreateTenantWithCustomDomainAsync();
+        var superAdmin = await CreateUserAsync(memberOfTenant: null);
+
+        var response = await ClientAs(superAdmin, roles: new[] { "SuperAdmin" }).GetAsync($"/api/branding/{tenant.Id}/domain-verification");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
     // ----- anonymous endpoints must stay untouched ---------------------------------------------
 
     [Fact]

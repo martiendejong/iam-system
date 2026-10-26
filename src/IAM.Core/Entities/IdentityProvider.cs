@@ -62,9 +62,9 @@ public class IdentityProvider
     public bool IsActive { get; set; } = true;
 
     /// <summary>
-    /// Automatically create IAM users on first login via this provider
+    /// Automatically create IAM users on first login via this provider. Off unless explicitly enabled.
     /// </summary>
-    public bool AutoCreateUsers { get; set; } = true;
+    public bool AutoCreateUsers { get; set; }
 
     /// <summary>
     /// Default role to assign to auto-created users. Null = no default role.

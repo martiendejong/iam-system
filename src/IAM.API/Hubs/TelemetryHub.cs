@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -11,6 +12,9 @@ namespace IAM.API.Hubs;
 /// Real-time telemetry hub for IoT device data streaming.
 /// Devices publish telemetry via MQTT → Edge Gateway → This Hub → Dashboard clients.
 /// Dashboard clients subscribe to specific device/tenant streams.
+/// Every method checks the caller (task 4708): a device acts only for itself, users read the tenants
+/// they belong to, and publishing, status reports and commands need a building-management role in the
+/// device's tenant. Tenant and type of the data always come from the device registry.
 /// </summary>
 [Authorize]
 public class TelemetryHub : Hub
@@ -18,18 +22,44 @@ public class TelemetryHub : Hub
     private readonly IDeviceAuthenticationService _deviceAuthService;
     private readonly IDeviceService _deviceService;
     private readonly ITelemetryStorageService _telemetryService;
+    private readonly ITelemetryAccessAuthorizer _authorizer;
     private readonly ILogger<TelemetryHub> _logger;
 
     public TelemetryHub(
         IDeviceAuthenticationService deviceAuthService,
         IDeviceService deviceService,
         ITelemetryStorageService telemetryService,
+        ITelemetryAccessAuthorizer authorizer,
         ILogger<TelemetryHub> logger)
     {
         _deviceAuthService = deviceAuthService;
         _deviceService = deviceService;
         _telemetryService = telemetryService;
+        _authorizer = authorizer;
         _logger = logger;
+    }
+
+    private async Task<TelemetryDevice> RequireDeviceAsync(string? deviceId, TelemetryAction action)
+    {
+        var access = await _authorizer.AuthorizeDeviceAsync(
+            Context.User ?? new ClaimsPrincipal(), deviceId, action, Context.ConnectionAborted);
+        if (!access.Allowed)
+            throw new HubException($"Unauthorized: {access.Message}");
+
+        return access.Device!;
+    }
+
+    private async Task<Guid> RequireTenantReadAsync(string? tenantId)
+    {
+        if (!Guid.TryParse(tenantId, out var parsed))
+            throw new HubException("Unauthorized: You do not have access to this tenant.");
+
+        var access = await _authorizer.AuthorizeTenantReadAsync(
+            Context.User ?? new ClaimsPrincipal(), parsed, Context.ConnectionAborted);
+        if (!access.Allowed)
+            throw new HubException($"Unauthorized: {access.Message}");
+
+        return parsed;
     }
 
     /// <summary>
@@ -38,7 +68,8 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task SubscribeToDevice(string deviceId)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, $"device:{deviceId}");
+        var device = await RequireDeviceAsync(deviceId, TelemetryAction.Read);
+        await Groups.AddToGroupAsync(Context.ConnectionId, TelemetryGroups.Device(device.DeviceId));
     }
 
     /// <summary>
@@ -46,7 +77,7 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task UnsubscribeFromDevice(string deviceId)
     {
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"device:{deviceId}");
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, TelemetryGroups.Device(deviceId));
     }
 
     /// <summary>
@@ -55,7 +86,8 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task SubscribeToTenant(string tenantId)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, $"tenant:{tenantId}");
+        var tenant = await RequireTenantReadAsync(tenantId);
+        await Groups.AddToGroupAsync(Context.ConnectionId, TelemetryGroups.Tenant(tenant));
     }
 
     /// <summary>
@@ -63,16 +95,36 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task UnsubscribeFromTenant(string tenantId)
     {
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"tenant:{tenantId}");
+        if (Guid.TryParse(tenantId, out var tenant))
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, TelemetryGroups.Tenant(tenant));
     }
 
     /// <summary>
-    /// Subscribe to telemetry from all devices of a specific type.
-    /// Group name: "type:{deviceType}"
+    /// Subscribe to telemetry from all devices of a specific type in the caller's own tenant (the one
+    /// tenant they belong to; a caller of several tenants, or a SuperAdmin, uses
+    /// <see cref="SubscribeToTenantDeviceType"/>).
+    /// Group name: "type:{tenantId}:{deviceType}"
     /// </summary>
     public async Task SubscribeToDeviceType(string deviceType)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, $"type:{deviceType}");
+        var scope = await _authorizer.ResolveReadScopeAsync(
+            Context.User ?? new ClaimsPrincipal(), null, Context.ConnectionAborted);
+        if (scope.Decision == TelemetryScopeDecision.Forbidden)
+            throw new HubException($"Unauthorized: {scope.Message}");
+        if (scope.TenantId == null)
+            throw new HubException("Specify a tenant: use SubscribeToTenantDeviceType(tenantId, deviceType).");
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, TelemetryGroups.DeviceType(scope.TenantId.Value, deviceType));
+    }
+
+    /// <summary>
+    /// Subscribe to telemetry from all devices of a specific type in one tenant.
+    /// Group name: "type:{tenantId}:{deviceType}"
+    /// </summary>
+    public async Task SubscribeToTenantDeviceType(string tenantId, string deviceType)
+    {
+        var tenant = await RequireTenantReadAsync(tenantId);
+        await Groups.AddToGroupAsync(Context.ConnectionId, TelemetryGroups.DeviceType(tenant, deviceType));
     }
 
     /// <summary>
@@ -81,55 +133,40 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task PublishTelemetry(TelemetryMessage message)
     {
-        // Verify the sender has permission to publish for this device
-        var tokenType = Context.User?.FindFirst("token_type")?.Value;
-        if (tokenType == "device")
-        {
-            var tokenDeviceId = Context.User?.FindFirst("device_id")?.Value;
-            if (tokenDeviceId != message.DeviceId)
-            {
-                throw new HubException("Unauthorized: cannot publish telemetry for another device");
-            }
-        }
+        // The tenant and type of the data come from the device registry, never from the message.
+        var device = await RequireDeviceAsync(message.DeviceId, TelemetryAction.Write);
 
         var receivedAt = DateTime.UtcNow;
         var enrichedMessage = new
         {
-            message.DeviceId,
-            message.DeviceType,
-            message.TenantId,
+            device.DeviceId,
+            device.DeviceType,
+            TenantId = device.TenantId.ToString(),
             message.DataType,
             message.Payload,
             message.Timestamp,
             receivedAt
         };
 
-        // Broadcast to all relevant groups simultaneously
-        var broadcastTasks = new List<Task>
-        {
-            Clients.Group($"device:{message.DeviceId}").SendAsync("TelemetryReceived", enrichedMessage),
-            Clients.Group($"tenant:{message.TenantId}").SendAsync("TelemetryReceived", enrichedMessage),
-            Clients.Group($"type:{message.DeviceType}").SendAsync("TelemetryReceived", enrichedMessage)
-        };
+        // Persist first, so a failed store broadcasts nothing; the data survives past the broadcast
+        // (dashboard history, retention, exports).
+        await _telemetryService.IngestAsync(ToTelemetryRecord(message, device));
 
-        // Persist so the data survives past this broadcast (dashboard history, retention, exports).
-        // Without this, telemetry published over the hub was visible live but never queryable afterwards.
-        Guid.TryParse(message.TenantId, out var tenantId);
-        var record = ToTelemetryRecord(message, tenantId);
-        broadcastTasks.Add(_telemetryService.IngestAsync(record));
-
-        await Task.WhenAll(broadcastTasks);
+        await Task.WhenAll(
+            Clients.Group(TelemetryGroups.Device(device.DeviceId)).SendAsync("TelemetryReceived", enrichedMessage),
+            Clients.Group(TelemetryGroups.Tenant(device.TenantId)).SendAsync("TelemetryReceived", enrichedMessage),
+            Clients.Group(TelemetryGroups.DeviceType(device.TenantId, device.DeviceType)).SendAsync("TelemetryReceived", enrichedMessage));
     }
 
-    private static TelemetryRecord ToTelemetryRecord(TelemetryMessage message, Guid tenantId)
+    private static TelemetryRecord ToTelemetryRecord(TelemetryMessage message, TelemetryDevice device)
     {
         var record = new TelemetryRecord
         {
             Id = Guid.NewGuid(),
-            DeviceId = message.DeviceId,
-            DeviceType = message.DeviceType,
+            DeviceId = device.DeviceId,
+            DeviceType = device.DeviceType,
             MetricName = message.DataType,
-            TenantId = tenantId == Guid.Empty ? null : tenantId,
+            TenantId = device.TenantId,
             Timestamp = message.Timestamp
         };
 
@@ -165,18 +202,20 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task ReportDeviceStatus(DeviceStatusMessage message)
     {
-        await _deviceService.UpdateDeviceStatusAsync(message.DeviceId, message.IsOnline, message.IpAddress);
+        var device = await RequireDeviceAsync(message.DeviceId, TelemetryAction.Write);
+
+        await _deviceService.UpdateDeviceStatusAsync(device.DeviceId, message.IsOnline, message.IpAddress);
 
         var statusMessage = new
         {
-            message.DeviceId,
+            device.DeviceId,
             message.IsOnline,
             message.IpAddress,
             timestamp = DateTime.UtcNow
         };
 
-        await Clients.Group($"device:{message.DeviceId}").SendAsync("DeviceStatusChanged", statusMessage);
-        await Clients.Group($"tenant:{message.TenantId}").SendAsync("DeviceStatusChanged", statusMessage);
+        await Clients.Group(TelemetryGroups.Device(device.DeviceId)).SendAsync("DeviceStatusChanged", statusMessage);
+        await Clients.Group(TelemetryGroups.Tenant(device.TenantId)).SendAsync("DeviceStatusChanged", statusMessage);
     }
 
     /// <summary>
@@ -184,9 +223,12 @@ public class TelemetryHub : Hub
     /// </summary>
     public async Task SendDeviceCommand(DeviceCommandMessage command)
     {
-        // Verify authorization
+        // The caller must be a user with a building-management role in the device's tenant ...
+        var device = await RequireDeviceAsync(command.DeviceId, TelemetryAction.Command);
+
+        // ... on top of the device's own permission check.
         var authResult = await _deviceAuthService.AuthorizeAsync(
-            command.DeviceId, command.Resource, "command");
+            device.DeviceId, command.Resource, "command");
 
         if (!authResult.Allowed)
         {
@@ -194,9 +236,9 @@ public class TelemetryHub : Hub
         }
 
         // Forward command to the device's edge gateway
-        await Clients.Group($"device:{command.DeviceId}").SendAsync("DeviceCommand", new
+        await Clients.Group(TelemetryGroups.Device(device.DeviceId)).SendAsync("DeviceCommand", new
         {
-            command.DeviceId,
+            device.DeviceId,
             command.CommandType,
             command.Payload,
             issuedBy = Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value,
@@ -209,6 +251,17 @@ public class TelemetryHub : Hub
         // Clean up is handled automatically by SignalR group management
         await base.OnDisconnectedAsync(exception);
     }
+}
+
+/// <summary>
+/// SignalR group names. Tenant and device-type groups are per tenant, so a subscription can never
+/// see another tenant's data; every broadcast uses the registry's tenant and device id.
+/// </summary>
+public static class TelemetryGroups
+{
+    public static string Device(string deviceId) => $"device:{deviceId}";
+    public static string Tenant(Guid tenantId) => $"tenant:{tenantId}";
+    public static string DeviceType(Guid tenantId, string deviceType) => $"type:{tenantId}:{deviceType}";
 }
 
 // Hub message DTOs

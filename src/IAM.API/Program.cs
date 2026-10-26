@@ -1,10 +1,12 @@
-﻿using System.Net;
+﻿﻿using System.Net;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Hazina.Security.ApiKeys;
 using IAM.API.Auth;
+using IAM.API.Mcp;
 using IAM.API.Middleware;
+using Jengo.Mcp;
 using IAM.API.Workers;
 using IAM.Core.Interfaces;
 using Microsoft.AspNetCore.Authentication;
@@ -57,9 +59,13 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
+// Per-IP + typed-email progressive delay for password sign-ins (task 5166). Singleton: the state lives in IMemoryCache.
+builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
+builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.Authorization.AuditAccessResolver>();
+builder.Services.AddScoped<IAM.API.Authorization.ITelemetryAccessAuthorizer, IAM.API.Authorization.TelemetryAccessAuthorizer>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
@@ -74,9 +80,24 @@ builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
+// Task 5800: remote MCP server at /mcp (agent-safe user onboarding via invitations). Auth for
+// /mcp is additive and self-contained, independent of the JWT bearer / IAM.Session cookie schemes:
+// an API key (X-Api-Key, or bearer for ChatGPT connectors) from the Mcp:Keys configuration array,
+// each key bound to one IAM user. AddIamMcp also exempts /mcp from the Hazina X-Api-Key middleware,
+// which would otherwise 401 the MCP key before it reaches the MCP auth scheme.
+builder.Services.AddIamMcp();
+// Task 5165: the CA key file password must be configured outside Development. Resolved here, at startup and before
+// any CA file is read, so a missing Ca:CertificatePassword stops the app (same style as the OpenIddict signing
+// certificate check below) instead of falling back to a password that is written in the source.
+builder.Services.AddSingleton(CertificateAuthoritySettings.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment()));
 builder.Services.AddScoped<ICertificateAuthorityService, CertificateAuthorityService>();
 builder.Services.AddScoped<IEventBus, EventBusService>();
 builder.Services.AddScoped<IWebhookService, WebhookService>();
+builder.Services.AddSingleton<IHostResolver, DnsHostResolver>();
+builder.Services.AddSingleton<IWebhookUrlGuard, WebhookUrlGuard>();
+builder.Services.AddScoped<IAM.API.Authorization.IWebhookAccessResolver, IAM.API.Authorization.WebhookAccessResolver>();
+builder.Services.AddScoped<IAM.API.Authorization.ITenantAccessResolver, IAM.API.Authorization.TenantAccessResolver>();
+builder.Services.AddScoped<IAM.API.Authorization.IEvaluationAccessResolver, IAM.API.Authorization.EvaluationAccessResolver>();
 builder.Services.AddScoped<IMqttAuthService, MqttAuthService>();
 builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationService>();
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
@@ -89,6 +110,7 @@ builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
 builder.Services.AddScoped<IAccountLinkingService, AccountLinkingService>();
 builder.Services.AddScoped<IInvitationService, InvitationService>();
+builder.Services.AddScoped<ILdapDirectoryClient, LdapDirectoryClient>();
 builder.Services.AddScoped<IDirectorySyncService, DirectorySyncService>();
 builder.Services.AddScoped<IAccessRequestService, AccessRequestService>();
 builder.Services.AddScoped<IScimService, ScimService>();
@@ -99,6 +121,7 @@ builder.Services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
 builder.Services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
 builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();
 builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
+builder.Services.AddScoped<IAM.API.Authorization.ISecretsAccessResolver, IAM.API.Authorization.SecretsAccessResolver>();
 builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
@@ -111,14 +134,15 @@ builder.Services.AddScoped<IDelegationService, DelegationService>();
 builder.Services.AddHttpClient("WebhookDelivery", client => {
     client.Timeout = TimeSpan.FromSeconds(30);
 })
-.ConfigurePrimaryHttpMessageHandler(() =>
-{
-    var handler = new HttpClientHandler();
-    if (builder.Environment.IsDevelopment())
-        // Allow self-signed certificates in development for webhook endpoints
-        handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-    return handler;
-});
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    // Task 4702: connection-time SSRF guard, no redirects, no proxy. Self-signed certificates are
+    // allowed in development only.
+    WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
+
+// Task 5150: custom-domain ownership proof (DNS TXT over HTTPS) for tenant branding
+builder.Services.AddHttpClient("DomainVerification", client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddSingleton<ITxtRecordResolver, DohTxtRecordResolver>();
+builder.Services.AddSingleton<IDomainOwnershipVerifier, DomainOwnershipVerifier>();
 
 // HttpClient for social/enterprise SSO provider calls
 builder.Services.AddHttpClient("SocialAuth");
@@ -126,15 +150,13 @@ builder.Services.AddHttpClient("SocialAuth");
 // HttpClient for Twilio SMS API
 builder.Services.AddHttpClient("TwilioSms");
 
-// HttpClient for region health checks
-builder.Services.AddHttpClient("RegionHealth")
-    .ConfigurePrimaryHttpMessageHandler(() =>
-    {
-        var handler = new HttpClientHandler();
-        if (builder.Environment.IsDevelopment())
-            handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        return handler;
-    });
+// HttpClient for region health checks (on demand and from RegionHealthWorker). Task 5153: the same connection-time
+// SSRF guard as webhook delivery (private, loopback and link-local addresses are never dialled), no redirects, no proxy.
+builder.Services.AddHttpClient("RegionHealth", client => {
+    client.Timeout = TimeSpan.FromSeconds(10);
+})
+.ConfigurePrimaryHttpMessageHandler(sp =>
+    WebhookHttpHandler.Create(sp.GetRequiredService<IWebhookUrlGuard>(), builder.Environment.IsDevelopment()));
 
 // Building Management System services
 builder.Services.AddScoped<ILocationService, LocationService>();
@@ -194,14 +216,18 @@ builder.Services.AddOpenIddict()
         options.SetAuthorizationEndpointUris("/connect/authorize")
                .SetTokenEndpointUris("/connect/token")
                .SetIntrospectionEndpointUris("/connect/introspect")
-               .SetRevocationEndpointUris("/connect/revoke");
+               .SetRevocationEndpointUris("/connect/revoke")
+               // Task 5804: RP-initiated logout. Advertised as end_session_endpoint in the discovery
+               // document; clients opt in with the end_session endpoint permission.
+               .SetEndSessionEndpointUris("/connect/logout");
 
         // Enable authorization code flow, refresh token, and client credentials flows.
         // PKCE is enforced per-client via Requirements.Features.ProofKeyForCodeExchange in the seeder —
         // not globally, since confidential clients (e.g. open-webui) don't require it.
         options.AllowAuthorizationCodeFlow()
                .AllowRefreshTokenFlow()
-               .AllowClientCredentialsFlow();
+               .AllowClientCredentialsFlow()
+               .AllowPasswordFlow();
 
         // Register scopes (permissions that clients can request)
         options.RegisterScopes(
@@ -267,6 +293,7 @@ builder.Services.AddOpenIddict()
                .EnableAuthorizationEndpointPassthrough()
                .EnableTokenEndpointPassthrough()
                .EnableUserInfoEndpointPassthrough()
+               .EnableEndSessionEndpointPassthrough()
                .EnableStatusCodePagesIntegration()
                .DisableTransportSecurityRequirement(); // Allow HTTP when behind IIS/ARR reverse proxy
 
@@ -334,7 +361,12 @@ builder.Services.AddAuthentication(options =>
 {
     options.Cookie.Name = "IAM.Session";
     options.Cookie.HttpOnly = true;
-    options.Cookie.SameSite = SameSiteMode.Strict;
+    // Task 5053: Lax, not Strict. An app on another domain (knowledge.prospergenics.com, ...) sends the
+    // user to /connect/authorize with a cross-site top-level navigation; a Strict cookie is not sent on
+    // that, so IAM would never recognise a signed-in user and prompt=none would always answer
+    // login_required. Lax still withholds the cookie from cross-site sub-requests and form POSTs.
+    // Only /connect/authorize reads this cookie; the refreshToken cookie stays Strict.
+    options.Cookie.SameSite = SameSiteMode.Lax;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
@@ -448,6 +480,11 @@ app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
 app.UseAuthorization();
 
+// Task 5800: the remote MCP endpoint (/mcp), always behind the MCP auth scheme. Mapped after
+// UseAuthentication/UseAuthorization, as the template requires. The Hazina X-Api-Key middleware
+// above skips /mcp (excluded in AddIamMcp), so the MCP key in that header is not rejected early.
+app.MapJengoMcp();
+
 app.MapControllers();
 
 // SignalR hubs
@@ -462,6 +499,19 @@ app.MapFallback("/api/{**rest}", () => Results.NotFound(new { error = "API endpo
 
 // SPA fallback — serves index.html for any non-API path not matched by a route
 app.MapFallbackToFile("index.html");
+
+// Task 5150: re-validate branding rows stored before branding input was restricted (idempotent; never blocks startup)
+try
+{
+    using var brandingScope = app.Services.CreateScope();
+    await IAM.Infrastructure.Services.BrandingCleanup.RunAsync(
+        brandingScope.ServiceProvider.GetRequiredService<IAMDbContext>(),
+        app.Logger);
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Branding clean-up pass failed; branding is still validated when it is read");
+}
 
 // Seed development data (only in Development environment)
 if (app.Environment.IsDevelopment())

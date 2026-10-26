@@ -155,7 +155,7 @@ public class UnifiedAuthorizationService : IUnifiedAuthorizationService
         return principalType.ToLowerInvariant() switch
         {
             "user" => await GetUserEffectivePermissionsAsync(principalId, tenantId, ct),
-            "device" => await GetDeviceEffectivePermissionsAsync(principalId, ct),
+            "device" => await GetDeviceEffectivePermissionsAsync(principalId, tenantId, ct),
             _ => new EffectivePermissions
             {
                 PrincipalType = principalType,
@@ -529,6 +529,7 @@ public class UnifiedAuthorizationService : IUnifiedAuthorizationService
     /// </summary>
     private async Task<EffectivePermissions> GetDeviceEffectivePermissionsAsync(
         Guid deviceId,
+        Guid tenantId,
         CancellationToken ct)
     {
         var result = new EffectivePermissions
@@ -541,7 +542,10 @@ public class UnifiedAuthorizationService : IUnifiedAuthorizationService
             .AsNoTracking()
             .FirstOrDefaultAsync(d => d.Id == deviceId && d.IsActive, ct);
 
-        if (device == null)
+        // Same rule as EvaluateDeviceAsync: a device answers only inside its own tenant. The caller's access check
+        // (task 5162) vouches for the tenantId it was given, so without this a tenant admin could read another
+        // tenant's device by naming their own tenant. A device of another tenant looks exactly like a missing one.
+        if (device == null || device.TenantId != tenantId)
             return result;
 
         var permissions = DeserializePermissions(device.Permissions);

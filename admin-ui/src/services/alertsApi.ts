@@ -42,7 +42,8 @@ export interface SiemIntegration {
   name: string;
   type: number;
   endpointUrl: string;
-  authConfig?: string;
+  hasAuthConfig?: boolean;
+  authConfigMasked?: string;
   format: string;
   eventFilter?: string;
   isActive: boolean;

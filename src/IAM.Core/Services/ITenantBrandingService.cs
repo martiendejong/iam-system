@@ -24,9 +24,25 @@ public interface ITenantBrandingService
     Task<TenantBranding?> GetByCustomDomainAsync(string domain, CancellationToken ct = default);
 
     /// <summary>
-    /// Create or update branding for a tenant. Upserts based on TenantId.
+    /// Like <see cref="GetByCustomDomainAsync"/>, but only when the tenant has proven it owns the domain (DNS TXT
+    /// record, task 5150) and the domain is not a platform host. This is what the by-domain endpoint serves.
     /// </summary>
-    Task<TenantBranding> UpsertAsync(Guid tenantId, TenantBranding branding, CancellationToken ct = default);
+    Task<TenantBranding?> GetVerifiedByCustomDomainAsync(string domain, CancellationToken ct = default);
+
+    /// <summary>True for the platform's own hosts (configured Branding:PlatformHosts, the issuer host, localhost).</summary>
+    bool IsPlatformHost(string? host);
+
+    /// <summary>The TXT record a tenant must publish to prove it owns <paramref name="domain"/>.</summary>
+    (string RecordName, string RecordValue) GetDomainVerificationRecord(Guid tenantId, string domain);
+
+    Task<bool> IsDomainVerifiedAsync(Guid tenantId, string domain, CancellationToken ct = default);
+
+    /// <summary>
+    /// Create or update branding for a tenant. Upserts based on TenantId. Every value is validated/sanitized first
+    /// (task 5150) and a <see cref="BrandingValidationException"/> is thrown for unacceptable input.
+    /// </summary>
+    /// <param name="requestHost">The host the request arrived on; it can never be claimed as a custom domain either.</param>
+    Task<TenantBranding> UpsertAsync(Guid tenantId, TenantBranding branding, CancellationToken ct = default, string? requestHost = null);
 
     /// <summary>
     /// Delete branding for a tenant (resets to platform defaults).

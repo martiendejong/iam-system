@@ -33,6 +33,10 @@
       "Secret": "<REPLACE_WITH_OPEN_WEBUI_CLIENT_SECRET>"
     }
   },
+  "Ca": {
+    "_comment": "Optional in Development (a documented dev-only password is used). Required in every other environment: a strong generated CertificatePassword protects the CA root key file; CertificatePath defaults outside the app folder. LegacyCertificatePassword is a one-time setting to upgrade a key file made by an older version (remove it after the first start).",
+    "CertificatePassword": "<REPLACE_WITH_STRONG_GENERATED_PASSWORD>"
+  },
   "JengoVpsMcp": {
     "ClientSecret": "jengo-mcp-iam-secret-dev"
   }

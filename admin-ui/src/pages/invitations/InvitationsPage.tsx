@@ -50,6 +50,8 @@ export default function InvitationsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  // Accept link to hand over manually when the invitation email failed to send
+  const [manualAcceptUrl, setManualAcceptUrl] = useState('');
 
   // Invite form
   const [inviteEmail, setInviteEmail] = useState('');
@@ -179,14 +181,22 @@ export default function InvitationsPage() {
     setSuccess('');
     setLoading(true);
 
+    setManualAcceptUrl('');
     try {
-      await api.sendInvitation({
+      const result = await api.sendInvitation({
         email: inviteEmail,
         tenantId: selectedTenantId,
         roleId: inviteRoleId,
         expiryDays: inviteExpiryDays,
       });
-      setSuccess(`Invitation sent to ${inviteEmail}`);
+      if (result?.emailSent === false) {
+        // The invitation exists but no mail went out - never pretend it was sent;
+        // give the admin the accept link to hand over manually.
+        setError(`Invitation for ${inviteEmail} was created, but the email could NOT be sent. Share the link below manually.`);
+        setManualAcceptUrl(result.acceptUrl || '');
+      } else {
+        setSuccess(`Invitation sent to ${inviteEmail}`);
+      }
       setInviteEmail('');
       loadInvitations();
       loadPendingInvitations();
@@ -320,6 +330,25 @@ export default function InvitationsPage() {
                   &times;
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+        {manualAcceptUrl && (
+          <div className="rounded-md bg-amber-50 border border-amber-200 p-4">
+            <p className="text-sm font-medium text-amber-800 mb-2">
+              Manual invite link (email was not delivered):
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-xs bg-white border border-amber-200 rounded px-2 py-1.5 break-all select-all">
+                {manualAcceptUrl}
+              </code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(manualAcceptUrl)}
+                className="shrink-0 px-3 py-1.5 text-xs font-medium text-amber-800 bg-amber-100 border border-amber-300 rounded hover:bg-amber-200"
+              >
+                Copy
+              </button>
             </div>
           </div>
         )}

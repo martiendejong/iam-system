@@ -56,6 +56,18 @@ public class DirectorySyncWorker : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var syncService = scope.ServiceProvider.GetRequiredService<IDirectorySyncService>();
 
+        // Bind passwords saved in plain text before task 4698 are encrypted here (idempotent, cheap when none are left).
+        try
+        {
+            var upgraded = await syncService.EncryptLegacyBindPasswordsAsync(ct);
+            if (upgraded > 0)
+                _logger.LogInformation("Encrypted {Count} legacy directory sync bind password(s)", upgraded);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Encrypting legacy directory sync bind passwords failed");
+        }
+
         var dueConfigs = await syncService.GetConfigsDueForSyncAsync(ct);
 
         if (dueConfigs.Count == 0) return;
