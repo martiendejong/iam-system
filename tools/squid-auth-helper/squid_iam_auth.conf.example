@@ -1,0 +1,6 @@
+[iam]
+IAM_TOKEN_URL = https://maendeleo.martiendejong.nl/auth/connect/token
+IAM_CLIENT_ID = squid-proxy
+IAM_CLIENT_SECRET = REPLACE_WITH_SECRET
+IAM_SCOPE = openid
+IAM_TIMEOUT = 10

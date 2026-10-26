@@ -30,6 +30,12 @@ public static class ServiceAccountAuthorization
     /// <summary>Permission that allows POST /api/invitations (send an invite email).</summary>
     public const string InvitationsSendPermission = "invitations:send";
 
+    /// <summary>
+    /// Permission that lets a service account ask /api/authorize (evaluate, batch, test, effective permissions)
+    /// about other principals; a tenant_id claim on the account keeps it inside that tenant (task 5162).
+    /// </summary>
+    public const string AuthorizeEvaluatePermission = "authorize:evaluate";
+
     public static bool IsServiceAccount(ClaimsPrincipal principal) =>
         principal.HasClaim(TokenTypeClaim, ServiceAccountTokenType);
 
