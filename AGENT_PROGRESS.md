@@ -505,6 +505,24 @@ the hardening left in the worktree, marked the PR ready with the deploy prerequi
 Verified: build clean, IAM.API.Tests 188 passed / 3 skipped / 0 failed on top of develop (HAZINA_ROOT must point at a Hazina checkout that has PR #318).
 Left: deploy IAM (Martien), then live check: client_credentials token is 3-part RS256 verifying against the live JWKS, one human login still works.
 
+## 2026-09-30 - task 4522 (continuation, PR #141)
+Done: fixed the CHANGES REQUESTED review on the TenantBrandingController IDOR fix. IsAuthorizedForTenantAsync now mirrors
+GroupService.CreateGroupAsync's real check: SuperAdmin bypass, then (if a tenant_id claim is present it must match) an
+active UserRoles row for the target tenant via IAMDbContext - a claim-only check wrongly 403'd a normal password-login
+TenantAdmin on their own tenant. Added TenantBrandingAccessControlTests.cs (14 tests: own-tenant GET/PUT/DELETE for both
+claim-less and claim-present tokens, cross-tenant blocked incl. a tenant-scoped-claim-for-a-different-tenant case,
+no-membership-at-all blocked, SuperAdmin bypass on all three verbs, both anonymous endpoints still 404 with no auth).
+Verified: build clean (HazinaRoot=C:/projects/hazina-3911/), new tests 14/14 pass; full IAM.API.Tests 291 passed / 3
+skipped / 2 failed (PkceMethodsTests, pre-existing on develop too - OpenIddict "at least one flow enabled" config issue,
+unrelated to this change, confirmed by running the same filter against iam-system-base/develop).
+Left: nothing on this task; the follow-up ticket for EmailTemplatesController/OrganizationSettingsController/
+NetworkPolicyController's identical missing-check pattern is still out of scope per the task description.
+
+## 2026-10-26 - task 4522 (review round 2, PR #141)
+Done: merged develop into the branch and fixed two gaps the merge exposed (no conflict markers, found by running the tests): (1) PR #190 added GET /api/branding/{tenantId}/domain-verification with no tenant check - same cross-tenant exposure (custom domain + DNS proof value + verified flag) - now guarded by IsAuthorizedForTenantAsync, 3 new tests (own tenant 200, other tenant 403, SuperAdmin 200); (2) TenantBrandingSafetyTests acted as a random user with no membership and went 403 (22 tests red) - they now act as SuperAdmin, they test sanitization not access.
+Verified: TenantBranding* 44/44 pass; removing the new guard makes DomainVerification_OtherTenant_IsForbidden fail (200); full IAM.API.Tests 1786 passed / 7 failed (2 PkceMethodsTests = known develop reds, 5 TelemetryStorageServicePostgresTests = Postgres password auth for iam_user, environment) / 3 skipped.
+Left: EmailTemplatesController / OrganizationSettingsController / NetworkPolicyController still have the same missing-check pattern (separate ticket per task description).
+
 ## 2026-09-30 - task 4094
 Done: live rotation done earlier today (jengo-agi-svc new random secret in vault 9/212, backend_service + postman_client dropped); PR #143 adds a startup audit that logs Critical when a client secret matches a published repo default. Review added the open-webui literal that shipped 2026-06-12..2026-09-10 to the list plus DefaultClientSecretAuditTests.
 Verified: live DB read-only hash check of all 28 clients vs 8 published literals = 0 matches; old jengo-agi-svc default 401 invalid_client, vault secret 200 (3-part JWT); IAM.API.Tests 279 passed / 2 failed (PkceMethodsTests, identical on untouched develop) / 3 skipped; new test fails without the added literal.
