@@ -618,11 +618,14 @@ public class DatabaseSeeder : IHostedService
                 RedirectUris =
                 {
                     new Uri("https://coaching.martiendejong.nl/coaching/api/auth/iam/callback"),
+                    new Uri("https://growth.portofgiethoorn.com/coaching/api/auth/iam/callback"),
+                    new Uri("http://localhost:5210/api/auth/iam/callback"),
                     new Uri("http://localhost:5188/api/auth/iam/callback")
                 },
                 PostLogoutRedirectUris =
                 {
-                    new Uri("https://coaching.martiendejong.nl/coaching/")
+                    new Uri("https://coaching.martiendejong.nl/coaching/"),
+                    new Uri("https://growth.portofgiethoorn.com/coaching/")
                 },
                 Permissions =
                 {
