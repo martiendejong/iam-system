@@ -1410,6 +1410,7 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.IpAddress).HasMaxLength(50);
             entity.Property(e => e.AuditCorrelationId).HasMaxLength(100);
             entity.Property(e => e.BreakGlassApprovers).HasColumnType("jsonb");
+            entity.Property(e => e.BreakGlassConfirmations).HasColumnType("jsonb");
 
             entity.HasIndex(e => e.UserId);
             entity.HasIndex(e => e.RoleId);
