@@ -238,11 +238,6 @@ export const portalApi = {
     return response.data;
   },
 
-  linkProvider: async (provider: string, data: { providerUserId: string; email?: string; displayName?: string }): Promise<LinkedIdentity> => {
-    const response = await client().post(`/portal/link/${provider}`, data);
-    return response.data;
-  },
-
   unlinkProvider: async (provider: string): Promise<{ message: string }> => {
     const response = await client().delete(`/portal/link/${provider}`);
     return response.data;
