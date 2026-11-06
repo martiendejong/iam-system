@@ -4,12 +4,21 @@ using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace IAM.Infrastructure.Services;
 
 public class TotpService : ITotpService
 {
+    // Stored secrets are "enc:<vault secret id>" pointing at an AES-GCM entry in the secrets vault
+    // (same pattern as SocialAuthService). Values without the prefix are legacy plain-text base32.
+    internal const string EncryptedPrefix = "enc:";
+    internal const string VaultSecretType = "TotpSecret";
+
     private readonly IAMDbContext _context;
+    private readonly ISecretsVaultService _secretsVault;
+    private readonly ILogger<TotpService> _logger;
 
     // RFC 6238 defaults
     private const int SecretLength = 20; // 160 bits
@@ -21,9 +30,11 @@ public class TotpService : ITotpService
     // Base32 alphabet (RFC 4648)
     private const string Base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
-    public TotpService(IAMDbContext context)
+    public TotpService(IAMDbContext context, ISecretsVaultService secretsVault, ILogger<TotpService>? logger = null)
     {
         _context = context;
+        _secretsVault = secretsVault;
+        _logger = logger ?? NullLogger<TotpService>.Instance;
     }
 
     public TotpSetupResult GenerateSetupInfo(string email, string issuer = "IAM System")
@@ -49,33 +60,162 @@ public class TotpService : ITotpService
         };
     }
 
-    public bool ValidateCode(string secret, string code)
+    public bool ValidateCode(string secret, string code) => FindMatchingStep(secret, code) != null;
+
+    /// <summary>
+    /// Returns the time step the code belongs to (current step +/- clock skew), or null when it matches none.
+    /// </summary>
+    private static long? FindMatchingStep(string? secret, string? code)
     {
         if (string.IsNullOrWhiteSpace(secret) || string.IsNullOrWhiteSpace(code))
-            return false;
+            return null;
 
         if (code.Length != CodeDigits || !code.All(char.IsDigit))
-            return false;
+            return null;
 
-        var secretBytes = Base32Decode(secret);
-        var unixTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        byte[] secretBytes;
+        try { secretBytes = Base32Decode(secret); }
+        catch (FormatException) { return null; }
 
-        // Check current time step and adjacent steps for clock skew tolerance
-        for (int offset = -ClockSkewSteps; offset <= ClockSkewSteps; offset++)
+        var currentStep = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / TimeStepSeconds;
+        var codeBytes = Encoding.UTF8.GetBytes(code);
+        long? match = null;
+
+        // Check every step in the window (newest first, no early exit) so timing does not reveal which step matched.
+        for (int offset = ClockSkewSteps; offset >= -ClockSkewSteps; offset--)
         {
-            var timeStep = (unixTimestamp / TimeStepSeconds) + offset;
+            var timeStep = currentStep + offset;
             var expectedCode = GenerateTotpCode(secretBytes, timeStep);
 
             // Constant-time comparison to prevent timing attacks
-            if (CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(expectedCode),
-                Encoding.UTF8.GetBytes(code)))
+            if (CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expectedCode), codeBytes)
+                && match == null)
             {
-                return true;
+                match = timeStep;
             }
         }
 
-        return false;
+        return match;
+    }
+
+    /// <summary>
+    /// Resolves the plain base32 secret of a user: decrypts "enc:" values through the vault, passes
+    /// legacy plain-text values through. Null when the secret cannot be read.
+    /// </summary>
+    private async Task<string?> ReadSecretAsync(User user, CancellationToken ct)
+    {
+        var stored = user.TwoFactorSecret;
+        if (string.IsNullOrWhiteSpace(stored))
+            return null;
+
+        if (!stored.StartsWith(EncryptedPrefix, StringComparison.Ordinal))
+            return stored;
+
+        if (!Guid.TryParse(stored[EncryptedPrefix.Length..], out var secretId))
+            return null;
+
+        try
+        {
+            return await _secretsVault.GetSecretValueAsync(secretId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not decrypt the TOTP secret of user {UserId}", user.Id);
+            return null;
+        }
+    }
+
+    private async Task<string> EncryptSecretAsync(Guid userId, string plainBase32, CancellationToken ct)
+    {
+        var entry = await _secretsVault.CreateSecretAsync(
+            name: $"totp-secret-{userId:N}-{Guid.NewGuid():N}",
+            plainTextValue: plainBase32,
+            secretType: VaultSecretType,
+            createdByUserId: userId,
+            ct: ct);
+        return EncryptedPrefix + entry.Id;
+    }
+
+    private async Task DeleteStoredSecretAsync(string? stored, CancellationToken ct)
+    {
+        if (stored != null && stored.StartsWith(EncryptedPrefix, StringComparison.Ordinal)
+            && Guid.TryParse(stored[EncryptedPrefix.Length..], out var id))
+        {
+            try { await _secretsVault.DeleteSecretAsync(id, ct); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Could not delete vault entry {SecretId} of a TOTP secret", id); }
+        }
+    }
+
+    /// <summary>
+    /// Checks the code against the user's secret and burns its time step. Accepts only a step newer than
+    /// the last accepted one; the conditional UPDATE makes parallel requests with the same code race on one row.
+    /// </summary>
+    private async Task<bool> ValidateAndConsumeAsync(User user, string code, CancellationToken ct)
+    {
+        var secret = await ReadSecretAsync(user, ct);
+        var step = FindMatchingStep(secret, code);
+        if (step == null)
+            return false;
+
+        var stepValue = step.Value;
+        if (user.TwoFactorLastUsedStep != null && user.TwoFactorLastUsedStep >= stepValue)
+        {
+            _logger.LogWarning("Rejected replayed TOTP code for user {UserId}", user.Id);
+            return false;
+        }
+
+        if (!_context.Database.IsRelational())
+        {
+            // Non-relational providers (EF InMemory, unit tests only) cannot run ExecuteUpdateAsync.
+            user.TwoFactorLastUsedStep = stepValue;
+            await _context.SaveChangesAsync(ct);
+            return true;
+        }
+
+        var userId = user.Id;
+        var updated = await _context.Users
+            .Where(u => u.Id == userId && (u.TwoFactorLastUsedStep == null || u.TwoFactorLastUsedStep < stepValue))
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.TwoFactorLastUsedStep, stepValue), ct);
+
+        if (updated == 0)
+        {
+            _logger.LogWarning("Rejected TOTP code already used by a concurrent request for user {UserId}", userId);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// One-off, repeatable conversion of legacy plain-text secrets to vault-encrypted ones. Users stay enrolled
+    /// (same secret, new storage). Returns the number of secrets converted; 0 on a re-run.
+    /// </summary>
+    public async Task<int> EncryptLegacySecretsAsync(CancellationToken ct = default)
+    {
+        var legacy = await _context.Users
+            .Where(u => u.TwoFactorSecret != null && u.TwoFactorSecret != "" && !u.TwoFactorSecret.StartsWith(EncryptedPrefix))
+            .ToListAsync(ct);
+
+        var converted = 0;
+        foreach (var user in legacy)
+        {
+            var stored = await EncryptSecretAsync(user.Id, user.TwoFactorSecret!, ct);
+            user.TwoFactorSecret = stored;
+            try
+            {
+                await _context.SaveChangesAsync(ct);
+                converted++;
+            }
+            catch
+            {
+                await DeleteStoredSecretAsync(stored, ct);
+                throw;
+            }
+        }
+
+        if (converted > 0)
+            _logger.LogInformation("Encrypted {Count} legacy plain-text TOTP secret(s)", converted);
+        return converted;
     }
 
     public async Task<TotpSetupResult> EnableTotpAsync(Guid userId, CancellationToken ct = default)
@@ -91,7 +231,9 @@ public class TotpService : ITotpService
         var setupResult = GenerateSetupInfo(user.Email);
 
         // Store the secret but do NOT enable 2FA yet (pending verification)
-        user.TwoFactorSecret = setupResult.Secret;
+        await DeleteStoredSecretAsync(user.TwoFactorSecret, ct); // abandoned earlier setup
+        user.TwoFactorSecret = await EncryptSecretAsync(user.Id, setupResult.Secret, ct);
+        user.TwoFactorLastUsedStep = null;
         user.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(ct);
@@ -112,7 +254,7 @@ public class TotpService : ITotpService
             return false; // Already activated
 
         // Validate the code against the stored (but not yet activated) secret
-        if (!ValidateCode(user.TwoFactorSecret, code))
+        if (!await ValidateAndConsumeAsync(user, code, ct))
             return false;
 
         // Code is valid - activate TOTP
@@ -134,12 +276,14 @@ public class TotpService : ITotpService
             return false;
 
         // Must provide a valid code to disable (security confirmation)
-        if (!ValidateCode(user.TwoFactorSecret, code))
+        if (!await ValidateAndConsumeAsync(user, code, ct))
             return false;
 
         // Disable TOTP and clear secret
+        var oldStored = user.TwoFactorSecret;
         user.TwoFactorEnabled = false;
         user.TwoFactorSecret = null;
+        user.TwoFactorLastUsedStep = null;
         user.TwoFactorMethod = TwoFactorMethod.None;
         user.UpdatedAt = DateTime.UtcNow;
 
@@ -150,6 +294,7 @@ public class TotpService : ITotpService
         _context.RecoveryCodes.RemoveRange(recoveryCodes);
 
         await _context.SaveChangesAsync(ct);
+        await DeleteStoredSecretAsync(oldStored, ct);
         return true;
     }
 
@@ -162,7 +307,7 @@ public class TotpService : ITotpService
         if (!user.TwoFactorEnabled || string.IsNullOrWhiteSpace(user.TwoFactorSecret))
             return false;
 
-        return ValidateCode(user.TwoFactorSecret, code);
+        return await ValidateAndConsumeAsync(user, code, ct);
     }
 
     public async Task<List<string>> GenerateRecoveryCodesAsync(Guid userId, int count = 8, CancellationToken ct = default)
@@ -249,7 +394,7 @@ public class TotpService : ITotpService
     /// <summary>
     /// Generates a TOTP code using HMAC-SHA1 per RFC 6238 / RFC 4226.
     /// </summary>
-    private static string GenerateTotpCode(byte[] secret, long timeStep)
+    internal static string GenerateTotpCode(byte[] secret, long timeStep)
     {
         // Convert time step counter to 8-byte big-endian
         var timeStepBytes = new byte[8];

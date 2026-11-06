@@ -1,4 +1,4 @@
-﻿using Hazina.Security.ApiKeys;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -62,6 +62,28 @@ public class DatabaseSeeder : IHostedService
         await BackfillGroupRolesAsync(scope.ServiceProvider, cancellationToken);
         await BackfillApiKeysOfInactiveUsersAsync(scope.ServiceProvider, cancellationToken);
         await AuditDefaultClientSecretsAsync(scope.ServiceProvider, cancellationToken);
+        await EncryptLegacyTotpSecretsAsync(scope.ServiceProvider, cancellationToken);
+    }
+
+    /// <summary>
+    /// Task 5491: converts plain-text authenticator secrets to vault-encrypted ones. Off by default: enable
+    /// Totp:EncryptLegacySecrets only after a build that reads both formats is live and the
+    /// TwoFactorLastUsedStep column exists. Idempotent; a re-run converts nothing.
+    /// </summary>
+    private async Task EncryptLegacyTotpSecretsAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        if (!_configuration.GetValue<bool>("Totp:EncryptLegacySecrets"))
+            return;
+        try
+        {
+            var totp = services.GetRequiredService<IAM.Core.Services.ITotpService>();
+            var converted = await totp.EncryptLegacySecretsAsync(cancellationToken);
+            _logger.LogInformation("TOTP secret encryption: {Converted} legacy secret(s) converted", converted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "TOTP legacy secret encryption failed");
+        }
     }
 
     /// <summary>
