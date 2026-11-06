@@ -26,12 +26,8 @@ public class MagicLinkController : ControllerBase
         }
 
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var result = await _magicLinkService.SendMagicLinkAsync(request.Email, MagicLinkPurpose.Login, ipAddress, request.ReturnUrl);
-
-        if (!result)
-        {
-            return StatusCode(429, new { error = "Too many requests. Please try again later." });
-        }
+        // Over-limit requests are silently dropped; the response is the same either way.
+        await _magicLinkService.SendMagicLinkAsync(request.Email, MagicLinkPurpose.Login, ipAddress, request.ReturnUrl);
 
         // Always return success to not reveal if email exists
         return Ok(new { message = "If the email exists, a magic link has been sent." });

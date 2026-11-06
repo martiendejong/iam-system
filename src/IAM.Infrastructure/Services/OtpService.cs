@@ -22,14 +22,19 @@ public class OtpService : IOtpService
     private const int MaxAttemptsPerCode = 5;
     private const int MaxSmsPerPhonePerHour = 10;
     private const int MaxEmailPerAddressPerHour = 10;
+    private const int MaxRequestsPerIpPerHour = 30;
+    private static readonly TimeSpan ThrottleWindow = TimeSpan.FromHours(1);
+    private readonly IRequestThrottle _throttle;
 
     public OtpService(
         IAMDbContext context,
         IEmailService emailService,
         ISmsService smsService,
         IOptions<EmailSettings> emailSettings,
-        ILogger<OtpService> logger)
+        ILogger<OtpService> logger,
+        IRequestThrottle? throttle = null)
     {
+        _throttle = throttle ?? new InMemoryRequestThrottle();
         _context = context;
         _emailService = emailService;
         _smsService = smsService;
@@ -37,17 +42,15 @@ public class OtpService : IOtpService
         _logger = logger;
     }
 
-    public async Task<bool> SendEmailOtpAsync(string email, OtpPurpose purpose)
+    public async Task<bool> SendEmailOtpAsync(string email, OtpPurpose purpose, string? ipAddress = null)
     {
-        // Rate limit: max per email per hour
-        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-        var recentCount = await _context.OtpCodes
-            .CountAsync(c => c.Email == email && c.CreatedAt >= oneHourAgo);
-
-        if (recentCount >= MaxEmailPerAddressPerHour)
+        // Rate limit per address and per source IP. Counted for every request, whether or not an
+        // account exists, and an over-limit request is silently dropped (still returns true) so the
+        // response never reveals whether the address has an account.
+        if (!WithinLimits("otp-email", email.Trim().ToLowerInvariant(), MaxEmailPerAddressPerHour, ipAddress))
         {
-            _logger.LogWarning("Rate limit exceeded for email OTP requests: {Email}", email);
-            return false;
+            _logger.LogWarning("Rate limit exceeded for email OTP requests; send skipped");
+            return true;
         }
 
         // Find user by email (optional for OTP - some flows don't require existing user)
@@ -91,17 +94,12 @@ public class OtpService : IOtpService
         return true;
     }
 
-    public async Task<bool> SendSmsOtpAsync(string phoneNumber, OtpPurpose purpose)
+    public async Task<bool> SendSmsOtpAsync(string phoneNumber, OtpPurpose purpose, string? ipAddress = null)
     {
-        // Rate limit: max per phone per hour
-        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-        var recentCount = await _context.OtpCodes
-            .CountAsync(c => c.PhoneNumber == phoneNumber && c.CreatedAt >= oneHourAgo);
-
-        if (recentCount >= MaxSmsPerPhonePerHour)
+        if (!WithinLimits("otp-sms", phoneNumber.Trim(), MaxSmsPerPhonePerHour, ipAddress))
         {
-            _logger.LogWarning("Rate limit exceeded for SMS OTP requests: {PhoneNumber}", phoneNumber);
-            return false;
+            _logger.LogWarning("Rate limit exceeded for SMS OTP requests; send skipped");
+            return true;
         }
 
         // Find user by phone number
@@ -141,6 +139,15 @@ public class OtpService : IOtpService
 
         _logger.LogInformation("SMS OTP sent to {PhoneNumber} for purpose {Purpose}", phoneNumber, purpose);
         return true;
+    }
+
+    private bool WithinLimits(string channel, string subject, int perSubjectLimit, string? ipAddress)
+    {
+        // Evaluate both so each counter records the request regardless of the other's outcome.
+        var subjectOk = _throttle.TryAcquire($"{channel}:addr:{subject}", perSubjectLimit, ThrottleWindow);
+        var ipOk = string.IsNullOrEmpty(ipAddress)
+            || _throttle.TryAcquire($"{channel}:ip:{ipAddress}", MaxRequestsPerIpPerHour, ThrottleWindow);
+        return subjectOk && ipOk;
     }
 
     public async Task<bool> ValidateOtpAsync(string? email, string? phoneNumber, string code, OtpPurpose purpose)
