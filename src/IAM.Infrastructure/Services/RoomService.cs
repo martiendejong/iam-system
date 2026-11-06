@@ -74,7 +74,6 @@ public class RoomService : IRoomService
     {
         room.UpdatedAt = DateTime.UtcNow;
 
-        _context.Rooms.Update(room);
         await _context.SaveChangesAsync();
 
         return room;

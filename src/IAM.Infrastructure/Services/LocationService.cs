@@ -51,7 +51,6 @@ public class LocationService : ILocationService
     {
         location.UpdatedAt = DateTime.UtcNow;
 
-        _context.Locations.Update(location);
         await _context.SaveChangesAsync();
 
         return location;

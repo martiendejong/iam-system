@@ -71,7 +71,6 @@ public class RoomGroupService : IRoomGroupService
     {
         roomGroup.UpdatedAt = DateTime.UtcNow;
 
-        _context.RoomGroups.Update(roomGroup);
         await _context.SaveChangesAsync();
 
         return roomGroup;
