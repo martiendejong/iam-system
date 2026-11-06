@@ -378,6 +378,8 @@ builder.Services.AddAuthentication(options =>
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
+    // Task 5568: the cookie dies with the sign-in (refresh token) it is bound to. Only requests that carry the cookie pay for it.
+    options.Events.OnValidatePrincipal = IAM.API.Auth.AccessTokenSessionValidator.OnValidateCookiePrincipalAsync;
 });
 
 // SuperAdmin inherits all admin roles (so role-guarded endpoints accept SuperAdmin)

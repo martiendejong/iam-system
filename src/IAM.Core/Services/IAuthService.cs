@@ -49,6 +49,9 @@ public class AuthResult
     public bool Success { get; set; }
     public string? AccessToken { get; set; }
     public string? RefreshToken { get; set; }
+
+    /// <summary>Task 5568: id of the refresh token issued with this result: the session id, and the IAM.Session cookie binding.</summary>
+    public Guid? RefreshTokenId { get; set; }
     public User? User { get; set; }
     public string? Error { get; set; }
     public Dictionary<string, string[]>? ValidationErrors { get; set; }

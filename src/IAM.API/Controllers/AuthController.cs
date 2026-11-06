@@ -1,3 +1,4 @@
+using IAM.API.Auth;
 using System.Globalization;
 using System.Security.Claims;
 using IAM.Core;
@@ -170,6 +171,9 @@ public class AuthController : ControllerBase
             new(ClaimTypes.Email, result.User.Email),
             new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
         };
+        // Task 5568: bind the cookie to the sign-in (refresh token) it belongs to, so revoking that sign-in ends the cookie.
+        if (result.RefreshTokenId.HasValue)
+            claims.Add(new(AccessTokenSessionValidator.RefreshTokenIdClaim, result.RefreshTokenId.Value.ToString()));
         var identity = new ClaimsIdentity(claims, "IAM.Session");
         var authProperties = rememberMe
             ? new AuthenticationProperties
@@ -241,6 +245,18 @@ public class AuthController : ControllerBase
             SameSite = SameSiteMode.Strict,
             Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
         });
+
+        // Task 5568: rotation revokes the refresh token the IAM.Session cookie is bound to; move the cookie to the new one
+        // (same user, same lifetime) so a normal refresh does not sign the browser out of single sign-on.
+        var sso = await HttpContext.AuthenticateAsync("IAM.Session");
+        if (sso.Succeeded && sso.Principal != null && result.RefreshTokenId.HasValue)
+        {
+            var claims = sso.Principal.Claims
+                .Where(c => c.Type != AccessTokenSessionValidator.RefreshTokenIdClaim).ToList();
+            claims.Add(new Claim(AccessTokenSessionValidator.RefreshTokenIdClaim, result.RefreshTokenId.Value.ToString()));
+            await HttpContext.SignInAsync("IAM.Session",
+                new ClaimsPrincipal(new ClaimsIdentity(claims, "IAM.Session")), sso.Properties);
+        }
 
         return Ok(new
         {
