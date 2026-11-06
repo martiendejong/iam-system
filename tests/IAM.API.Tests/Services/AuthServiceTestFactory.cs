@@ -30,7 +30,8 @@ internal static class AuthServiceTestFactory
 
         return new AuthService(
             context, configuration, emailService, riskAssessmentService, otpService, claimsMappingService,
-            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle());
+            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle(),
+            new SignInNetworkGate(context, NullLogger<SignInNetworkGate>.Instance));
     }
 
     /// <summary>

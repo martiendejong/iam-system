@@ -328,43 +328,7 @@ public class NetworkPolicyService : INetworkPolicyService
     /// <summary>
     /// Check if an IP address falls within a CIDR range
     /// </summary>
-    private static bool IsIpInCidr(string ipAddress, string cidr)
-    {
-        try
-        {
-            if (!IPAddress.TryParse(ipAddress, out var ip))
-                return false;
-
-            var parts = cidr.Split('/');
-            if (!IPAddress.TryParse(parts[0], out var networkAddress))
-                return false;
-
-            int prefixLength = parts.Length > 1 ? int.Parse(parts[1]) : 32;
-
-            var ipBytes = ip.MapToIPv4().GetAddressBytes();
-            var networkBytes = networkAddress.MapToIPv4().GetAddressBytes();
-
-            if (ipBytes.Length != networkBytes.Length)
-                return false;
-
-            // Create mask
-            int totalBits = ipBytes.Length * 8;
-            for (int i = 0; i < ipBytes.Length; i++)
-            {
-                int bitsToCheck = Math.Min(8, Math.Max(0, prefixLength - (i * 8)));
-                byte mask = (byte)(0xFF << (8 - bitsToCheck));
-
-                if ((ipBytes[i] & mask) != (networkBytes[i] & mask))
-                    return false;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private static bool IsIpInCidr(string ipAddress, string cidr) => CidrMatcher.Contains(ipAddress, cidr);
 
     /// <summary>
     /// Validate that a string is valid CIDR notation

@@ -76,6 +76,11 @@ public class AuthController : ControllerBase
 
         if (!result.Success)
         {
+            if (result.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
+            }
+
             // Task 5166: a caller that has to wait gets 429 + Retry-After. This is keyed on the typed
             // email and the IP, so it looks the same for an unknown email as for a real account.
             if (result.RetryAfterSeconds > 0)
@@ -125,6 +130,11 @@ public class AuthController : ControllerBase
 
         if (!result.Success)
         {
+            if (result.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
+            }
+
             return BadRequest(new { error = result.Error });
         }
 
@@ -206,6 +216,11 @@ public class AuthController : ControllerBase
 
         if (!result.Success)
         {
+            if (result.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
+            }
+
             return BadRequest(new { error = result.Error });
         }
 
@@ -228,6 +243,11 @@ public class AuthController : ControllerBase
 
         if (!result.Success)
         {
+            if (result.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
+            }
+
             return Unauthorized(new { error = result.Error });
         }
 
