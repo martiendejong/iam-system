@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
@@ -7,6 +7,8 @@ import type { PublicTenantBranding } from '../../services/brandingApi';
 import { isSafeCustomCss, isSafeImageUrl } from '../../utils/brandingSafety';
 import type { PublicIdentityProvider } from '../../types';
 import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
+
+const SOCIAL_FLOW_KEY = 'iam.social.flow';
 
 type LoginMethod = 'password' | 'magic-link' | 'sms';
 type LoginView = 'login' | 'forgot';
@@ -72,12 +74,58 @@ export default function LoginPage() {
     try {
       setError('');
       const redirectUri = `${window.location.origin}/auth/login`;
-      const { authorizationUrl } = await api.getSocialAuthUrl(provider.id, redirectUri);
+      const { authorizationUrl, state, browserSecret } = await api.getSocialAuthUrl(provider.id, redirectUri);
+      // Task 5493: the secret stays in this browser (per tab) and is sent back with the code on return.
+      sessionStorage.setItem(SOCIAL_FLOW_KEY, JSON.stringify({ providerId: provider.id, state, browserSecret }));
       window.location.href = authorizationUrl;
     } catch (err: any) {
       setError(err.response?.data?.error || `Failed to initiate ${provider.displayName} login`);
     }
   };
+
+  // Return leg of a social sign-in: the provider sent the browser back with ?code=...&state=...
+  const socialReturnHandled = useRef(false);
+  useEffect(() => {
+    const code = searchParams.get('code');
+    const state = searchParams.get('state');
+    if (!code || !state || socialReturnHandled.current) return;
+    socialReturnHandled.current = true;
+
+    const raw = sessionStorage.getItem(SOCIAL_FLOW_KEY);
+    sessionStorage.removeItem(SOCIAL_FLOW_KEY); // single use
+    let flow: { providerId?: string; state?: string; browserSecret?: string } | null = null;
+    try {
+      flow = raw ? JSON.parse(raw) : null;
+    } catch {
+      flow = null;
+    }
+    if (!flow || flow.state !== state || !flow.providerId || !flow.browserSecret) {
+      setError('This sign-in was not started in this browser. Please start again.');
+      return;
+    }
+
+    const { providerId, browserSecret } = flow;
+    (async () => {
+      setLoading(true);
+      try {
+        const response = await api.socialAuthCallback(providerId, code, state, browserSecret);
+        if (response.requiresTwoFactor && response.userId) {
+          setTwoFactorUserId(response.userId);
+          setTwoFactorPending(true);
+          setMessage(response.message || 'A verification code has been sent to your email.');
+          return;
+        }
+        if (response.user) {
+          setCurrentUser(response.user);
+        }
+        navigateAfterAuth(returnUrl, navigate);
+      } catch (err: any) {
+        setError(err.response?.data?.error || 'Social sign-in failed. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   const getSocialButtonStyle = (type: string) => {
     switch (type) {

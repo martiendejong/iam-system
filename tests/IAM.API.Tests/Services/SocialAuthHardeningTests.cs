@@ -76,7 +76,7 @@ public class SocialAuthHardeningTests
         var provider = CreateProvider(context);
 
         var url = await service.GetAuthorizationUrlAsync(
-            provider.Id, "https://app.example.com/callback", "state-123");
+            provider.Id, "https://app.example.com/callback", "state-123", "browser-secret");
 
         Assert.Contains("accounts.google.com", url);
         Assert.Contains("redirect_uri=", url);
@@ -90,7 +90,7 @@ public class SocialAuthHardeningTests
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GetAuthorizationUrlAsync(
-                provider.Id, "https://evil.example.com/steal", "state-123"));
+                provider.Id, "https://evil.example.com/steal", "state-123", "browser-secret"));
 
         Assert.Contains("allowed", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -105,13 +105,13 @@ public class SocialAuthHardeningTests
 
         // Custom URI is allowed.
         var url = await service.GetAuthorizationUrlAsync(
-            provider.Id, "https://custom.app.com/oauth", "state-abc");
+            provider.Id, "https://custom.app.com/oauth", "state-abc", "browser-secret");
         Assert.Contains("accounts.google.com", url);
 
         // Global fallback URI is now rejected (provider has its own list).
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.GetAuthorizationUrlAsync(
-                provider.Id, "https://app.example.com/callback", "state-xyz"));
+                provider.Id, "https://app.example.com/callback", "state-xyz", "browser-secret"));
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class SocialAuthHardeningTests
         var provider = CreateProvider(context);
 
         // Callback with a state that was never stored server-side.
-        var result = await service.HandleCallbackAsync(provider.Id, "auth-code", "nonexistent-state");
+        var result = await service.HandleCallbackAsync(provider.Id, "auth-code", "nonexistent-state", "browser-secret");
 
         Assert.False(result.Success);
         Assert.Contains("state", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -135,15 +135,15 @@ public class SocialAuthHardeningTests
 
         // Obtain a valid state entry by calling authorize.
         await service.GetAuthorizationUrlAsync(
-            provider.Id, "https://app.example.com/callback", "reuse-test");
+            provider.Id, "https://app.example.com/callback", "reuse-test", "browser-secret");
 
         // First callback attempt: state is valid, will fail later (no real OAuth exchange)
         // but must NOT fail on the state check itself. We only care that the second attempt
         // fails on the state check.
-        await service.HandleCallbackAsync(provider.Id, "code-1", "reuse-test");
+        await service.HandleCallbackAsync(provider.Id, "code-1", "reuse-test", "browser-secret");
 
         // Second callback with the same state must be rejected.
-        var result = await service.HandleCallbackAsync(provider.Id, "code-2", "reuse-test");
+        var result = await service.HandleCallbackAsync(provider.Id, "code-2", "reuse-test", "browser-secret");
         Assert.False(result.Success);
         Assert.Contains("state", result.Error, StringComparison.OrdinalIgnoreCase);
     }
@@ -156,11 +156,11 @@ public class SocialAuthHardeningTests
 
         // Obtain state for this provider.
         await service.GetAuthorizationUrlAsync(
-            provider.Id, "https://app.example.com/callback", "cross-provider-state");
+            provider.Id, "https://app.example.com/callback", "cross-provider-state", "browser-secret");
 
         // Try to redeem it for a different provider ID.
         var differentId = Guid.NewGuid();
-        var result = await service.HandleCallbackAsync(differentId, "code", "cross-provider-state");
+        var result = await service.HandleCallbackAsync(differentId, "code", "cross-provider-state", "browser-secret");
 
         Assert.False(result.Success);
         Assert.False(string.IsNullOrEmpty(result.Error));

@@ -391,15 +391,17 @@ class ApiService {
   }
 
   // Social Auth endpoints
-  async getSocialAuthUrl(providerId: string, redirectUri: string): Promise<{ authorizationUrl: string; state: string }> {
+  async getSocialAuthUrl(providerId: string, redirectUri: string): Promise<{ authorizationUrl: string; state: string; browserSecret: string }> {
     const response = await this.client.get(`/auth/social/${providerId}/authorize`, {
       params: { redirectUri }
     });
     return response.data;
   }
 
-  async socialAuthCallback(providerId: string, code: string, state: string): Promise<LoginResponse> {
-    const response = await this.client.post<LoginResponse>(`/auth/social/${providerId}/callback`, { code, state });
+  // Task 5493: the browser secret returned by getSocialAuthUrl must come back with the code + state.
+  async socialAuthCallback(providerId: string, code: string, state: string, browserSecret: string): Promise<LoginResponse> {
+    const response = await this.client.post<LoginResponse>(`/auth/social/${providerId}/callback`, { code, state, browserSecret });
+    rememberTwoFactorChallengeFrom(response.data);
     if (response.data.accessToken) {
       localStorage.setItem('accessToken', response.data.accessToken);
     }
