@@ -177,6 +177,10 @@ public static class TestAuthenticationHelper
     /// "token_type=device", and NO role claims (task 4726).
     /// </summary>
     public static string GenerateDeviceToken(Guid deviceInternalId, string deviceId, Guid tenantId, params string[] permissions)
+        => GenerateDeviceTokenOfType("sensor", deviceInternalId, deviceId, tenantId, permissions);
+
+    /// <summary>Same as <see cref="GenerateDeviceToken(Guid, string, Guid, string[])"/> with an explicit device_type claim (e.g. "gateway").</summary>
+    public static string GenerateDeviceTokenOfType(string deviceType, Guid deviceInternalId, string deviceId, Guid tenantId, params string[] permissions)
     {
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
         var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
@@ -185,7 +189,7 @@ public static class TestAuthenticationHelper
         {
             new Claim("sub", deviceInternalId.ToString()),
             new Claim("device_id", deviceId),
-            new Claim("device_type", "sensor"),
+            new Claim("device_type", deviceType),
             new Claim("tenant_id", tenantId.ToString()),
             new Claim("token_type", "device")
         };
