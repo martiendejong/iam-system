@@ -23,6 +23,7 @@ with the standard `__` section separator, overriding anything in the JSON files.
 | `Clients__JengoVpsMcp__Secret` | 339 | rotating breaks that client until it is updated too |
 | `Clients__OpenWebUi__Secret` | 340 | idem |
 | `Ca__CertificatePassword` | 345 | CA root key password, freshly generated 2026-10-18 (task 5165 startup check); no ca.pfx existed, so the CA is created with this password on first use |
+| `Mqtt__BrokerSecret` | (add to vault) | **Required outside Development (task 4718).** Shared secret the MQTT broker sends in the `X-Broker-Secret` header. With it unset, every `/api/mqtt/*` call is refused (403) and `/api/device-auth/authorize-mqtt` only accepts a device token. Set it on the service AND in the broker auth plugin config BEFORE deploying, or the broker loses auth. Compared in constant time. |
 
 ## Updating a secret
 
@@ -56,3 +57,7 @@ enforces (learned 18-10, see JengoWork 5814/5801):
   cross-system senders), OpenIddict pfx passwords (requires re-protecting the pfx
   files), OIDC client secrets (requires coordinated update on the client side),
   SecretsVault MasterKey (requires data re-encryption).
+
+## Device endpoint authentication (task 4718)
+
+`GET /api/device-auth/claims/{id}`, `POST /api/device-auth/authorize` and `POST /api/device-auth/heartbeat` need a device access token (`token_type=device`) whose `device_id` equals the target device (401 without a token, 403 otherwise). `POST /api/device-auth/authorize-mqtt` accepts the broker secret or a device token. An edge gateway may act for devices of its own tenant if it authenticates as a device registered with device type `gateway`, or with a service account holding the `device-auth:gateway` permission. The certificate and hmac routes stay anonymous (they issue the tokens).

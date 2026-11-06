@@ -139,9 +139,14 @@ public class EdgeGatewayService
         try
         {
             // The IamDeviceClient doesn't expose GetDeviceClaims, so we call the API directly
-            var response = await _httpClient.GetAsync(
-                $"/api/device-auth/claims/{Uri.EscapeDataString(deviceId)}",
-                cancellationToken);
+            // Task 4718: the claims endpoint requires the gateway's own device access token
+            // (the gateway device must be registered with device type "gateway").
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get, $"/api/device-auth/claims/{Uri.EscapeDataString(deviceId)}");
+            var token = _iamClient.AccessToken;
+            if (!string.IsNullOrEmpty(token))
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            var response = await _httpClient.SendAsync(request, cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
