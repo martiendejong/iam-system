@@ -185,9 +185,10 @@ public class MqttAuthService : IMqttAuthService
 
         var permissions = DeserializePermissions(device.Permissions);
 
-        // A superuser has a wildcard "*" permission or a tenant-level wildcard
-        // matching "tenantslug:*" pattern
-        return permissions.Any(p => p == "*" || p.EndsWith(":*"));
+        // Brokers skip all topic ACL checks for superusers, so only the exact platform-wide "*"
+        // permission qualifies. Scoped wildcards such as "acme:*" or "acme:hq:floor-3:sensor:*" are NOT
+        // superuser; they are enforced per topic by CheckAclAsync like any other grant.
+        return permissions.Any(p => p == "*");
     }
 
     public async Task<MqttAclResult> CheckAclAsync(
