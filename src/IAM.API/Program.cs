@@ -444,6 +444,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseForwardedHeaders(); // Must be first — rewrites RemoteIpAddress from X-Forwarded-For
+app.UseMiddleware<IAM.API.Middleware.SecurityHeadersMiddleware>(); // security headers (task 5579)
 app.UseHttpsRedirection();
 app.UseCors();
 
