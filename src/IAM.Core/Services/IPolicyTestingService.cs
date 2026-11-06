@@ -51,7 +51,14 @@ public interface IPolicyTestingService
         DateTime? since = null,
         int skip = 0,
         int take = 100,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<Guid>? tenantIds = null);
+
+    /// <summary>Get one test with its policy and results, or null (task 5486).</summary>
+    Task<PolicyTest?> GetTestAsync(Guid testId, CancellationToken cancellationToken = default);
+
+    /// <summary>The tenant a policy belongs to, or null when the policy does not exist (task 5486).</summary>
+    Task<Guid?> GetPolicyTenantIdAsync(Guid policyId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Compare test results across policy versions

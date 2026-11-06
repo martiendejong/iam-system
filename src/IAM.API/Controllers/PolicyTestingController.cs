@@ -1,3 +1,4 @@
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -5,20 +6,65 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
 
+/// <summary>
+/// Task 5486: every action is decided from the caller's tenant-admin rows (ITenantAccessResolver, the same rule as the
+/// Policy API of PR #195) in the tenant of the policy under test. [Authorize] is only the coarse gate. A caller who
+/// administers no tenant gets 403 for every id, so ids are not probed; platform admins keep every tenant.
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class PolicyTestingController : ControllerBase
 {
     private readonly IPolicyTestingService _testingService;
+    private readonly ITenantAccessResolver _access;
     private readonly ILogger<PolicyTestingController> _logger;
 
     public PolicyTestingController(
         IPolicyTestingService testingService,
+        ITenantAccessResolver access,
         ILogger<PolicyTestingController> logger)
     {
         _testingService = testingService;
+        _access = access;
         _logger = logger;
+    }
+
+    private ObjectResult Refused() => StatusCode(StatusCodes.Status403Forbidden, new { error = "Forbidden" });
+
+    /// <summary>Admin of the policy's tenant, or a failure result. Unknown policy: 404 (only reached by tenant admins).</summary>
+    private async Task<(Guid TenantId, ActionResult? Failure)> AuthorizePolicyAsync(Guid policyId, CancellationToken ct)
+    {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return (Guid.Empty, Refused());
+
+        var tenantId = await _testingService.GetPolicyTenantIdAsync(policyId, ct);
+        if (tenantId == null)
+            return (Guid.Empty, NotFound());
+
+        if (!access.CanManage(tenantId.Value))
+            return (Guid.Empty, Refused());
+
+        return (tenantId.Value, null);
+    }
+
+    /// <summary>Admin of the tenant of the stored test (and of its policy's tenant), or a failure result.</summary>
+    private async Task<(PolicyTest? Test, ActionResult? Failure)> AuthorizeTestAsync(Guid id, CancellationToken ct)
+    {
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanManageAny)
+            return (null, Refused());
+
+        var test = await _testingService.GetTestAsync(id, ct);
+        if (test == null)
+            return (null, NotFound());
+
+        var tenantId = test.Policy?.TenantId ?? test.TenantId;
+        if (!access.CanManage(tenantId) || !access.CanManage(test.TenantId))
+            return (null, Refused());
+
+        return (test, null);
     }
 
     /// <summary>
@@ -29,6 +75,14 @@ public class PolicyTestingController : ControllerBase
         [FromBody] CreatePolicyTestRequest request,
         CancellationToken cancellationToken = default)
     {
+        var (policyTenantId, failure) = await AuthorizePolicyAsync(request.PolicyId, cancellationToken);
+        if (failure != null)
+            return failure;
+
+        // The tenant is the policy's own; a different tenantId in the body is refused, never trusted.
+        if (request.TenantId != policyTenantId)
+            return BadRequest(new { error = "tenantId does not match the tenant of the policy" });
+
         // Get user ID from claims (try multiple claim types)
         var userIdClaim = User.FindFirst("sub")?.Value
                        ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
@@ -45,7 +99,7 @@ public class PolicyTestingController : ControllerBase
             request.TestScenario,
             request.ExpectedResult,
             userId,
-            request.TenantId,
+            policyTenantId,
             cancellationToken);
 
         return CreatedAtAction(nameof(GetTest), new { id = test.Id }, test);
@@ -59,11 +113,9 @@ public class PolicyTestingController : ControllerBase
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        var tests = await _testingService.GetTestResultsAsync(skip: 0, take: 1, cancellationToken: cancellationToken);
-        var test = tests.FirstOrDefault(t => t.Id == id);
-
-        if (test == null)
-            return NotFound();
+        var (test, failure) = await AuthorizeTestAsync(id, cancellationToken);
+        if (failure != null)
+            return failure;
 
         return Ok(test);
     }
@@ -76,14 +128,18 @@ public class PolicyTestingController : ControllerBase
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        var (_, failure) = await AuthorizeTestAsync(id, cancellationToken);
+        if (failure != null)
+            return failure;
+
         try
         {
             var test = await _testingService.ExecuteTestAsync(id, cancellationToken);
             return Ok(test);
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            return NotFound(ex.Message);
+            return NotFound();
         }
         catch (Exception ex)
         {
@@ -93,13 +149,17 @@ public class PolicyTestingController : ControllerBase
     }
 
     /// <summary>
-    /// Execute all tests for a policy
+    /// Execute the tests of a policy (at most PolicyTesting:MaxTestsPerRun per call, default 50)
     /// </summary>
     [HttpPost("policies/{policyId}/execute-tests")]
     public async Task<ActionResult<List<PolicyTest>>> ExecuteTestsForPolicy(
         Guid policyId,
         CancellationToken cancellationToken = default)
     {
+        var (_, failure) = await AuthorizePolicyAsync(policyId, cancellationToken);
+        if (failure != null)
+            return failure;
+
         var results = await _testingService.ExecuteTestsForPolicyAsync(policyId, cancellationToken);
         return Ok(results);
     }
@@ -112,12 +172,16 @@ public class PolicyTestingController : ControllerBase
         Guid policyId,
         CancellationToken cancellationToken = default)
     {
+        var (_, failure) = await AuthorizePolicyAsync(policyId, cancellationToken);
+        if (failure != null)
+            return failure;
+
         var coverage = await _testingService.GetTestCoverageAsync(policyId, cancellationToken);
         return Ok(coverage);
     }
 
     /// <summary>
-    /// Get test results with filtering
+    /// Get test results with filtering; only tests of tenants the caller administers
     /// </summary>
     [HttpGet("tests")]
     public async Task<ActionResult<List<PolicyTest>>> GetTestResults(
@@ -128,8 +192,13 @@ public class PolicyTestingController : ControllerBase
         [FromQuery] int take = 100,
         CancellationToken cancellationToken = default)
     {
+        var access = await _access.ResolveAsync(User, cancellationToken);
+        if (!access.CanManageAny)
+            return Refused();
+
+        // null ManageableTenants = platform admin: every tenant.
         var results = await _testingService.GetTestResultsAsync(
-            policyId, passedOnly, since, skip, take, cancellationToken);
+            policyId, passedOnly, since, skip, take, cancellationToken, access.ManageableTenants);
 
         return Ok(results);
     }
@@ -144,6 +213,10 @@ public class PolicyTestingController : ControllerBase
         [FromQuery] string version2,
         CancellationToken cancellationToken = default)
     {
+        var (_, failure) = await AuthorizePolicyAsync(policyId, cancellationToken);
+        if (failure != null)
+            return failure;
+
         if (string.IsNullOrWhiteSpace(version1) || string.IsNullOrWhiteSpace(version2))
             return BadRequest("Both version1 and version2 are required");
 
