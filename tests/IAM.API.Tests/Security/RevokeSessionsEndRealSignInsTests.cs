@@ -175,12 +175,31 @@ public class RevokeSessionsEndRealSignInsTests : IClassFixture<IAMTestWebApplica
         var (_, email) = await CreateUserAsync("rotate");
         var a = await SignInAsync(email);
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh");
-        req.Headers.Add("Cookie", $"refreshToken={a.Refresh}; IAM.Session={a.SessionCookie}");
-        var res = await _noCache.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false }).SendAsync(req);
+        var (status, cookies) = await RefreshRawAsync(a.Refresh, a.SessionCookie);
+        Assert.Equal(HttpStatusCode.OK, status);
+        var newSession = NonEmptyCookie(cookies, "IAM.Session");
+        var newRefresh = NonEmptyCookie(cookies, "refreshToken");
+        Assert.NotEqual(a.SessionCookie, newSession);
 
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Contains(res.Headers.GetValues("Set-Cookie"), c => c.StartsWith("IAM.Session=") && !c.StartsWith("IAM.Session=" + a.SessionCookie));
+        // The moved cookie really authorizes: a second refresh only rebinds it when it authenticates (it is not a deletion cookie).
+        var (status2, cookies2) = await RefreshRawAsync(newRefresh, newSession);
+        Assert.Equal(HttpStatusCode.OK, status2);
+        Assert.NotEqual(newSession, NonEmptyCookie(cookies2, "IAM.Session"));
+    }
+
+    private async Task<(HttpStatusCode Status, List<string> SetCookies)> RefreshRawAsync(string refresh, string session)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh");
+        req.Headers.Add("Cookie", $"refreshToken={refresh}; IAM.Session={session}");
+        var res = await _noCache.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false }).SendAsync(req);
+        return (res.StatusCode, res.Headers.TryGetValues("Set-Cookie", out var v) ? v.ToList() : new List<string>());
+    }
+
+    private static string NonEmptyCookie(List<string> setCookies, string name)
+    {
+        var value = setCookies.Last(c => c.StartsWith(name + "=")).Split(';')[0].Substring(name.Length + 1);
+        Assert.False(string.IsNullOrEmpty(value), $"{name} was deleted instead of rebound");
+        return value;
     }
 
     // ───────────────────────── IAM.Session cookie ─────────────────────────

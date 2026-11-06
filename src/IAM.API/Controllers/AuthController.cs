@@ -229,6 +229,10 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
+        // Task 5568: read the IAM.Session cookie BEFORE rotating. Rotation revokes the refresh token the cookie is bound to,
+        // so authenticating afterwards would hit the revocation check, reject the cookie and sign the browser out of SSO.
+        var sso = await HttpContext.AuthenticateAsync("IAM.Session");
+
         var result = await _authService.RefreshTokenAsync(refreshToken, ipAddress, userAgent);
 
         if (!result.Success)
@@ -246,9 +250,7 @@ public class AuthController : ControllerBase
             Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
         });
 
-        // Task 5568: rotation revokes the refresh token the IAM.Session cookie is bound to; move the cookie to the new one
-        // (same user, same lifetime) so a normal refresh does not sign the browser out of single sign-on.
-        var sso = await HttpContext.AuthenticateAsync("IAM.Session");
+        // Move the cookie to the new refresh token (same user, same lifetime) so a normal refresh does not sign the browser out of SSO.
         if (sso.Succeeded && sso.Principal != null && result.RefreshTokenId.HasValue)
         {
             var claims = sso.Principal.Claims
