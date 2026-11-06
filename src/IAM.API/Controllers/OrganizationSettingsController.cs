@@ -85,7 +85,9 @@ public class OrganizationSettingsController : ControllerBase
                 defaultRoleId = (Guid?)null,
                 defaultRoleName = (string?)null,
                 maxMembers = 0,
-                welcomeMessage = (string?)null
+                welcomeMessage = (string?)null,
+                legacyTotpMigration = LegacyTotpMigrationMode.EmailPin.ToString(),
+                legacyTotpUserCount = await CountLegacyTotpUsersAsync(tenantId, ct)
             });
         }
 
@@ -99,6 +101,8 @@ public class OrganizationSettingsController : ControllerBase
             defaultRoleName = settings.DefaultRole?.Name,
             maxMembers = settings.MaxMembers,
             welcomeMessage = settings.WelcomeMessage,
+            legacyTotpMigration = settings.LegacyTotpMigration.ToString(),
+            legacyTotpUserCount = await CountLegacyTotpUsersAsync(tenantId, ct),
             createdAt = settings.CreatedAt,
             updatedAt = settings.UpdatedAt
         });
@@ -122,6 +126,22 @@ public class OrganizationSettingsController : ControllerBase
         if (!tenantExists)
         {
             return NotFound(new { error = "Tenant not found" });
+        }
+
+        // Validate the legacy-TOTP policy before anything is written (task 3162)
+        LegacyTotpMigrationMode? legacyTotpMigration = null;
+        if (request.LegacyTotpMigration != null)
+        {
+            if (!Enum.TryParse<LegacyTotpMigrationMode>(request.LegacyTotpMigration, ignoreCase: true, out var parsedMode)
+                || !Enum.IsDefined(parsedMode))
+            {
+                return BadRequest(new
+                {
+                    error = $"LegacyTotpMigration must be one of: {string.Join(", ", Enum.GetNames<LegacyTotpMigrationMode>())}"
+                });
+            }
+
+            legacyTotpMigration = parsedMode;
         }
 
         // Validate the default role before anything is written
@@ -183,6 +203,11 @@ public class OrganizationSettingsController : ControllerBase
             settings.WelcomeMessage = string.IsNullOrWhiteSpace(request.WelcomeMessage) ? null : request.WelcomeMessage;
         }
 
+        if (legacyTotpMigration.HasValue)
+        {
+            settings.LegacyTotpMigration = legacyTotpMigration.Value;
+        }
+
         settings.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
 
@@ -199,9 +224,22 @@ public class OrganizationSettingsController : ControllerBase
             defaultRoleName = settings.DefaultRole?.Name,
             maxMembers = settings.MaxMembers,
             welcomeMessage = settings.WelcomeMessage,
+            legacyTotpMigration = settings.LegacyTotpMigration.ToString(),
+            legacyTotpUserCount = await CountLegacyTotpUsersAsync(tenantId, ct),
             updatedAt = settings.UpdatedAt
         });
     }
+
+    /// <summary>
+    /// Members of the tenant (any role row scoped to it) whose authenticator app was enrolled before the
+    /// SHA-1 to SHA-256 upgrade (task 3162): the people the legacy-TOTP policy applies to.
+    /// </summary>
+    private Task<int> CountLegacyTotpUsersAsync(Guid tenantId, CancellationToken ct) =>
+        _context.Users
+            .AsNoTracking()
+            .Where(u => _context.UserRoles.Any(ur => ur.UserId == u.Id && ur.TenantId == tenantId))
+            .Where(IAM.Core.Entities.User.LegacyTotpEnrollment)
+            .CountAsync(ct);
 }
 
 public record UpdateOrganizationSettingsRequest(
@@ -209,5 +247,6 @@ public record UpdateOrganizationSettingsRequest(
     bool? RequireMfa,
     Guid? DefaultRoleId,
     int? MaxMembers,
-    string? WelcomeMessage
+    string? WelcomeMessage,
+    string? LegacyTotpMigration = null
 );

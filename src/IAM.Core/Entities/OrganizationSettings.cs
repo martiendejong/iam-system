@@ -22,6 +22,12 @@ public class OrganizationSettings
     public bool RequireMfa { get; set; }
 
     /// <summary>
+    /// What happens to members whose authenticator app was enrolled before the SHA-1 to SHA-256
+    /// upgrade of TOTP and therefore no longer produces valid codes (task 3162).
+    /// </summary>
+    public LegacyTotpMigrationMode LegacyTotpMigration { get; set; } = LegacyTotpMigrationMode.EmailPin;
+
+    /// <summary>
     /// Default role assigned to new members who accept an invitation without a specific role
     /// </summary>
     public Guid? DefaultRoleId { get; set; }
@@ -39,4 +45,24 @@ public class OrganizationSettings
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Tenant policy for members with a legacy (SHA-1) authenticator-app enrollment.
+/// Stored as an int - append new modes, never renumber.
+/// </summary>
+public enum LegacyTotpMigrationMode
+{
+    /// <summary>
+    /// Default. At the member's next sign-in (after the password, or the passwordless proof, has succeeded) the
+    /// account moves to e-mail PIN two-factor: a PIN is mailed and has to be entered before any token is issued.
+    /// Nothing is mailed in bulk - a PIN only goes out when the member signs in.
+    /// </summary>
+    EmailPin = 0,
+
+    /// <summary>
+    /// Leave legacy enrollments untouched. The tenant handles them itself (for example by resetting the
+    /// members' two-factor settings); /api/mfa/status keeps flagging them as <c>legacyTotpEnrollment</c>.
+    /// </summary>
+    Off = 1
 }

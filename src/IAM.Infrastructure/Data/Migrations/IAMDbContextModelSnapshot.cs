@@ -2278,6 +2278,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<Guid?>("DefaultRoleId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("LegacyTotpMigration")
+                        .HasColumnType("integer");
+
                     b.Property<int>("MaxMembers")
                         .HasColumnType("integer");
 
@@ -4423,6 +4426,10 @@ namespace IAM.Infrastructure.Data.Migrations
 
                     b.Property<int>("PrincipalKind")
                         .HasColumnType("integer");
+
+                    b.Property<string>("TotpAlgorithm")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
 
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("boolean");

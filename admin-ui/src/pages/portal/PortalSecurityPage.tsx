@@ -249,7 +249,9 @@ export default function PortalSecurityPage() {
                     Enabled
                   </span>
                   <span className="text-sm text-gray-600">
-                    via {summary.mfaMethod?.toUpperCase() || 'TOTP'} authenticator app
+                    {summary.mfaMethod === 'email'
+                      ? 'via a PIN sent to your e-mail address'
+                      : `via ${summary.mfaMethod?.toUpperCase() || 'TOTP'} authenticator app`}
                   </span>
                 </div>
                 <p className="text-sm text-gray-500">

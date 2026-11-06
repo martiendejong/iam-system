@@ -265,6 +265,7 @@ public class DataRequestService : IDataRequestService
         user.IsActive = false;
         user.TwoFactorEnabled = false;
         user.TwoFactorSecret = null;
+        user.TotpAlgorithm = null;
         user.EmailVerificationToken = null;
         user.PasswordResetToken = null;
         user.PasswordResetTokenExpiry = null;

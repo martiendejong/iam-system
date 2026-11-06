@@ -214,6 +214,32 @@ describe('LoginPage returnUrl navigation', () => {
     );
   });
 
+  // Task 3162: a member whose authenticator app was set up before the SHA-1 to SHA-256 upgrade is moved
+  // to e-mail PIN two-factor at sign-in; the page must say why a PIN is asked instead of an app code.
+  it('explains the move to e-mail PIN when a legacy authenticator enrollment was migrated', async () => {
+    login.mockResolvedValue({
+      requiresTwoFactor: true,
+      userId: 'user-1',
+      message: 'A verification code has been sent to your email.',
+      twoFactorMigration: {
+        fromMethod: 'totp',
+        toMethod: 'email',
+        message: 'Your authenticator app was set up before a security upgrade and no longer works.',
+      },
+    });
+
+    renderLoginPage('/portal/profile');
+
+    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'a@b.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/authenticator app was set up before a security upgrade/)).toBeInTheDocument()
+    );
+    expect(screen.getByRole('button', { name: 'Resend code' })).toBeInTheDocument();
+  });
+
   // Regression coverage for task 869eft1jr: an SMS OTP only proves phone possession.
   // An account with email 2FA enabled must not be signed in until that second factor
   // is verified too — mirrors the password + 2FA and magic-link + 2FA flows (869eft100).

@@ -114,6 +114,7 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.PhoneNumber).HasMaxLength(50);
             entity.Property(e => e.AvatarUrl).HasMaxLength(500);
+            entity.Property(e => e.TotpAlgorithm).HasMaxLength(16);
 
             entity.HasMany(e => e.UserRoles)
                 .WithOne(e => e.User)
@@ -974,6 +975,7 @@ public class IAMDbContext : DbContext
 
             entity.Property(e => e.AllowedEmailDomains).HasColumnType("jsonb");
             entity.Property(e => e.WelcomeMessage).HasMaxLength(2000);
+            entity.Property(e => e.LegacyTotpMigration).HasConversion<int>();
 
             entity.HasOne(e => e.Tenant)
                 .WithMany()

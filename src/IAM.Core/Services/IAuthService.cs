@@ -69,6 +69,13 @@ public class AuthResult
     public bool RequiresTwoFactor { get; set; }
 
     /// <summary>
+    /// Set (together with <see cref="RequiresTwoFactor"/>) when this very login moved a legacy SHA-1
+    /// authenticator-app enrollment to e-mail PIN two-factor (task 3162), so the client can explain
+    /// why an e-mailed PIN is asked instead of an authenticator code. Null otherwise.
+    /// </summary>
+    public LegacyTotpMigrationNotice? LegacyTotpMigration { get; set; }
+
+    /// <summary>
     /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,
     /// resolved from the user's organization Token Configuration when one exists,
     /// otherwise today's default. Unset (0) when no tokens were issued.
@@ -83,3 +90,6 @@ public class AuthResult
     /// </summary>
     public int RefreshTokenLifetimeDays { get; set; }
 }
+
+/// <summary>What a client should tell a member whose authenticator-app enrollment was just migrated (task 3162).</summary>
+public record LegacyTotpMigrationNotice(string FromMethod, string ToMethod, string Message);
