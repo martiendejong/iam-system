@@ -36,6 +36,7 @@ public class TenantsController : ControllerBase
         var (visible, denied) = await ResolveVisibleTenantsAsync(ct);
         if (denied != null)
             return denied;
+        var configScope = await ResolveConfigScopeAsync(ct);
 
         var query = _context.Tenants
             .Include(t => t.ParentTenant)
@@ -87,8 +88,8 @@ public class TenantsController : ControllerBase
             parentTenantId = ParentIfVisible(t.ParentTenantId, visible),
             parentTenantName = ParentIfVisible(t.ParentTenantId, visible) == null ? null : t.ParentTenant?.Name,
             childCount = t.ChildTenants.Count,
-            metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(t.Metadata ?? "{}"),
-            settings = JsonSerializer.Deserialize<Dictionary<string, object>>(t.Settings ?? "{}"),
+            metadata = ConfigIfAllowed(t.Metadata, t.Id, configScope),
+            settings = ConfigIfAllowed(t.Settings, t.Id, configScope),
             isActive = t.IsActive,
             createdAt = t.CreatedAt
         }));
@@ -120,10 +121,10 @@ public class TenantsController : ControllerBase
             return NotFound();
         }
 
-        return Ok(BuildTenantHierarchy(tenant, visible));
+        return Ok(BuildTenantHierarchy(tenant, visible, await ResolveConfigScopeAsync(ct)));
     }
 
-    private object BuildTenantHierarchy(Tenant tenant, HashSet<Guid>? visible)
+    private object BuildTenantHierarchy(Tenant tenant, HashSet<Guid>? visible, HashSet<Guid>? configScope)
     {
         return new
         {
@@ -131,11 +132,11 @@ public class TenantsController : ControllerBase
             name = tenant.Name,
             type = tenant.Type,
             parentTenantId = ParentIfVisible(tenant.ParentTenantId, visible),
-            metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}"),
-            settings = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}"),
+            metadata = ConfigIfAllowed(tenant.Metadata, tenant.Id, configScope),
+            settings = ConfigIfAllowed(tenant.Settings, tenant.Id, configScope),
             isActive = tenant.IsActive,
             createdAt = tenant.CreatedAt,
-            children = tenant.ChildTenants.Select(c => BuildTenantHierarchy(c, visible))
+            children = tenant.ChildTenants.Select(c => BuildTenantHierarchy(c, visible, configScope))
         };
     }
 
@@ -162,6 +163,7 @@ public class TenantsController : ControllerBase
             return NotFound();
         }
 
+        var configScope = await ResolveConfigScopeAsync(ct);
         return Ok(new
         {
             id = tenant.Id,
@@ -170,8 +172,8 @@ public class TenantsController : ControllerBase
             parentTenantId = ParentIfVisible(tenant.ParentTenantId, visible),
             parentTenantName = ParentIfVisible(tenant.ParentTenantId, visible) == null ? null : tenant.ParentTenant?.Name,
             childCount = tenant.ChildTenants.Count,
-            metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}"),
-            settings = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}"),
+            metadata = ConfigIfAllowed(tenant.Metadata, tenant.Id, configScope),
+            settings = ConfigIfAllowed(tenant.Settings, tenant.Id, configScope),
             isActive = tenant.IsActive,
             createdAt = tenant.CreatedAt,
             updatedAt = tenant.UpdatedAt
@@ -376,13 +378,14 @@ public class TenantsController : ControllerBase
             return NotFound(new { error = "Building not found" });
         }
 
+        var configScope = await ResolveConfigScopeAsync(ct);
         return Ok(new
         {
             building = new
             {
                 id = building.Id,
                 name = building.Name,
-                metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(building.Metadata ?? "{}"),
+                metadata = ConfigIfAllowed(building.Metadata, building.Id, configScope),
                 floors = building.ChildTenants
                     .Where(f => f.Type == "Floor")
                     .OrderBy(f => f.Name)
@@ -390,7 +393,7 @@ public class TenantsController : ControllerBase
                     {
                         id = floor.Id,
                         name = floor.Name,
-                        metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(floor.Metadata ?? "{}"),
+                        metadata = ConfigIfAllowed(floor.Metadata, floor.Id, configScope),
                         rooms = floor.ChildTenants
                             .Where(r => r.Type == "Room")
                             .OrderBy(r => r.Name)
@@ -398,7 +401,7 @@ public class TenantsController : ControllerBase
                             {
                                 id = room.Id,
                                 name = room.Name,
-                                metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(room.Metadata ?? "{}"),
+                                metadata = ConfigIfAllowed(room.Metadata, room.Id, configScope),
                                 deviceCount = room.ChildTenants.Count(d => d.Type == "Device")
                             })
                     })
@@ -457,6 +460,29 @@ public class TenantsController : ControllerBase
 
         return (await TenantManagementAuthority.GetVisibleTenantIdsAsync(_context, userId, ct), null);
     }
+
+    /// <summary>
+    /// The tenants whose Settings and Metadata the caller may read (task 5575): null for a platform admin (all),
+    /// otherwise the tenants they own/manage plus everything below them - the same reach as tenant update.
+    /// A plain member's scope excludes the tenant, so those fields are left out.
+    /// </summary>
+    private async Task<HashSet<Guid>?> ResolveConfigScopeAsync(CancellationToken ct)
+    {
+        if (IsPlatformAdminRole(User))
+            return null;
+
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+            return new HashSet<Guid>();
+
+        return await TenantManagementAuthority.GetConfigVisibleTenantIdsAsync(_context, userId, ct);
+    }
+
+    /// <summary>The tenant JSON document, or null (serialized as null) when the caller may not read it.</summary>
+    private static Dictionary<string, object>? ConfigIfAllowed(string? json, Guid tenantId, HashSet<Guid>? configScope) =>
+        configScope == null || configScope.Contains(tenantId)
+            ? JsonSerializer.Deserialize<Dictionary<string, object>>(json ?? "{}")
+            : null;
 
     /// <summary>A parent id the caller cannot see is not disclosed (null).</summary>
     private static Guid? ParentIfVisible(Guid? parentId, HashSet<Guid>? visible) =>

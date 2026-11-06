@@ -78,7 +78,20 @@ public static class TenantManagementAuthority
             .Distinct()
             .ToListAsync(ct);
 
-        var visible = new HashSet<Guid>(member);
+        return await ExpandDescendantsAsync(context, member, ct);
+    }
+
+    /// <summary>
+    /// The tenants whose Settings and Metadata the user may read (task 5575): every tenant where they hold an active
+    /// BuildingOwner/BuildingManager row plus everything below it - the same reach as <see cref="ResolveWithAncestorsAsync"/>
+    /// used by tenant update. A plain member is not included. A SuperAdmin is not expanded (callers short-circuit).
+    /// </summary>
+    public static async Task<HashSet<Guid>> GetConfigVisibleTenantIdsAsync(IAMDbContext context, Guid userId, CancellationToken ct) =>
+        await ExpandDescendantsAsync(context, await GetManagedTenantIdsAsync(context, userId, ct), ct);
+
+    private static async Task<HashSet<Guid>> ExpandDescendantsAsync(IAMDbContext context, IEnumerable<Guid> roots, CancellationToken ct)
+    {
+        var visible = new HashSet<Guid>(roots);
         if (visible.Count == 0)
             return visible;
 
