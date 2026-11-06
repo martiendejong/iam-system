@@ -102,12 +102,17 @@ public class IamAuthClient : IIamAuthClient
     public async Task<PasskeyRegistrationOptionsResponse> BeginPasskeyRegistrationAsync(
         string username,
         string displayName,
+        string? currentPassword = null,
+        string? emailCode = null,
         CancellationToken cancellationToken = default)
     {
+        // Task 5488: the server requires the current password or an e-mailed code (SendConfirmationCodeAsync).
         var request = new BeginPasskeyRegistrationRequest
         {
             Username = username,
-            DisplayName = displayName
+            DisplayName = displayName,
+            CurrentPassword = currentPassword,
+            EmailCode = emailCode
         };
 
         var response = await _httpClient.PostAsJsonAsync("/api/passkey/register/begin", request, cancellationToken);
@@ -118,6 +123,35 @@ public class IamAuthClient : IIamAuthClient
             throw new InvalidOperationException("Failed to parse passkey registration options");
 
         return options;
+    }
+
+    /// <summary>E-mails a one-time confirmation code for accounts without a usable password (task 5488).</summary>
+    public async Task SendConfirmationCodeAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync("/api/mfa/confirmation-code", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Switches off e-mail two-factor; needs the current password or an e-mailed code (task 5488).</summary>
+    public async Task DisableEmailMfaAsync(string? currentPassword = null, string? emailCode = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("/api/mfa/email/disable", new { currentPassword, emailCode }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Regenerates the recovery codes; needs the current password or an e-mailed code (task 5488).</summary>
+    public async Task<IReadOnlyList<string>> RegenerateRecoveryCodesAsync(string? currentPassword = null, string? emailCode = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("/api/mfa/recovery-codes", new { currentPassword, emailCode }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<RecoveryCodesResponse>(cancellationToken);
+        return body?.RecoveryCodes ?? new List<string>();
+    }
+
+    private sealed class RecoveryCodesResponse
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("recoveryCodes")]
+        public List<string>? RecoveryCodes { get; set; }
     }
 
     public async Task<SuccessResponse> CompletePasskeyRegistrationAsync(

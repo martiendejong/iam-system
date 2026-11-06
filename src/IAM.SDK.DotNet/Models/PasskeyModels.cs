@@ -7,6 +7,9 @@ public class BeginPasskeyRegistrationRequest
 {
     public required string Username { get; set; }
     public required string DisplayName { get; set; }
+    /// <summary>Re-confirmation (task 5488): current password, or an e-mailed code.</summary>
+    public string? CurrentPassword { get; set; }
+    public string? EmailCode { get; set; }
 }
 
 /// <summary>

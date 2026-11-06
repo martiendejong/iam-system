@@ -20,6 +20,10 @@ export default function PortalSecurityPage() {
 
   // Recovery codes state
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  // Re-confirmation for regenerating codes (task 5488): current password, or a code e-mailed to the user
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [confirmCodeInput, setConfirmCodeInput] = useState('');
+  const [codeSentNotice, setCodeSentNotice] = useState('');
   const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
@@ -70,18 +74,38 @@ export default function PortalSecurityPage() {
   };
 
   const handleRegenerateRecoveryCodes = async () => {
+    if (!confirmPasswordInput && !confirmCodeInput) {
+      setError('Enter your current password, or the code we e-mail you, to regenerate recovery codes.');
+      return;
+    }
     if (!confirm('This will invalidate all existing recovery codes. Continue?')) return;
 
     try {
       setRegenerating(true);
-      const result = await portalApi.regenerateRecoveryCodes();
+      setError('');
+      const result = await portalApi.regenerateRecoveryCodes(
+        confirmCodeInput ? { emailCode: confirmCodeInput } : { currentPassword: confirmPasswordInput }
+      );
       setRecoveryCodes(result.recoveryCodes);
+      setConfirmPasswordInput('');
+      setConfirmCodeInput('');
+      setCodeSentNotice('');
       // Refresh summary to update the count
       loadSummary();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to regenerate recovery codes');
     } finally {
       setRegenerating(false);
+    }
+  };
+
+  const handleSendConfirmationCode = async () => {
+    try {
+      setError('');
+      const result = await portalApi.sendConfirmationCode();
+      setCodeSentNotice(result.message);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to send confirmation code');
     }
   };
 
@@ -299,6 +323,33 @@ export default function PortalSecurityPage() {
                   </div>
                 </div>
               )}
+
+              <div className="space-y-2 max-w-sm">
+                <p className="text-sm text-gray-600">Confirm it is you before regenerating:</p>
+                <input
+                  type="password"
+                  value={confirmPasswordInput}
+                  onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                  placeholder="Current password"
+                  autoComplete="current-password"
+                  className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+                <p className="text-xs text-gray-500">
+                  No password (social sign-in)?{' '}
+                  <button type="button" onClick={handleSendConfirmationCode} className="text-blue-600 hover:underline">
+                    E-mail me a code
+                  </button>
+                </p>
+                {codeSentNotice && <p className="text-xs text-green-700">{codeSentNotice}</p>}
+                <input
+                  type="text"
+                  value={confirmCodeInput}
+                  onChange={(e) => setConfirmCodeInput(e.target.value)}
+                  placeholder="E-mailed code"
+                  autoComplete="one-time-code"
+                  className="block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
 
               <button
                 onClick={handleRegenerateRecoveryCodes}
