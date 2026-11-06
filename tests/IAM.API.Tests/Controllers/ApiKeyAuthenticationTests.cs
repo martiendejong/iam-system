@@ -103,15 +103,15 @@ public class ApiKeyAuthenticationTests : IClassFixture<ApiKeyAuthenticationTests
     }
 
     [Fact]
-    public async Task WriteKey_CanRegisterRoles()
+    public async Task WriteKey_WithoutBinding_CannotRegisterRoles()
     {
+        // Task 5487: a plain write key is no longer enough; it must be bound to the client id (see AppRolesRegisterBindingTests).
         var (_, raw) = await CreateKeyAsync("write");
-        var clientId = Slug();
 
         var response = await ClientWith(raw).PostAsJsonAsync("/api/app-roles/register",
-            new { clientId, roles = new[] { new { name = "member", description = "x" } } });
+            new { clientId = Slug(), roles = new[] { new { name = "member", description = "x" } } });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]

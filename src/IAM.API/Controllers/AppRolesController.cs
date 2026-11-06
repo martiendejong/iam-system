@@ -4,6 +4,7 @@ using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.Abstractions;
 
 namespace IAM.API.Controllers;
 
@@ -22,12 +23,24 @@ public class AppRolesController : ControllerBase
 {
     private readonly IAMDbContext _context;
     private readonly ILogger<AppRolesController> _logger;
+    private readonly IOpenIddictApplicationManager _applicationManager;
 
-    public AppRolesController(IAMDbContext context, ILogger<AppRolesController> logger)
+    public AppRolesController(IAMDbContext context, ILogger<AppRolesController> logger,
+        IOpenIddictApplicationManager applicationManager)
     {
         _context = context;
         _logger = logger;
+        _applicationManager = applicationManager;
     }
+
+    /// <summary>Permission that binds a key to ONE application: it may update that app's existing catalog.</summary>
+    public const string BindPermissionPrefix = "app-roles:register.";
+
+    /// <summary>Permission that also lets the bound key create the app's FIRST catalog (switches on role gating).</summary>
+    public const string CreatePermissionPrefix = "app-roles:create.";
+
+    private bool HasPermission(string permission) =>
+        User.HasClaim(ApiKeyClaimTypes.Permission, permission);
 
     public record AppRoleDefinition(string Name, string? Description);
 
@@ -63,9 +76,32 @@ public class AppRolesController : ControllerBase
 
         var category = $"app:{clientId}";
         var prefix = $"{clientId}:";
+
+        // Binding check, before any write. An admin-scope platform key may register for any application;
+        // every other key only for the application it is bound to (permission "app-roles:register.{clientId}").
+        var isAdminKey = User.GetApiKeyScope() == ApiKeyScope.Admin;
+        var canCreate = isAdminKey || HasPermission(CreatePermissionPrefix + clientId);
+        var isBound = canCreate || HasPermission(BindPermissionPrefix + clientId);
+        if (!isBound)
+        {
+            _logger.LogWarning("Refused app-role registration for {ClientId}: key {KeyId} is not bound to it", clientId, User.GetApiKeyId());
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = $"This API key is not bound to application '{clientId}'." });
+        }
+
+        // The application must be a registered OIDC client (OpenIddict looks the client id up as stored).
+        if (await _applicationManager.FindByClientIdAsync(clientId) == null)
+            return BadRequest(new { error = $"No OIDC client '{clientId}' is registered." });
+
         var existing = await _context.Roles
             .Where(r => r.Category == category)
             .ToListAsync();
+
+        // A catalog switches on role gating for the app (every user without a role is locked out),
+        // so creating the first one is an admin decision, not something a key does by itself.
+        if (existing.Count == 0 && !canCreate)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = $"'{clientId}' has no role catalog yet; creating the first one needs an admin key or a key bound with '{CreatePermissionPrefix}{clientId}'." });
 
         var registered = new List<string>();
         foreach (var def in request.Roles)
