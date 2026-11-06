@@ -268,7 +268,7 @@ public sealed class IamMcpToolProvider : IMcpToolProvider
             emailSent = result.EmailSent,
             // Same construction as InvitationsController.AcceptUrl, so manual hand-over of the
             // link (e.g. when emailSent is false) lands on the same accept page.
-            acceptUrl = $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={invitation.Token}",
+            acceptUrl = $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={result.RawToken}",
         });
     }
 

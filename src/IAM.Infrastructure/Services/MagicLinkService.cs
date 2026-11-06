@@ -63,7 +63,7 @@ public class MagicLinkService : IMagicLinkService
         var token = GenerateSecureToken();
 
         // Store only the SHA-256 hash; send the plaintext token in the email
-        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLower();
+        var tokenHash = TokenHasher.Sha256Hex(token);
 
         var magicLinkToken = new MagicLinkToken
         {
@@ -95,7 +95,7 @@ public class MagicLinkService : IMagicLinkService
     public async Task<User?> ValidateMagicLinkAsync(string token)
     {
         // Hash the submitted plaintext token before looking it up in the database
-        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLower();
+        var tokenHash = TokenHasher.Sha256Hex(token);
 
         var magicLinkToken = await _context.MagicLinkTokens
             .Include(t => t.User)

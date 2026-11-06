@@ -64,7 +64,8 @@ public interface IInvitationService
 }
 
 /// <summary>The created invitation plus whether its email actually went out.</summary>
-public record InvitationSendResult(Invitation Invitation, bool EmailSent);
+/// <param name="RawToken">The one-time token for the accept link. Only its hash is stored on the invitation, so this is the only chance to hand it over.</param>
+public record InvitationSendResult(Invitation Invitation, bool EmailSent, string RawToken);
 
 public class BulkInviteEntry
 {
