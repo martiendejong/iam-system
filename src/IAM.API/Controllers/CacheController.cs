@@ -1,6 +1,7 @@
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace IAM.API.Controllers;
 
@@ -11,11 +12,16 @@ public class CacheController : ControllerBase
 {
     private readonly ICacheService _cacheService;
     private readonly ILogger<CacheController> _logger;
+    private readonly IMemoryCache _memoryCache;
 
-    public CacheController(ICacheService cacheService, ILogger<CacheController> logger)
+    private const string HealthCacheKey = "cache:health:public-result";
+    private static readonly TimeSpan HealthCacheDuration = TimeSpan.FromSeconds(10);
+
+    public CacheController(ICacheService cacheService, ILogger<CacheController> logger, IMemoryCache memoryCache)
     {
         _cacheService = cacheService;
         _logger = logger;
+        _memoryCache = memoryCache;
     }
 
     /// <summary>
@@ -100,11 +106,38 @@ public class CacheController : ControllerBase
     }
 
     /// <summary>
-    /// Check Redis connection health and basic cache operations
+    /// Minimal anonymous health probe for monitoring: only "healthy"/"unhealthy" and a timestamp.
+    /// The result is cached briefly so anonymous callers cannot drive Redis writes.
     /// </summary>
     [HttpGet("health")]
     [AllowAnonymous] // Health checks should be accessible for monitoring tools
     public async Task<ActionResult> HealthCheck(CancellationToken cancellationToken = default)
+    {
+        var result = await _memoryCache.GetOrCreateAsync(HealthCacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = HealthCacheDuration;
+            var detail = await RunHealthProbeAsync(CancellationToken.None);
+            return new CacheHealthPublicResult
+            {
+                Status = detail.Status == "healthy" ? "healthy" : "unhealthy",
+                Timestamp = detail.Timestamp
+            };
+        });
+
+        return StatusCode(result!.Status == "healthy" ? 200 : 503, result);
+    }
+
+    /// <summary>
+    /// Detailed cache health (per-check flags, memory usage, key count, error text). SuperAdmin only.
+    /// </summary>
+    [HttpGet("health/detail")]
+    public async Task<ActionResult> HealthCheckDetail(CancellationToken cancellationToken = default)
+    {
+        var detail = await RunHealthProbeAsync(cancellationToken);
+        return StatusCode(detail.Status == "healthy" ? 200 : 503, detail);
+    }
+
+    private async Task<CacheHealthResult> RunHealthProbeAsync(CancellationToken cancellationToken)
     {
         var healthResult = new CacheHealthResult();
 
@@ -133,6 +166,7 @@ public class CacheController : ControllerBase
         }
         catch (Exception ex)
         {
+            // Full exception goes to the server log only; the message is exposed to SuperAdmin via the detail endpoint.
             _logger.LogError(ex, "Cache health check failed");
             healthResult.Error = ex.Message;
         }
@@ -140,12 +174,16 @@ public class CacheController : ControllerBase
         healthResult.Status = healthResult.WriteOk && healthResult.ReadOk && healthResult.DeleteOk
             ? "healthy"
             : "degraded";
-
         healthResult.Timestamp = DateTime.UtcNow;
-
-        var statusCode = healthResult.Status == "healthy" ? 200 : 503;
-        return StatusCode(statusCode, healthResult);
+        return healthResult;
     }
+}
+
+/// <summary>Anonymous health response: no free-text fields.</summary>
+public class CacheHealthPublicResult
+{
+    public string Status { get; set; } = "unhealthy";
+    public DateTime Timestamp { get; set; }
 }
 
 public class CacheHealthResult
