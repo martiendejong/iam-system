@@ -67,7 +67,9 @@ internal sealed class RecordingEmailService : IEmailService
     public List<(string Email, string Code)> SentTwoFactorCodes { get; } = new();
 
     public Task SendEmailVerificationAsync(string email, string username, string verificationToken, CancellationToken ct = default) => Task.CompletedTask;
-    public Task SendPasswordResetAsync(string email, string username, string resetToken, CancellationToken ct = default) => Task.CompletedTask;
+    public int ResetMails { get; private set; }
+
+    public Task SendPasswordResetAsync(string email, string username, string resetToken, CancellationToken ct = default) { ResetMails++; return Task.CompletedTask; }
     public Task SendMfaCodeAsync(string email, string username, string code, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task SendLoginTwoFactorCodeAsync(string email, string username, string code, string verifyUrl, CancellationToken ct = default)

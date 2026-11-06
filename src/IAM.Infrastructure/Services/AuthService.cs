@@ -501,6 +501,18 @@ public class AuthService : IAuthService
             return true;
         }
 
+        // A still-valid reset token means a mail went out within the last hour (the token lives one
+        // hour). Send nothing and leave the token untouched, so repeat requests can neither
+        // mail-bomb the address nor invalidate the link the user is about to click (task 5633).
+        // The caller still gets the same answer, so account existence stays hidden.
+        if (user.PasswordResetToken != null
+            && user.PasswordResetTokenExpiry.HasValue
+            && user.PasswordResetTokenExpiry.Value > DateTime.UtcNow)
+        {
+            _logger.LogInformation("Password reset requested for user {UserId} while a reset token is still valid; no new mail sent", user.Id);
+            return true;
+        }
+
         var rawResetToken = GenerateToken();
         user.PasswordResetToken = HashVerificationToken(rawResetToken);
         user.PasswordResetTokenExpiry = DateTime.UtcNow.AddHours(1);
