@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using IAM.API.Auth;
 using IAM.Core;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authentication;
@@ -163,13 +164,8 @@ public class AuthController : ControllerBase
         // Program.cs's sliding ExpireTimeSpan. Checked: a persistent cookie that survives
         // closing the browser and is valid for AuthConstants.RememberMeMinimumDays regardless
         // of activity.
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
-            new(ClaimTypes.Email, result.User.Email),
-            new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
-        };
-        var identity = new ClaimsIdentity(claims, "IAM.Session");
+        // Task 5490: the cookie carries the user's security stamp, the sign-in time and an absolute expiry.
+        var identity = SsoSession.BuildIdentity(result.User!, rememberMe, DateTimeOffset.UtcNow, SsoSession.AbsoluteHours(_configuration));
         var authProperties = rememberMe
             ? new AuthenticationProperties
             {
@@ -256,7 +252,8 @@ public class AuthController : ControllerBase
         }
 
         Response.Cookies.Delete("refreshToken");
-        await HttpContext.SignOutAsync("IAM.Session");
+        // Task 5490: also rotates the security stamp so a copy of the SSO cookie stops working.
+        await SsoSession.EndAsync(HttpContext);
 
         return Ok(new { message = "Logged out successfully" });
     }

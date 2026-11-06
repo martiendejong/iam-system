@@ -4424,6 +4424,11 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<int>("PrincipalKind")
                         .HasColumnType("integer");
 
+                    b.Property<string>("SecurityStamp")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("boolean");
 

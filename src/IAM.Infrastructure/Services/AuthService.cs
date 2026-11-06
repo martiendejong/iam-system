@@ -249,6 +249,7 @@ public class AuthService : IAuthService
         }
 
         user.LastLoginAt = DateTime.UtcNow;
+        user.EnsureSecurityStamp();
 
         // Adaptive MFA: assess login risk before issuing any tokens
         var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
@@ -547,6 +548,7 @@ public class AuthService : IAuthService
 
         // Update last login
         user.LastLoginAt = DateTime.UtcNow;
+        user.EnsureSecurityStamp();
         LoginLockout.Reset(user);
 
         // Resolve this organization's configured token lifetime (falls back to today's

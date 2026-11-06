@@ -21,6 +21,24 @@ public class User
     public DateTime? LockoutEnd { get; set; }
     public int FailedLoginAttempts { get; set; }
 
+    /// <summary>
+    /// Task 5490: per-user stamp carried in the IAM.Session single sign-on cookie and checked on every
+    /// /connect/authorize. Rotating it (logout, password reset or change, deactivation, forced revoke)
+    /// makes every older cookie worthless. Global per user: all of the user's browsers sign in again.
+    /// </summary>
+    public string SecurityStamp { get; set; } = NewSecurityStamp();
+
+    public static string NewSecurityStamp() => Guid.NewGuid().ToString("N");
+
+    /// <summary>Ends every existing single sign-on cookie of this user.</summary>
+    public void RotateSecurityStamp() => SecurityStamp = NewSecurityStamp();
+
+    /// <summary>Rows that pre-date the column hold an empty stamp; give them a real one at next sign-in.</summary>
+    public void EnsureSecurityStamp()
+    {
+        if (string.IsNullOrEmpty(SecurityStamp)) SecurityStamp = NewSecurityStamp();
+    }
+
     // MFA
     public bool TwoFactorEnabled { get; set; }
     public string? TwoFactorSecret { get; set; }
