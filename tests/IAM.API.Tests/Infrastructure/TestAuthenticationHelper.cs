@@ -25,6 +25,10 @@ public static class TestAuthenticationHelper
     /// null (the shape of a password-login token, which carries no tenant_id).
     /// </summary>
     public static string GenerateJwtToken(Guid userId, string username, string[] roles, string? tenantIdClaim)
+        => GenerateJwtToken(userId, username, roles, tenantIdClaim, null);
+
+    /// <summary>As above, optionally bound to a refresh token via the refresh_token_id claim (task 5628).</summary>
+    public static string GenerateJwtToken(Guid userId, string username, string[] roles, string? tenantIdClaim, Guid? refreshTokenId)
     {
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
         var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
@@ -35,6 +39,11 @@ public static class TestAuthenticationHelper
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.NameIdentifier, userId.ToString())
         };
+
+        if (refreshTokenId.HasValue)
+        {
+            claims.Add(new Claim("refresh_token_id", refreshTokenId.Value.ToString()));
+        }
 
         if (tenantIdClaim != null)
         {

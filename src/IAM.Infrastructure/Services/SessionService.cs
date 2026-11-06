@@ -64,14 +64,26 @@ public class SessionService : ISessionService
         var session = await _context.UserSessions
             .FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId && !s.IsRevoked, ct);
 
-        if (session == null)
+        // Task 5628: the refresh token with the same id is the session that access tokens are bound to.
+        var refreshToken = await _context.RefreshTokens
+            .FirstOrDefaultAsync(rt => rt.Id == sessionId && rt.UserId == userId && rt.RevokedAt == null, ct);
+
+        if (session == null && refreshToken == null)
         {
             return false;
         }
 
-        session.IsRevoked = true;
-        session.RevokedAt = DateTime.UtcNow;
-        session.RevokedReason = reason;
+        if (session != null)
+        {
+            session.IsRevoked = true;
+            session.RevokedAt = DateTime.UtcNow;
+            session.RevokedReason = reason;
+        }
+
+        if (refreshToken != null)
+        {
+            refreshToken.RevokedAt = DateTime.UtcNow;
+        }
 
         await _context.SaveChangesAsync(ct);
 
@@ -116,12 +128,15 @@ public class SessionService : ISessionService
             session.RevokedReason = reason;
         }
 
+        // Task 5628: end the refresh tokens (the real sessions behind access tokens) too.
+        var revokedTokens = await _context.RevokeRefreshTokensAsync(userId, ct);
+
         await _context.SaveChangesAsync(ct);
 
         _logger.LogInformation("Revoked all {Count} sessions for user {UserId}, reason: {Reason}",
             sessions.Count, userId, reason);
 
-        return sessions.Count;
+        return sessions.Count + revokedTokens;
     }
 
     public async Task<bool> ValidateSessionAsync(string sessionToken, CancellationToken ct = default)

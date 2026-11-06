@@ -169,6 +169,7 @@ builder.Services.AddScoped<IResourcePermissionService, ResourcePermissionService
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IAM.API.Auth.AccessTokenSessionValidator>();
 
 // Fido2 (WebAuthn) configuration
 builder.Services.AddFido2(options =>
@@ -355,6 +356,12 @@ builder.Services.AddAuthentication(options =>
         // Configure claim mappings for roles and names
         RoleClaimType = System.Security.Claims.ClaimTypes.Role,
         NameClaimType = System.Security.Claims.ClaimTypes.Name
+    };
+
+    // Task 5628: reject access tokens whose session (refresh token) was revoked or whose user was deactivated.
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = IAM.API.Auth.AccessTokenSessionValidator.OnTokenValidatedAsync
     };
 })
 .AddCookie("IAM.Session", options =>
