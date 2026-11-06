@@ -61,6 +61,7 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 // Per-IP + typed-email progressive delay for password sign-ins (task 5166). Singleton: the state lives in IMemoryCache.
 builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
+builder.Services.AddSingleton<ITwoFactorChallengeService, TwoFactorChallengeService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();

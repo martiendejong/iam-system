@@ -10,6 +10,39 @@ function normalizeRole(role: any): any {
   return { ...role, isSystem: role.isSystem ?? role.isSystemRole ?? false };
 }
 
+// Task 5566: the 2FA challenge token is kept in localStorage (not per-tab sessionStorage) so the e-mailed
+// verify link, which opens in a new tab of the same browser, can still complete the login. It expires after
+// about 10 minutes, matching the server.
+const TWO_FACTOR_CHALLENGE_PREFIX = 'iam.2fa.challenge.';
+const TWO_FACTOR_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+
+export function rememberTwoFactorChallengeFrom(data: unknown): void {
+  const d = data as { requiresTwoFactor?: boolean; userId?: string; challengeToken?: string } | null | undefined;
+  if (d && d.requiresTwoFactor && d.userId && d.challengeToken) {
+    localStorage.setItem(
+      TWO_FACTOR_CHALLENGE_PREFIX + d.userId,
+      JSON.stringify({ token: d.challengeToken, at: Date.now() })
+    );
+  }
+}
+
+export function getTwoFactorChallenge(userId: string): string | undefined {
+  const raw = localStorage.getItem(TWO_FACTOR_CHALLENGE_PREFIX + userId);
+  if (!raw) return undefined;
+  try {
+    const { token, at } = JSON.parse(raw) as { token: string; at: number };
+    if (Date.now() - at < TWO_FACTOR_CHALLENGE_TTL_MS) return token;
+  } catch {
+    // fall through and drop the unreadable entry
+  }
+  localStorage.removeItem(TWO_FACTOR_CHALLENGE_PREFIX + userId);
+  return undefined;
+}
+
+export function clearTwoFactorChallenge(userId: string): void {
+  localStorage.removeItem(TWO_FACTOR_CHALLENGE_PREFIX + userId);
+}
+
 class ApiService {
   private client: AxiosInstance;
   private refreshPromise: Promise<void> | null = null;
@@ -42,7 +75,11 @@ class ApiService {
 
     // Add response interceptor for error handling
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        // Task 5566: every first sign-in step that ends in the e-mailed 2FA prompt hands out a challenge token.
+        rememberTwoFactorChallengeFrom(response.data);
+        return response;
+      },
       async (error: AxiosError) => {
         if (error.response?.status === 401) {
           const url = error.config?.url ?? '';
@@ -109,15 +146,17 @@ class ApiService {
   }
 
   async verifyLoginTwoFactor(userId: string, code: string, rememberMe = false): Promise<LoginResponse> {
-    const response = await this.client.post<LoginResponse>('/auth/2fa/verify', { userId, code, rememberMe });
+    const challengeToken = getTwoFactorChallenge(userId);
+    const response = await this.client.post<LoginResponse>('/auth/2fa/verify', { userId, code, rememberMe, challengeToken });
     if (response.data.accessToken) {
+      clearTwoFactorChallenge(userId);
       localStorage.setItem('accessToken', response.data.accessToken);
     }
     return response.data;
   }
 
   async resendLoginTwoFactorCode(userId: string, returnUrl?: string): Promise<void> {
-    await this.client.post('/auth/2fa/resend', { userId, returnUrl });
+    await this.client.post('/auth/2fa/resend', { userId, returnUrl, challengeToken: getTwoFactorChallenge(userId) });
   }
 
   async verifyMagicLink(token: string): Promise<LoginResponse> {

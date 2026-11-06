@@ -65,6 +65,7 @@ public class SocialAuthController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = result.User!.Id,
+                challengeToken = result.TwoFactorChallengeToken,
                 message = "A verification code has been sent to your email."
             });
         }
