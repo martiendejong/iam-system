@@ -35,11 +35,19 @@ public class InvitationService : IInvitationService
         _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
     }
 
-    private static string RenderTemplate(string template, Dictionary<string, string> placeholders)
+    /// <summary>
+    /// Fills {{placeholders}} in a custom template. Task 4716: tenant-controlled values (names, email) must not
+    /// inject markup, so in HTML mode every value is HTML-encoded and {{Token}} is URL-escaped for use in an href.
+    /// Subject lines are plain text: values are inserted as-is minus line breaks (no header injection).
+    /// </summary>
+    internal static string RenderTemplate(string template, Dictionary<string, string> placeholders, bool html)
     {
         foreach (var (key, value) in placeholders)
         {
-            template = template.Replace(key, value);
+            string safe = html
+                ? (key == "{{Token}}" ? Uri.EscapeDataString(value) : System.Net.WebUtility.HtmlEncode(value))
+                : value.Replace("\r", " ").Replace("\n", " ");
+            template = template.Replace(key, safe);
         }
         return template;
     }
@@ -149,8 +157,8 @@ public class InvitationService : IInvitationService
 
             emailSent = await _emailService.SendRawEmailAsync(
                 email,
-                RenderTemplate(customTemplate.Subject, placeholders),
-                RenderTemplate(customTemplate.BodyHtml, placeholders),
+                RenderTemplate(customTemplate.Subject, placeholders, html: false),
+                RenderTemplate(customTemplate.BodyHtml, placeholders, html: true),
                 ct);
         }
         else
