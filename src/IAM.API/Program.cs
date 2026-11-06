@@ -74,6 +74,7 @@ builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.Configure<IAM.Core.Configuration.OnboardingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.OnboardingOptions.SectionName));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<ITotpService, TotpService>();
