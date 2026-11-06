@@ -48,6 +48,14 @@ public static class RefreshTokenRevocation
             token.RevokedAt = now;
         }
 
+        // Task 5490: whatever ends a user's refresh tokens (logout-everywhere, password reset or change,
+        // deactivation, theft detection, SCIM/directory disable) also ends their single sign-on cookie.
+        var users = await context.Users.Where(u => ids.Contains(u.Id)).ToListAsync(ct);
+        foreach (var user in users)
+        {
+            user.RotateSecurityStamp();
+        }
+
         return tokens.Count;
     }
 

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Security.Claims;
+using IAM.API.Auth;
 using IAM.Core.Services;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
@@ -85,9 +86,7 @@ public class AuthorizationController : ControllerBase
             if (silent)
                 return SilentSignInDenied(Errors.LoginRequired, "The user is not signed in to IAM.");
 
-            var returnUrl = Request.Path + QueryString.Create(
-                Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
-            return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
+            return RedirectToLogin(stripPromptLogin: false);
         }
 
         // Retrieve user from database
@@ -111,6 +110,32 @@ public class AuthorizationController : ControllerBase
                 return SilentSignInDenied(Errors.LoginRequired, "The IAM session belongs to an account that is no longer active.");
 
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
+        }
+
+        // Task 5490: the cookie must carry the user's current security stamp and be inside its absolute
+        // lifetime. A stale one is cleared and treated as "not signed in".
+        var now = DateTimeOffset.UtcNow;
+        var rejection = SsoSession.Reject(result.Principal, user, now);
+        if (rejection != null)
+        {
+            await HttpContext.SignOutAsync(SsoSession.Scheme);
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, rejection);
+
+            return RedirectToLogin(stripPromptLogin: false);
+        }
+
+        // Task 5490: prompt=login always, and max_age when the last interactive sign-in is older, force a
+        // new sign-in. The login page sends the user back here without prompt=login (it would loop), and
+        // max_age is then satisfied by the fresh sign-in. prompt=none can never show a login page.
+        var forceLogin = request.HasPromptValue(PromptValues.Login)
+            || (request.MaxAge.HasValue && SsoSession.IsOlderThan(result.Principal, request.MaxAge.Value, now));
+        if (forceLogin)
+        {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "A fresh sign-in is required.");
+
+            return RedirectToLogin(stripPromptLogin: true);
         }
 
         // Federated app-role gate — shared with the refresh_token grant in Exchange, see
@@ -188,6 +213,30 @@ public class AuthorizationController : ControllerBase
 
         // Return the SignInResult to issue tokens
         return SignIn(new ClaimsPrincipal(identity), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    /// <summary>Redirects to the IAM login page, returning to this same authorize request afterwards.</summary>
+    private IActionResult RedirectToLogin(bool stripPromptLogin)
+    {
+        var pairs = (Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList())
+            .Select(kv => new KeyValuePair<string, string?>(kv.Key, kv.Value.ToString()))
+            .ToList();
+
+        if (stripPromptLogin)
+        {
+            for (var i = 0; i < pairs.Count; i++)
+            {
+                if (pairs[i].Key != Parameters.Prompt) continue;
+                var rest = (pairs[i].Value ?? string.Empty)
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Where(p => p != PromptValues.Login);
+                pairs[i] = new KeyValuePair<string, string?>(Parameters.Prompt, string.Join(' ', rest));
+            }
+            pairs.RemoveAll(p => p.Key == Parameters.Prompt && string.IsNullOrEmpty(p.Value));
+        }
+
+        var returnUrl = Request.Path + QueryString.Create(pairs);
+        return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
     }
 
     /// <summary>
@@ -494,7 +543,8 @@ public class AuthorizationController : ControllerBase
         _ = HttpContext.GetOpenIddictServerRequest() ??
             throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
-        await HttpContext.SignOutAsync("IAM.Session");
+        // Task 5490: ends the session server-side (stamp rotation), not only this browser's cookie.
+        await SsoSession.EndAsync(HttpContext);
 
         return SignOut(
             authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
