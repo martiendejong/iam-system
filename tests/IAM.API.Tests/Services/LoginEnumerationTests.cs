@@ -204,7 +204,8 @@ public class LoginEnumerationTests
         });
 
         // Lock it the way task 4523 does: five wrong second-factor codes.
-        for (var i = 0; i < 5; i++) await _auth.VerifyLoginTwoFactorAsync(owner.Id, "000000");
+        var challenge = await _auth.CompletePasswordlessLoginAsync(owner);
+        for (var i = 0; i < 5; i++) await _auth.VerifyLoginTwoFactorAsync(owner.Id, challenge.TwoFactorChallengeToken, "000000");
         await _context.Entry(owner).ReloadAsync();
         Assert.True(owner.IsLockedOut);
         Assert.True(owner.LockoutEnd > DateTime.UtcNow);

@@ -71,6 +71,7 @@ public class MagicLinkController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = loginResult.User!.Id,
+                challengeToken = loginResult.TwoFactorChallengeToken,
                 message = "A verification code has been sent to your email."
             });
         }

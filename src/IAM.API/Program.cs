@@ -61,6 +61,7 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 // Per-IP + typed-email progressive delay for password sign-ins (task 5166). Singleton: the state lives in IMemoryCache.
 builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
+builder.Services.AddSingleton<ITwoFactorChallengeService, TwoFactorChallengeService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
@@ -68,16 +69,19 @@ builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.A
 builder.Services.AddScoped<IAM.API.Authorization.ITelemetryAccessAuthorizer, IAM.API.Authorization.TelemetryAccessAuthorizer>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
+builder.Services.AddSingleton<IPasskeyChallengeStore, PasskeyChallengeStore>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
 builder.Services.PostConfigure<EmailSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
+builder.Services.Configure<IAM.Core.Configuration.OnboardingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.OnboardingOptions.SectionName));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<ITotpService, TotpService>();
 builder.Services.AddScoped<IGroupService, GroupService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
+builder.Services.Configure<IAM.Core.Configuration.ConditionLimitsOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.ConditionLimitsOptions.SectionName));
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
@@ -171,6 +175,7 @@ builder.Services.AddScoped<IResourcePermissionService, ResourcePermissionService
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IAM.API.Auth.AccessTokenSessionValidator>();
 
 // Fido2 (WebAuthn) configuration
 builder.Services.AddFido2(options =>
@@ -357,6 +362,12 @@ builder.Services.AddAuthentication(options =>
         // Configure claim mappings for roles and names
         RoleClaimType = System.Security.Claims.ClaimTypes.Role,
         NameClaimType = System.Security.Claims.ClaimTypes.Name
+    };
+
+    // Task 5628: reject access tokens whose session (refresh token) was revoked or whose user was deactivated.
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = IAM.API.Auth.AccessTokenSessionValidator.OnTokenValidatedAsync
     };
 })
 .AddCookie("IAM.Session", options =>

@@ -38,6 +38,7 @@ public class AuthService : IAuthService
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
     private readonly ILoginThrottle _loginThrottle;
+    private readonly ITwoFactorChallengeService _twoFactorChallenge;
 
     public AuthService(
         IAMDbContext context,
@@ -47,7 +48,8 @@ public class AuthService : IAuthService
         IOtpService otpService,
         IClaimsMappingService claimsMappingService,
         ILogger<AuthService> logger,
-        ILoginThrottle loginThrottle)
+        ILoginThrottle loginThrottle,
+        ITwoFactorChallengeService twoFactorChallenge)
     {
         _context = context;
         _configuration = configuration;
@@ -57,6 +59,7 @@ public class AuthService : IAuthService
         _claimsMappingService = claimsMappingService;
         _logger = logger;
         _loginThrottle = loginThrottle;
+        _twoFactorChallenge = twoFactorChallenge;
     }
 
     /// <summary>
@@ -244,6 +247,7 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
+                TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
                 User = user
             };
         }
@@ -497,6 +501,18 @@ public class AuthService : IAuthService
             return true;
         }
 
+        // A still-valid reset token means a mail went out within the last hour (the token lives one
+        // hour). Send nothing and leave the token untouched, so repeat requests can neither
+        // mail-bomb the address nor invalidate the link the user is about to click (task 5633).
+        // The caller still gets the same answer, so account existence stays hidden.
+        if (user.PasswordResetToken != null
+            && user.PasswordResetTokenExpiry.HasValue
+            && user.PasswordResetTokenExpiry.Value > DateTime.UtcNow)
+        {
+            _logger.LogInformation("Password reset requested for user {UserId} while a reset token is still valid; no new mail sent", user.Id);
+            return true;
+        }
+
         var rawResetToken = GenerateToken();
         user.PasswordResetToken = HashVerificationToken(rawResetToken);
         user.PasswordResetTokenExpiry = DateTime.UtcNow.AddHours(1);
@@ -602,6 +618,7 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
+                TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
                 User = user
             };
         }
@@ -639,8 +656,19 @@ public class AuthService : IAuthService
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
-    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
+    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
     {
+        // Task 5566: no valid challenge token for this user = same answer as a wrong code, and no side effects
+        // (no failure counted, nothing mailed, no login).
+        if (!_twoFactorChallenge.IsValid(challengeToken, userId))
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
         var user = await _context.Users
             .Include(u => u.UserRoles)
                 .ThenInclude(ur => ur.Role)
@@ -688,11 +716,27 @@ public class AuthService : IAuthService
             };
         }
 
+        // Single use: the token dies with the successful verify (a concurrent second verify loses here).
+        if (!_twoFactorChallenge.TryConsume(challengeToken, userId))
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
-    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null)
+    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? challengeToken, string? returnUrl = null)
     {
+        // Task 5566: without a valid token this is indistinguishable from "2FA not enabled": no mail is sent.
+        if (!_twoFactorChallenge.IsValid(challengeToken, userId))
+        {
+            return true;
+        }
+
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
 
         if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)

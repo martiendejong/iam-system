@@ -30,8 +30,8 @@ public interface IAuthService
     /// (see AuthResult.RequiresStepUp), by validating the emailed OTP and issuing tokens.
     /// </summary>
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
-    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
-    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null);
+    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
+    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? challengeToken, string? returnUrl = null);
 
     /// <summary>
     /// Completes a login for a user who has already proven an alternate primary factor
@@ -67,6 +67,9 @@ public class AuthResult
     /// </summary>
     public bool RequiresStepUp { get; set; }
     public bool RequiresTwoFactor { get; set; }
+
+    /// <summary>Task 5566: single-use token the 2FA verify and resend steps require; set whenever <see cref="RequiresTwoFactor"/> is.</summary>
+    public string? TwoFactorChallengeToken { get; set; }
 
     /// <summary>
     /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,

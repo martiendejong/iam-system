@@ -117,11 +117,6 @@ public class PasskeyController : ControllerBase
 
             return Ok(options);
         }
-        catch (InvalidOperationException ex)
-        {
-            _logger.LogWarning(ex, "Authentication begin failed for user {Username}", request.Username);
-            return NotFound(new { error = ex.Message });
-        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error beginning passkey authentication");
@@ -178,6 +173,7 @@ public class PasskeyController : ControllerBase
                 {
                     requiresTwoFactor = true,
                     userId = loginResult.User!.Id,
+                    challengeToken = loginResult.TwoFactorChallengeToken,
                     message = "A verification code has been sent to your email."
                 });
             }
