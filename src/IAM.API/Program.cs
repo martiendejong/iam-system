@@ -112,6 +112,7 @@ builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"))
 builder.Services.PostConfigure<SmsSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
+builder.Services.AddSingleton<IRequestThrottle, InMemoryRequestThrottle>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();

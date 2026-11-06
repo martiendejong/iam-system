@@ -29,12 +29,8 @@ public class OtpController : ControllerBase
             return BadRequest(new { error = "Email is required" });
         }
 
-        var result = await _otpService.SendEmailOtpAsync(request.Email, OtpPurpose.Login);
-
-        if (!result)
-        {
-            return StatusCode(429, new { error = "Too many requests. Please try again later." });
-        }
+        // Over-limit requests are silently dropped; the response is the same either way.
+        await _otpService.SendEmailOtpAsync(request.Email, OtpPurpose.Login, HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(new { message = "If the email exists, a verification code has been sent." });
     }
@@ -118,12 +114,8 @@ public class OtpController : ControllerBase
             return BadRequest(new { error = "Phone number is required" });
         }
 
-        var result = await _otpService.SendSmsOtpAsync(request.PhoneNumber, OtpPurpose.Login);
-
-        if (!result)
-        {
-            return StatusCode(429, new { error = "Too many requests. Please try again later." });
-        }
+        // Over-limit requests are silently dropped; the response is the same either way.
+        await _otpService.SendSmsOtpAsync(request.PhoneNumber, OtpPurpose.Login, HttpContext.Connection.RemoteIpAddress?.ToString());
 
         return Ok(new { message = "If the phone number is registered, a verification code has been sent." });
     }
