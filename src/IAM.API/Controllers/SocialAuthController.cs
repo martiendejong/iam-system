@@ -28,12 +28,16 @@ public class SocialAuthController : ControllerBase
         try
         {
             var state = Guid.NewGuid().ToString("N");
-            var url = await _socialAuthService.GetAuthorizationUrlAsync(providerId, redirectUri, state);
+            var browserSecret = NewBrowserSecret();
+            var url = await _socialAuthService.GetAuthorizationUrlAsync(providerId, redirectUri, state, browserSecret);
 
+            // The browser secret is returned once, next to the state. The client keeps it and sends it back
+            // on the callback; only its hash is stored here (task 5493).
             return Ok(new
             {
                 authorizationUrl = url,
-                state
+                state,
+                browserSecret
             });
         }
         catch (InvalidOperationException ex)
@@ -43,6 +47,38 @@ public class SocialAuthController : ControllerBase
     }
 
     /// <summary>
+    /// Start linking an external account to the signed-in user. The state is tied to this user and to linking.
+    /// </summary>
+    [HttpGet("{providerId:guid}/link/authorize")]
+    [Authorize]
+    public async Task<IActionResult> GetLinkAuthorizationUrl(Guid providerId, [FromQuery] string redirectUri)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!Guid.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized(new { error = "Invalid user identity" });
+        }
+
+        try
+        {
+            var state = Guid.NewGuid().ToString("N");
+            var browserSecret = NewBrowserSecret();
+            var url = await _socialAuthService.GetAuthorizationUrlAsync(
+                providerId, redirectUri, state, browserSecret, SocialFlowPurpose.Link, userId);
+
+            return Ok(new { authorizationUrl = url, state, browserSecret });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static string NewBrowserSecret() =>
+        Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
+            .TrimEnd("=".ToCharArray()).Replace("+", "-").Replace("/", "_");
+
+    /// <summary>
     /// Handle the OAuth callback from an external identity provider
     /// </summary>
     [HttpPost("{providerId:guid}/callback")]
@@ -50,7 +86,7 @@ public class SocialAuthController : ControllerBase
         Guid providerId,
         [FromBody] SocialCallbackRequest request)
     {
-        var result = await _socialAuthService.HandleCallbackAsync(providerId, request.Code, request.State);
+        var result = await _socialAuthService.HandleCallbackAsync(providerId, request.Code, request.State, request.BrowserSecret);
 
         if (!result.Success)
         {
@@ -110,7 +146,7 @@ public class SocialAuthController : ControllerBase
 
         try
         {
-            var externalLogin = await _socialAuthService.LinkAccountAsync(userId, providerId, request.Code);
+            var externalLogin = await _socialAuthService.LinkAccountAsync(userId, providerId, request.Code, request.State ?? "", request.BrowserSecret);
 
             return Ok(new
             {
@@ -179,5 +215,5 @@ public class SocialAuthController : ControllerBase
     }
 }
 
-public record SocialCallbackRequest(string Code, string State);
-public record SocialLinkRequest(string Code);
+public record SocialCallbackRequest(string Code, string State, string? BrowserSecret = null);
+public record SocialLinkRequest(string Code, string? State = null, string? BrowserSecret = null);
