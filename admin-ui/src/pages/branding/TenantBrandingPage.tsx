@@ -3,6 +3,7 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import { brandingApi } from '../../services/brandingApi';
 import type { TenantBranding, UpsertBrandingRequest } from '../../services/brandingApi';
 import { api } from '../../services/api';
+import EmailPreviewFrame from '../../components/branding/EmailPreviewFrame';
 
 type TabType = 'editor' | 'email' | 'preview';
 
@@ -477,29 +478,7 @@ export default function TenantBrandingPage() {
                 {(emailHeaderHtml || emailFooterHtml) && (
                   <div className="bg-white rounded-lg shadow-sm p-6">
                     <h3 className="text-lg font-medium text-gray-900 mb-4">Email Preview</h3>
-                    <div className="border rounded-lg overflow-hidden">
-                      {emailHeaderHtml && (
-                        <div dangerouslySetInnerHTML={{ __html: emailHeaderHtml }} />
-                      )}
-                      <div className="p-6">
-                        <p className="text-gray-700">Hello User,</p>
-                        <p className="mt-2 text-gray-600">
-                          This is a preview of how your branded emails will look. The actual content will vary depending on the email type.
-                        </p>
-                        <div className="mt-4">
-                          <a
-                            href="#"
-                            className="inline-block px-4 py-2 text-white text-sm font-medium rounded-md"
-                            style={{ backgroundColor: primaryColor }}
-                          >
-                            Action Button
-                          </a>
-                        </div>
-                      </div>
-                      {emailFooterHtml && (
-                        <div dangerouslySetInnerHTML={{ __html: emailFooterHtml }} />
-                      )}
-                    </div>
+                    <EmailPreviewFrame headerHtml={emailHeaderHtml} footerHtml={emailFooterHtml} primaryColor={primaryColor} />
                   </div>
                 )}
               </div>
