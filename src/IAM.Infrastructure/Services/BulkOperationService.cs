@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -451,7 +452,7 @@ public class BulkOperationService : IBulkOperationService
     {
         if (index < 0 || index >= fields.Length) return null;
         var value = fields[index].Trim().Trim('"');
-        return string.IsNullOrWhiteSpace(value) ? null : value;
+        return string.IsNullOrWhiteSpace(value) ? null : CsvCell.Restore(value);
     }
 
     private static string GenerateTemporaryPassword()
@@ -468,7 +469,7 @@ public class BulkOperationService : IBulkOperationService
 
         foreach (var row in rows)
         {
-            sb.AppendLine($"\"{row.Id}\",\"{EscapeCsv(row.Email)}\",\"{EscapeCsv(row.FirstName)}\",\"{EscapeCsv(row.LastName)}\",\"{EscapeCsv(row.PhoneNumber)}\",{row.IsActive},{row.EmailConfirmed},{row.TwoFactorEnabled},\"{EscapeCsv(row.Roles)}\",\"{row.CreatedAt}\",\"{row.LastLoginAt}\"");
+            sb.AppendLine($"\"{row.Id}\",{CsvCell.Escape(row.Email, true)},{CsvCell.Escape(row.FirstName, true)},{CsvCell.Escape(row.LastName, true)},{CsvCell.Escape(row.PhoneNumber, true)},{row.IsActive},{row.EmailConfirmed},{row.TwoFactorEnabled},{CsvCell.Escape(row.Roles, true)},\"{row.CreatedAt}\",\"{row.LastLoginAt}\"");
         }
 
         return Encoding.UTF8.GetBytes(sb.ToString());
@@ -483,11 +484,6 @@ public class BulkOperationService : IBulkOperationService
         };
         var json = JsonSerializer.Serialize(new { exportedAt = DateTime.UtcNow, totalUsers = rows.Count, users = rows }, options);
         return Encoding.UTF8.GetBytes(json);
-    }
-
-    private static string EscapeCsv(string value)
-    {
-        return value.Replace("\"", "\"\"");
     }
 
     // ---- DTOs ----
