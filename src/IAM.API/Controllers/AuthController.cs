@@ -108,6 +108,7 @@ public class AuthController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = result.User!.Id,
+                challengeToken = result.TwoFactorChallengeToken,
                 message = "A verification code has been sent to your email."
             });
         }
@@ -121,7 +122,7 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.VerifyLoginTwoFactorAsync(request.UserId, request.Code, ipAddress, userAgent, request.RememberMe);
+        var result = await _authService.VerifyLoginTwoFactorAsync(request.UserId, request.ChallengeToken, request.Code, ipAddress, userAgent, request.RememberMe);
 
         if (!result.Success)
         {
@@ -134,7 +135,7 @@ public class AuthController : ControllerBase
     [HttpPost("2fa/resend")]
     public async Task<IActionResult> ResendTwoFactorCode([FromBody] ResendTwoFactorRequest request)
     {
-        await _authService.ResendLoginTwoFactorCodeAsync(request.UserId, request.ReturnUrl);
+        await _authService.ResendLoginTwoFactorCodeAsync(request.UserId, request.ChallengeToken, request.ReturnUrl);
 
         // Always return success (don't reveal account state to an unauthenticated caller)
         return Ok(new { message = "If two-factor authentication is enabled for this account, a new code has been sent." });
@@ -290,5 +291,5 @@ public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record StepUpVerifyRequest(string Email, string Code, bool RememberMe = false);
-public record TwoFactorVerifyRequest(Guid UserId, string Code, bool RememberMe = false);
-public record ResendTwoFactorRequest(Guid UserId, string? ReturnUrl = null);
+public record TwoFactorVerifyRequest(Guid UserId, string Code, bool RememberMe = false, string? ChallengeToken = null);
+public record ResendTwoFactorRequest(Guid UserId, string? ReturnUrl = null, string? ChallengeToken = null);

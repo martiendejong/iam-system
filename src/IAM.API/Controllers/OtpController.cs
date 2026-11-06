@@ -84,6 +84,7 @@ public class OtpController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = loginResult.User!.Id,
+                challengeToken = loginResult.TwoFactorChallengeToken,
                 message = "A verification code has been sent to your email."
             });
         }
@@ -172,6 +173,7 @@ public class OtpController : ControllerBase
             {
                 requiresTwoFactor = true,
                 userId = loginResult.User!.Id,
+                challengeToken = loginResult.TwoFactorChallengeToken,
                 message = "A verification code has been sent to your email."
             });
         }

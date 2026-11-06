@@ -20,7 +20,8 @@ internal static class AuthServiceTestFactory
         IAMDbContext context,
         IConfiguration configuration,
         RecordingEmailService? emailService = null,
-        ILoginThrottle? loginThrottle = null)
+        ILoginThrottle? loginThrottle = null,
+        ITwoFactorChallengeService? challengeService = null)
     {
         emailService ??= new RecordingEmailService();
         var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" });
@@ -30,8 +31,11 @@ internal static class AuthServiceTestFactory
 
         return new AuthService(
             context, configuration, emailService, riskAssessmentService, otpService, claimsMappingService,
-            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle());
+            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle(), challengeService ?? CreateChallengeService());
     }
+
+    public static TwoFactorChallengeService CreateChallengeService(TimeProvider? timeProvider = null) =>
+        new(new MemoryCache(new MemoryCacheOptions()), timeProvider);
 
     /// <summary>
     /// A real <see cref="LoginThrottle"/> on a private cache (so tests never share state), with the
