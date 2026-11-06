@@ -28,8 +28,9 @@ internal static class AuthServiceTestFactory
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         var claimsMappingService = new ClaimsMappingService(context);
 
+        var totpService = new TotpService(context);
         return new AuthService(
-            context, configuration, emailService, riskAssessmentService, otpService, claimsMappingService,
+            context, configuration, emailService, riskAssessmentService, otpService, totpService, claimsMappingService,
             NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle());
     }
 

@@ -35,6 +35,7 @@ public class AuthService : IAuthService
     private readonly IEmailService _emailService;
     private readonly IRiskAssessmentService _riskAssessmentService;
     private readonly IOtpService _otpService;
+    private readonly ITotpService _totpService;
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
     private readonly ILoginThrottle _loginThrottle;
@@ -45,6 +46,7 @@ public class AuthService : IAuthService
         IEmailService emailService,
         IRiskAssessmentService riskAssessmentService,
         IOtpService otpService,
+        ITotpService totpService,
         IClaimsMappingService claimsMappingService,
         ILogger<AuthService> logger,
         ILoginThrottle loginThrottle)
@@ -54,6 +56,7 @@ public class AuthService : IAuthService
         _emailService = emailService;
         _riskAssessmentService = riskAssessmentService;
         _otpService = otpService;
+        _totpService = totpService;
         _claimsMappingService = claimsMappingService;
         _logger = logger;
         _loginThrottle = loginThrottle;
@@ -244,6 +247,21 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
+                TwoFactorMethod = "email",
+                User = user
+            };
+        }
+
+        if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Totp)
+        {
+            await _context.SaveChangesAsync();
+            var challengeToken = await _otpService.GenerateLoginTotpChallengeAsync(user);
+            return new AuthResult
+            {
+                Success = true,
+                RequiresTwoFactor = true,
+                TwoFactorMethod = "totp",
+                ChallengeToken = challengeToken,
                 User = user
             };
         }
@@ -602,6 +620,20 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
+                TwoFactorMethod = "email",
+                User = user
+            };
+        }
+
+        if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Totp)
+        {
+            var challengeToken = await _otpService.GenerateLoginTotpChallengeAsync(user);
+            return new AuthResult
+            {
+                Success = true,
+                RequiresTwoFactor = true,
+                TwoFactorMethod = "totp",
+                ChallengeToken = challengeToken,
                 User = user
             };
         }
@@ -702,6 +734,70 @@ public class AuthService : IAuthService
         }
 
         return await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
+    }
+
+    public async Task<AuthResult> VerifyLoginTotpAsync(Guid userId, string code, string? challengeToken = null, string? ipAddress = null, string? userAgent = null, bool rememberMe = false, CancellationToken ct = default)
+    {
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+        if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Totp)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        if (LoginLockout.IsLocked(user))
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = AccountLockedMessage
+            };
+        }
+
+        // Require proof that the password step completed (closes userId-bypass hole).
+        if (string.IsNullOrEmpty(challengeToken) ||
+            !await _otpService.ValidateOtpAsync(user.Email, null, challengeToken, OtpPurpose.LoginTotpChallenge))
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired login session. Please sign in again."
+            };
+        }
+
+        // Try authenticator code first, then fall back to a one-time recovery code.
+        var valid = await _totpService.ValidateTotpLoginAsync(userId, code, ct)
+                 || await _totpService.UseRecoveryCodeAsync(userId, code, ct);
+
+        if (!valid)
+        {
+            LoginLockout.RegisterFailure(user);
+            if (LoginLockout.IsLocked(user))
+            {
+                await _context.SaveChangesAsync(ct);
+                return new AuthResult
+                {
+                    Success = false,
+                    Error = "Too many failed attempts. Account temporarily locked."
+                };
+            }
+            await _context.SaveChangesAsync(ct);
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid authentication code."
+            };
+        }
+
+        LoginLockout.Reset(user);
+        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)

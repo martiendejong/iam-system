@@ -23,5 +23,6 @@ public enum OtpPurpose
     Login,
     MfaVerification,
     PhoneVerification,
-    LoginTwoFactor
+    LoginTwoFactor,
+    LoginTotpChallenge
 }

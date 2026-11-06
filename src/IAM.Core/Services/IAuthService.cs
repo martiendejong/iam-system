@@ -32,6 +32,11 @@ public interface IAuthService
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null);
+    /// <summary>
+    /// Completes a TOTP-gated login: validates the authenticator code or recovery code,
+    /// then issues tokens. Mirrors VerifyLoginTwoFactorAsync for the email-2FA path.
+    /// </summary>
+    Task<AuthResult> VerifyLoginTotpAsync(Guid userId, string code, string? challengeToken = null, string? ipAddress = null, string? userAgent = null, bool rememberMe = false, CancellationToken ct = default);
 
     /// <summary>
     /// Completes a login for a user who has already proven an alternate primary factor
@@ -67,6 +72,19 @@ public class AuthResult
     /// </summary>
     public bool RequiresStepUp { get; set; }
     public bool RequiresTwoFactor { get; set; }
+    /// <summary>
+    /// Set when RequiresTwoFactor is true. "email" = code sent by email;
+    /// "totp" = authenticator app code or recovery code. Tells the client which
+    /// challenge UI to show and which verify endpoint to call.
+    /// </summary>
+    public string? TwoFactorMethod { get; set; }
+
+    /// <summary>
+    /// Short-lived single-use token proving the password step completed. Set when
+    /// RequiresTwoFactor is true and TwoFactorMethod is "totp". Must be passed back
+    /// to VerifyLoginTotpAsync to prevent userId-only bypass.
+    /// </summary>
+    public string? ChallengeToken { get; set; }
 
     /// <summary>
     /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,
