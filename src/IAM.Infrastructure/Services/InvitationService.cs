@@ -122,7 +122,7 @@ public class InvitationService : IInvitationService
             Email = email,
             TenantId = tenantId,
             RoleId = roleId,
-            Token = token,
+            Token = TokenHasher.Sha256Hex(token), // only the hash is stored; the raw token goes out by e-mail
             Status = "Pending",
             InvitedByUserId = invitedByUserId,
             ExpiresAt = DateTime.UtcNow.AddDays(expiryDays ?? _defaultExpiryDays)
@@ -179,7 +179,7 @@ public class InvitationService : IInvitationService
                 email, tenant.Name);
         }
 
-        return new InvitationSendResult(invitation, emailSent);
+        return new InvitationSendResult(invitation, emailSent, token);
     }
 
     public async Task<BulkInviteResult> SendBulkInvitationsAsync(
@@ -334,10 +334,11 @@ public class InvitationService : IInvitationService
         string? lastName,
         CancellationToken ct = default)
     {
+        var tokenHash = TokenHasher.Sha256Hex(token);
         var invitation = await _context.Set<Invitation>()
             .Include(i => i.Tenant)
             .Include(i => i.Role)
-            .FirstOrDefaultAsync(i => i.Token == token, ct);
+            .FirstOrDefaultAsync(i => i.Token == tokenHash, ct);
 
         if (invitation == null)
         {
@@ -631,11 +632,12 @@ public class InvitationService : IInvitationService
 
     public async Task<Invitation?> GetInvitationByTokenAsync(string token, CancellationToken ct = default)
     {
+        var tokenHash = TokenHasher.Sha256Hex(token);
         return await _context.Set<Invitation>()
             .Include(i => i.Tenant)
             .Include(i => i.Role)
             .Include(i => i.InvitedByUser)
-            .FirstOrDefaultAsync(i => i.Token == token, ct);
+            .FirstOrDefaultAsync(i => i.Token == tokenHash, ct);
     }
 
     private static string GenerateSecureToken()

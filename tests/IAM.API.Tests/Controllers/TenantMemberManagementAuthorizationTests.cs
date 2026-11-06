@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using IAM.API.Tests.Infrastructure;
 using IAM.Core.Entities;
+using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,14 +104,16 @@ public class TenantMemberManagementAuthorizationTests : IClassFixture<IAMTestWeb
     private async Task<Invitation> SeedInvitationAsync(Guid tenantId, Role role, Guid invitedBy, string status = "Pending")
     {
         using var scope = _factory.Services.CreateScope();
+        var rawToken = Guid.NewGuid().ToString("N");
         var invitation = new Invitation
         {
             Id = Guid.NewGuid(), Email = $"{Guid.NewGuid():N}@invited.test", TenantId = tenantId, RoleId = role.Id,
-            Token = Guid.NewGuid().ToString("N"), Status = status, InvitedByUserId = invitedBy,
+            Token = TokenHasher.Sha256Hex(rawToken), Status = status, InvitedByUserId = invitedBy,
             ExpiresAt = DateTime.UtcNow.AddDays(3)
         };
         Db(scope).Set<Invitation>().Add(invitation);
         await Db(scope).SaveChangesAsync();
+        invitation.Token = rawToken; // callers build accept URLs from the e-mailed token; the row holds the hash
         return invitation;
     }
 
