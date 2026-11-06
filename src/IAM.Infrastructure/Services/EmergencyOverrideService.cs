@@ -13,13 +13,16 @@ public class EmergencyOverrideService : IEmergencyOverrideService
 {
     private readonly IAMDbContext _context;
     private readonly ILogger<EmergencyOverrideService> _logger;
+    private readonly IEmergencyOverrideCallerAccess _callerAccess;
 
     public EmergencyOverrideService(
         IAMDbContext context,
-        ILogger<EmergencyOverrideService> logger)
+        ILogger<EmergencyOverrideService> logger,
+        IEmergencyOverrideCallerAccess callerAccess)
     {
         _context = context;
         _logger = logger;
+        _callerAccess = callerAccess;
     }
 
     public async Task<EmergencyOverride> ActivateOverrideAsync(
@@ -39,6 +42,15 @@ public class EmergencyOverrideService : IEmergencyOverrideService
 
         if (durationMinutes <= 0 || durationMinutes > 1440) // Max 24 hours
             throw new ArgumentException("Duration must be between 1 and 1440 minutes");
+
+        // Task 5632: the tenant comes from the request body, so the caller must actually manage it. The message is
+        // the same for a tenant that does not exist and one the caller may not manage.
+        if (!await _callerAccess.CanManageTenantAsync(tenantId, cancellationToken))
+        {
+            _logger.LogWarning(
+                "Emergency override activation refused: User:{UserId} may not manage the requested tenant", userId);
+            throw new UnauthorizedAccessException("You are not allowed to activate an emergency override for this tenant");
+        }
 
         var emergencyOverride = new EmergencyOverride
         {
@@ -164,6 +176,14 @@ public class EmergencyOverrideService : IEmergencyOverrideService
 
         if (emergencyOverride == null)
             throw new ArgumentException($"Emergency override {overrideId} not found");
+
+        // Task 5632: four eyes. The person who activated the override cannot sign it off, whatever roles they hold.
+        if (emergencyOverride.UserId == reviewedByUserId)
+        {
+            _logger.LogWarning(
+                "Emergency override self-review refused: Override:{OverrideId} User:{UserId}", overrideId, reviewedByUserId);
+            throw new UnauthorizedAccessException("An emergency override must be reviewed by someone other than the person who activated it");
+        }
 
         emergencyOverride.ApprovalStatus = approvalStatus;
         emergencyOverride.ReviewedByUserId = reviewedByUserId;

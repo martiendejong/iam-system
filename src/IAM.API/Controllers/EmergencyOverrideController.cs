@@ -60,6 +60,10 @@ public class EmergencyOverrideController : ControllerBase
 
             return Ok(emergencyOverride);
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, ex.Message);
+        }
         catch (ArgumentException ex)
         {
             return BadRequest(ex.Message);
@@ -101,7 +105,8 @@ public class EmergencyOverrideController : ControllerBase
     }
 
     /// <summary>
-    /// Check if user has active override
+    /// Check if user has active override. Callers may ask about themselves; asking about another user needs
+    /// SecurityAdmin or SystemAdmin (task 5632).
     /// </summary>
     [HttpGet("active/check")]
     public async Task<ActionResult<bool>> HasActiveOverride(
@@ -109,6 +114,13 @@ public class EmergencyOverrideController : ControllerBase
         [FromQuery] Guid tenantId,
         CancellationToken cancellationToken = default)
     {
+        var callerClaim = User.FindFirst("sub")?.Value
+                       ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        var isSelf = Guid.TryParse(callerClaim, out var callerId) && callerId == userId;
+        if (!isSelf && !User.IsInRole("SecurityAdmin") && !User.IsInRole("SystemAdmin"))
+            return StatusCode(StatusCodes.Status403Forbidden, "You may only check your own emergency overrides");
+
         var hasActive = await _overrideService.HasActiveOverrideAsync(
             userId, tenantId, cancellationToken);
 
@@ -178,6 +190,10 @@ public class EmergencyOverrideController : ControllerBase
                 cancellationToken);
 
             return Ok(emergencyOverride);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, ex.Message);
         }
         catch (ArgumentException ex)
         {

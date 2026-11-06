@@ -248,7 +248,11 @@ public class EmergencyOverrideControllerTests : IClassFixture<IAMTestWebApplicat
         };
 
         // Act
-        var response = await _client.PostAsJsonAsync($"/api/emergencyoverride/{emergencyOverride!.Id}/review", reviewRequest);
+        // Four eyes (task 5632): a different user than the activating admin signs it off
+        var reviewerClient = _factory.CreateClient();
+        reviewerClient.AddAuthorizationHeader(TestAuthenticationHelper.GenerateJwtToken(
+            Guid.NewGuid(), "reviewer@test.com", new[] { "SecurityAdmin", "ComplianceOfficer" }));
+        var response = await reviewerClient.PostAsJsonAsync($"/api/emergencyoverride/{emergencyOverride!.Id}/review", reviewRequest);
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
