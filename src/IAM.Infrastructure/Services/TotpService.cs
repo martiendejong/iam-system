@@ -165,6 +165,29 @@ public class TotpService : ITotpService
         return ValidateCode(user.TwoFactorSecret, code);
     }
 
+    public async Task<TotpLoginResult> VerifyLoginCodeAsync(Guid userId, string code, CancellationToken ct = default)
+    {
+        var user = await _context.Users.FindAsync(new object[] { userId }, ct);
+        if (user == null || !user.TwoFactorEnabled)
+            return TotpLoginResult.Invalid;
+
+        // Lockout is checked before any code is evaluated
+        if (LoginLockout.IsLocked(user))
+            return TotpLoginResult.LockedOut;
+
+        if (await ValidateTotpLoginAsync(userId, code, ct) || await UseRecoveryCodeAsync(userId, code, ct))
+        {
+            LoginLockout.Reset(user);
+            await _context.SaveChangesAsync(ct);
+            return TotpLoginResult.Success;
+        }
+
+        // One failure per attempt (TOTP and recovery code combined) against the shared login counter
+        LoginLockout.RegisterFailure(user);
+        await _context.SaveChangesAsync(ct);
+        return LoginLockout.IsLocked(user) ? TotpLoginResult.LockedOut : TotpLoginResult.Invalid;
+    }
+
     public async Task<List<string>> GenerateRecoveryCodesAsync(Guid userId, int count = 8, CancellationToken ct = default)
     {
         var user = await _context.Users.FindAsync(new object[] { userId }, ct);

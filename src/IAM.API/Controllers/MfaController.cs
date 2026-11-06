@@ -107,16 +107,15 @@ public class MfaController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ValidateTotp([FromBody] TotpValidateRequest request, CancellationToken ct)
     {
-        // Try TOTP code first
-        var success = await _totpService.ValidateTotpLoginAsync(request.UserId, request.Code, ct);
+        var result = await _totpService.VerifyLoginCodeAsync(request.UserId, request.Code, ct);
 
-        if (!success)
+        if (result == TotpLoginResult.LockedOut)
         {
-            // Fall back to recovery code
-            success = await _totpService.UseRecoveryCodeAsync(request.UserId, request.Code, ct);
+            return StatusCode(StatusCodes.Status429TooManyRequests,
+                new { error = "Account is temporarily locked. Try again later." });
         }
 
-        if (!success)
+        if (result != TotpLoginResult.Success)
         {
             return BadRequest(new { error = "Invalid authentication code." });
         }
