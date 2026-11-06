@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Claims;
 using IAM.Core;
 using IAM.Core.Services;
+using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 
@@ -169,6 +170,12 @@ public class AuthController : ControllerBase
             new(ClaimTypes.Email, result.User.Email),
             new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
         };
+        // Task 5569: the OIDC authorize endpoint only trusts this session for a Require-MFA member
+        // when the sign-in that created it completed a second factor.
+        if (result.MfaCompleted)
+        {
+            claims.Add(new Claim(OrganizationMfaPolicy.SessionMfaClaimType, "true"));
+        }
         var identity = new ClaimsIdentity(claims, "IAM.Session");
         var authProperties = rememberMe
             ? new AuthenticationProperties

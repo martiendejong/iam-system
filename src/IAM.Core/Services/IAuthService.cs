@@ -68,6 +68,9 @@ public class AuthResult
     public bool RequiresStepUp { get; set; }
     public bool RequiresTwoFactor { get; set; }
 
+    /// <summary>True when the tokens were issued after a completed second factor (task 5569).</summary>
+    public bool MfaCompleted { get; set; }
+
     /// <summary>
     /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,
     /// resolved from the user's organization Token Configuration when one exists,

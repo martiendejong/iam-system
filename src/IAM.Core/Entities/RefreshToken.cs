@@ -36,6 +36,13 @@ public class RefreshToken
     /// </summary>
     public bool RememberMe { get; set; }
 
+    /// <summary>
+    /// True when the sign-in that created this session completed a second factor (task 5569).
+    /// Carried forward on rotation. A session where this is false cannot be refreshed once the
+    /// user belongs to an organization that requires MFA.
+    /// </summary>
+    public bool MfaCompleted { get; set; }
+
     public bool IsExpired => DateTime.UtcNow >= ExpiresAt;
     public bool IsRevoked => RevokedAt.HasValue;
     public bool IsActive => !IsRevoked && !IsExpired;
