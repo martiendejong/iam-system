@@ -78,6 +78,7 @@ builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<ITotpService, TotpService>();
 builder.Services.AddScoped<IGroupService, GroupService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
+builder.Services.Configure<IAM.Core.Configuration.ConditionLimitsOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.ConditionLimitsOptions.SectionName));
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
