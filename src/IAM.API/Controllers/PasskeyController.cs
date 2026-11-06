@@ -117,11 +117,6 @@ public class PasskeyController : ControllerBase
 
             return Ok(options);
         }
-        catch (InvalidOperationException ex)
-        {
-            _logger.LogWarning(ex, "Authentication begin failed for user {Username}", request.Username);
-            return NotFound(new { error = ex.Message });
-        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error beginning passkey authentication");
