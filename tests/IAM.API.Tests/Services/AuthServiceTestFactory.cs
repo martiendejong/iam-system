@@ -20,7 +20,8 @@ internal static class AuthServiceTestFactory
         IAMDbContext context,
         IConfiguration configuration,
         RecordingEmailService? emailService = null,
-        ILoginThrottle? loginThrottle = null)
+        ILoginThrottle? loginThrottle = null,
+        IAccountGuessingGuard? accountGuard = null)
     {
         emailService ??= new RecordingEmailService();
         var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" });
@@ -30,7 +31,7 @@ internal static class AuthServiceTestFactory
 
         return new AuthService(
             context, configuration, emailService, riskAssessmentService, otpService, claimsMappingService,
-            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle());
+            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle(), accountGuard);
     }
 
     /// <summary>
@@ -64,7 +65,13 @@ internal sealed class RecordingEmailService : IEmailService
 
     public Task SendEmailVerificationAsync(string email, string username, string verificationToken, CancellationToken ct = default) => Task.CompletedTask;
     public Task SendPasswordResetAsync(string email, string username, string resetToken, CancellationToken ct = default) => Task.CompletedTask;
-    public Task SendMfaCodeAsync(string email, string username, string code, CancellationToken ct = default) => Task.CompletedTask;
+    public List<(string Email, string Code)> SentMfaCodes { get; } = new();
+
+    public Task SendMfaCodeAsync(string email, string username, string code, CancellationToken ct = default)
+    {
+        SentMfaCodes.Add((email, code));
+        return Task.CompletedTask;
+    }
 
     public Task SendLoginTwoFactorCodeAsync(string email, string username, string code, string verifyUrl, CancellationToken ct = default)
     {
