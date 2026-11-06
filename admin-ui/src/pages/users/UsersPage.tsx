@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { api } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import type { User } from '../../types';
 
 export default function UsersPage() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -13,6 +15,7 @@ export default function UsersPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [resetSendingId, setResetSendingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState('');
 
   useEffect(() => {
@@ -70,6 +73,26 @@ export default function UsersPage() {
       alert(err.response?.data?.message || 'Failed to update user status');
     } finally {
       setTogglingId(null);
+    }
+  };
+
+  const handleDelete = async (userId: string, email: string) => {
+    if (!window.confirm(
+      `Permanently delete ${email}? This removes the account, its roles, sessions and recovery codes. This cannot be undone.`
+    )) {
+      return;
+    }
+
+    try {
+      setDeletingId(userId);
+      await api.deleteUser(userId);
+      setUsers(prev => prev.filter(u => u.id !== userId));
+      setActionMessage('User permanently deleted.');
+      setTimeout(() => setActionMessage(''), 4000);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to delete user');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -261,6 +284,16 @@ export default function UsersPage() {
                           >
                             {togglingId === user.id ? '...' : user.isActive ? 'Deactivate' : 'Activate'}
                           </button>
+                          {currentUser?.id !== user.id && (
+                            <button
+                              onClick={() => handleDelete(user.id, user.email)}
+                              disabled={deletingId === user.id}
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-700 bg-white border border-red-300 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                              title="Permanently delete this user"
+                            >
+                              {deletingId === user.id ? '...' : 'Delete'}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
