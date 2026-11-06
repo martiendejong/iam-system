@@ -189,6 +189,7 @@ builder.Services.AddHostedService<CertificateExpiryMonitorWorker>();
 builder.Services.AddHostedService<DeviceHeartbeatMonitorWorker>();
 builder.Services.AddHostedService<AuditLogCleanupWorker>();
 builder.Services.AddHostedService<SessionCleanupWorker>();
+builder.Services.AddHostedService<DataExportCleanupWorker>();
 builder.Services.AddHostedService<DirectorySyncWorker>();
 builder.Services.AddHostedService<AccessRequestExpiryWorker>();
 builder.Services.AddHostedService<PamDeescalationWorker>();
