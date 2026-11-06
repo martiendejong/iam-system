@@ -1,6 +1,8 @@
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
+using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,11 +18,36 @@ public class PoliciesController : ControllerBase
 {
     private readonly IAMDbContext _context;
     private readonly IPolicyInheritanceEngine _policyEngine;
+    private readonly ITenantAccessResolver _access;
 
-    public PoliciesController(IAMDbContext context, IPolicyInheritanceEngine policyEngine)
+    public PoliciesController(IAMDbContext context, IPolicyInheritanceEngine policyEngine, ITenantAccessResolver access)
     {
         _context = context;
         _policyEngine = policyEngine;
+        _access = access;
+    }
+
+    // Task 5149: the role attributes below are only a coarse gate. Every action is decided from the caller's
+    // UserRoles in the tenant the policy belongs to: managing needs SuperAdmin or an active BuildingOwner /
+    // BuildingManager row in that tenant (TenantManagementAuthority), reading needs membership of it
+    // (ITenantAccessResolver). A policy of a tenant the caller cannot reach looks like an unknown id (404).
+
+    private IActionResult Refused() => StatusCode(StatusCodes.Status403Forbidden, new { error = "Forbidden" });
+
+    private async Task<bool> CanManageTenantAsync(Guid userId, Guid tenantId, CancellationToken ct) =>
+        await TenantManagementAuthority.ResolveAsync(_context, userId, User.IsInRole("SuperAdmin"), tenantId, ct) != null;
+
+    /// <summary>
+    /// A policy is visible to members of its own tenant and to members of a tenant that inherits it, so a policy of a
+    /// parent tenant stays readable for the people it applies to.
+    /// </summary>
+    private async Task<bool> CanSeePolicyAsync(TenantAccess access, Policy policy, CancellationToken ct)
+    {
+        if (access.CanRead(policy.TenantId))
+            return true;
+
+        var inheritedBy = await _policyEngine.GetInheritedByTenantsAsync(policy.Id, ct);
+        return inheritedBy.Any(access.CanRead);
     }
 
     /// <summary>
@@ -32,13 +59,25 @@ public class PoliciesController : ControllerBase
         [FromQuery] Guid? roleId = null,
         [FromQuery] Guid? userId = null,
         [FromQuery] string? resource = null,
-        [FromQuery] bool? isActive = true)
+        [FromQuery] bool? isActive = true,
+        CancellationToken ct = default)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return Refused();
+
         var query = _context.Policies
             .Include(p => p.Tenant)
             .Include(p => p.Role)
             .Include(p => p.User)
             .AsQueryable();
+
+        // Only the tenants the caller belongs to (SuperAdmin: all); asking for another tenant just shows nothing.
+        if (access.ReadableTenants is { } readableTenants)
+        {
+            var readable = readableTenants.ToList();
+            query = query.Where(p => readable.Contains(p.TenantId));
+        }
 
         if (tenantId.HasValue)
         {
@@ -68,7 +107,7 @@ public class PoliciesController : ControllerBase
         var policies = await query
             .OrderByDescending(p => p.Priority)
             .ThenBy(p => p.CreatedAt)
-            .ToListAsync();
+            .ToListAsync(ct);
 
         return Ok(policies.Select(p => new
         {
@@ -98,16 +137,20 @@ public class PoliciesController : ControllerBase
     /// Get specific policy by ID
     /// </summary>
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetPolicy(Guid id)
+    public async Task<IActionResult> GetPolicy(Guid id, CancellationToken ct)
     {
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return Refused();
+
         var policy = await _context.Policies
             .Include(p => p.Tenant)
             .Include(p => p.Role)
             .Include(p => p.User)
             .Include(p => p.InheritedFromPolicy)
-            .FirstOrDefaultAsync(p => p.Id == id);
+            .FirstOrDefaultAsync(p => p.Id == id, ct);
 
-        if (policy == null)
+        if (policy == null || !await CanSeePolicyAsync(access, policy, ct))
         {
             return NotFound();
         }
@@ -145,9 +188,13 @@ public class PoliciesController : ControllerBase
     /// Get effective policies for a tenant (includes inherited)
     /// </summary>
     [HttpGet("tenant/{tenantId}/effective")]
-    public async Task<IActionResult> GetEffectivePolicies(Guid tenantId)
+    public async Task<IActionResult> GetEffectivePolicies(Guid tenantId, CancellationToken ct)
     {
-        var effectivePolicies = await _policyEngine.GetEffectivePoliciesForTenantAsync(tenantId);
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanRead(tenantId))
+            return Refused();
+
+        var effectivePolicies = await _policyEngine.GetEffectivePoliciesForTenantAsync(tenantId, ct);
 
         return Ok(effectivePolicies.Select(p => new
         {
@@ -172,13 +219,22 @@ public class PoliciesController : ControllerBase
     /// Get tenants that inherit a specific policy
     /// </summary>
     [HttpGet("{id}/inherited-by")]
-    public async Task<IActionResult> GetInheritedByTenants(Guid id)
+    public async Task<IActionResult> GetInheritedByTenants(Guid id, CancellationToken ct)
     {
-        var tenantIds = await _policyEngine.GetInheritedByTenantsAsync(id);
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return Refused();
+
+        var policy = await _context.Policies.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (policy == null || !await CanSeePolicyAsync(access, policy, ct))
+            return NotFound();
+
+        // Only the tenants the caller belongs to are named.
+        var tenantIds = (await _policyEngine.GetInheritedByTenantsAsync(id, ct)).Where(access.CanRead).ToList();
 
         var tenants = await _context.Tenants
             .Where(t => tenantIds.Contains(t.Id))
-            .ToListAsync();
+            .ToListAsync(ct);
 
         return Ok(tenants.Select(t => new
         {
@@ -192,13 +248,18 @@ public class PoliciesController : ControllerBase
     /// Evaluate policy access for current user
     /// </summary>
     [HttpPost("evaluate")]
-    public async Task<IActionResult> EvaluateAccess([FromBody] EvaluatePolicyRequest request)
+    public async Task<IActionResult> EvaluateAccess([FromBody] EvaluatePolicyRequest request, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId == null)
         {
             return Unauthorized();
         }
+
+        // Evaluating is a read of the tenant's policies: members only, so it cannot probe other tenants.
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanRead(request.TenantId))
+            return Refused();
 
         var context = new PolicyEvaluationContext
         {
@@ -215,7 +276,8 @@ public class PoliciesController : ControllerBase
             request.TenantId,
             request.Resource,
             request.Action,
-            context
+            context,
+            ct
         );
 
         return Ok(new
@@ -239,8 +301,16 @@ public class PoliciesController : ControllerBase
     /// </summary>
     [HttpPost("simulate")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner")]
-    public async Task<IActionResult> SimulatePolicyImpact([FromBody] SimulatePolicyRequest request)
+    public async Task<IActionResult> SimulatePolicyImpact([FromBody] SimulatePolicyRequest request, CancellationToken ct)
     {
+        var callerId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(callerId, out var simulatingUserId))
+            return Unauthorized();
+
+        // Simulating shows who a policy would reach: only for a tenant the caller manages.
+        if (!await CanManageTenantAsync(simulatingUserId, request.TenantId, ct))
+            return Refused();
+
         var policy = new Policy
         {
             TenantId = request.TenantId,
@@ -252,7 +322,7 @@ public class PoliciesController : ControllerBase
             Effect = Enum.Parse<PolicyEffect>(request.Effect)
         };
 
-        var analysis = await _policyEngine.SimulatePolicyImpactAsync(policy);
+        var analysis = await _policyEngine.SimulatePolicyImpactAsync(policy, ct);
 
         return Ok(new
         {
@@ -268,16 +338,20 @@ public class PoliciesController : ControllerBase
     /// </summary>
     [HttpPost]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> CreatePolicy([FromBody] CreatePolicyRequest request)
+    public async Task<IActionResult> CreatePolicy([FromBody] CreatePolicyRequest request, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId == null)
+        if (!Guid.TryParse(userId, out var creatorId))
         {
             return Unauthorized();
         }
 
+        // Checked before any lookup, so it also hides whether the tenant exists.
+        if (!await CanManageTenantAsync(creatorId, request.TenantId, ct))
+            return Refused();
+
         // Validate tenant exists
-        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == request.TenantId);
+        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == request.TenantId, ct);
         if (!tenantExists)
         {
             return BadRequest(new { error = "Tenant not found" });
@@ -325,7 +399,7 @@ public class PoliciesController : ControllerBase
         };
 
         _context.Policies.Add(policy);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         return CreatedAtAction(
             nameof(GetPolicy),
@@ -348,16 +422,21 @@ public class PoliciesController : ControllerBase
     /// </summary>
     [HttpPut("{id}")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> UpdatePolicy(Guid id, [FromBody] UpdatePolicyRequest request)
+    public async Task<IActionResult> UpdatePolicy(Guid id, [FromBody] UpdatePolicyRequest request, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId == null)
+        if (!Guid.TryParse(userId, out var updaterId))
         {
             return Unauthorized();
         }
 
-        var policy = await _context.Policies.FirstOrDefaultAsync(p => p.Id == id);
-        if (policy == null)
+        // A caller who manages no tenant at all gets 403 for every id, before any lookup can reveal one.
+        if (!await TenantManagementAuthority.ManagesAnyTenantAsync(_context, updaterId, User.IsInRole("SuperAdmin"), ct))
+            return Refused();
+
+        // The tenant is the stored policy's, never one from the request; another tenant's policy looks unknown.
+        var policy = await _context.Policies.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (policy == null || !await CanManageTenantAsync(updaterId, policy.TenantId, ct))
         {
             return NotFound();
         }
@@ -404,8 +483,8 @@ public class PoliciesController : ControllerBase
         }
 
         policy.UpdatedAt = DateTime.UtcNow;
-        policy.UpdatedByUserId = Guid.Parse(userId);
-        await _context.SaveChangesAsync();
+        policy.UpdatedByUserId = updaterId;
+        await _context.SaveChangesAsync(ct);
 
         return Ok(new
         {

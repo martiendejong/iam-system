@@ -57,6 +57,18 @@ public class SocialAuthController : ControllerBase
             return BadRequest(new { error = result.Error });
         }
 
+        // Task 4573: an account with 2FA enabled is not signed in by the provider alone. Same
+        // challenge shape as password / magic-link / OTP / passkey login: no cookie, no token.
+        if (result.RequiresTwoFactor)
+        {
+            return Ok(new
+            {
+                requiresTwoFactor = true,
+                userId = result.User!.Id,
+                message = "A verification code has been sent to your email."
+            });
+        }
+
         // Set refresh token in HttpOnly cookie (same pattern as AuthController) - Expires
         // mirrors the refresh token's own resolved lifetime, not a hardcoded default.
         Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions

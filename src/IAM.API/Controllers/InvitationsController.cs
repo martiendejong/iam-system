@@ -2,6 +2,7 @@ using System.Globalization;
 using IAM.API.Authorization;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
+using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,16 +18,23 @@ public class InvitationsController : ControllerBase
     private readonly IInvitationService _invitationService;
     private readonly IAMDbContext _context;
     private readonly ILogger<InvitationsController> _logger;
+    private readonly string? _emailBaseUrl;
 
     public InvitationsController(
         IInvitationService invitationService,
         IAMDbContext context,
-        ILogger<InvitationsController> logger)
+        ILogger<InvitationsController> logger,
+        IConfiguration configuration)
     {
         _invitationService = invitationService;
         _context = context;
         _logger = logger;
+        _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
     }
+
+    /// <summary>The accept link for an invitation token - returned to the admin so a failed
+    /// or spam-filtered email never strands an onboarding (the admin can hand it over).</summary>
+    private string AcceptUrl(string token) => $"{_emailBaseUrl?.TrimEnd('/')}/accept-invite?token={token}";
 
     /// <summary>
     /// Send an invitation to a user. Allowed for the admin roles, and (task 1496) for
@@ -35,13 +43,28 @@ public class InvitationsController : ControllerBase
     /// </summary>
     [HttpPost]
     [Authorize]
-    public async Task<IActionResult> SendInvitation([FromBody] SendInvitationRequest request)
+    public async Task<IActionResult> SendInvitation([FromBody] SendInvitationRequest request, CancellationToken ct = default)
     {
         var isServiceAccount = ServiceAccountAuthorization.IsServiceAccount(User);
         var allowed = isServiceAccount
             ? ServiceAccountAuthorization.HasPermission(User, ServiceAccountAuthorization.InvitationsSendPermission)
             : User.IsInRole("SuperAdmin") || User.IsInRole("BuildingOwner") || User.IsInRole("BuildingManager");
         if (!allowed) return Forbid();
+
+        // A human caller must manage the request's tenant (SuperAdmin or an active BuildingOwner/BuildingManager
+        // row there). A service account keeps its permission-based gate and is treated as an owner-level grantor
+        // without SuperAdmin: it can never hand out a platform-wide role.
+        TenantGrantor grantor;
+        if (isServiceAccount)
+        {
+            grantor = TenantGrantor.Owner;
+        }
+        else
+        {
+            var (humanGrantor, denied) = await RequireManagerAsync(request.TenantId, ct);
+            if (denied != null) return denied;
+            grantor = humanGrantor!;
+        }
 
         Guid? userId;
         if (isServiceAccount)
@@ -71,17 +94,20 @@ public class InvitationsController : ControllerBase
         if (targetRole == null)
             return BadRequest(new { error = "Role not found" });
 
-        if (targetRole.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase) && !User.IsInRole("SuperAdmin"))
-            return Forbid();
+        var problem = TenantRoleGrantRules.Check(targetRole, request.TenantId, grantor);
+        if (problem != RoleGrantProblem.None)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = TenantRoleGrantRules.Describe(problem, targetRole.Name) });
 
         try
         {
-            var invitation = await _invitationService.SendInvitationAsync(
+            var result = await _invitationService.SendInvitationAsync(
                 request.Email,
                 request.TenantId,
                 request.RoleId,
                 userId.Value,
-                request.ExpiryDays);
+                request.ExpiryDays,
+                ct);
+            var invitation = result.Invitation;
 
             return Ok(new
             {
@@ -91,7 +117,11 @@ public class InvitationsController : ControllerBase
                 roleId = invitation.RoleId,
                 status = invitation.Status,
                 expiresAt = invitation.ExpiresAt,
-                createdAt = invitation.CreatedAt
+                createdAt = invitation.CreatedAt,
+                // Honest delivery status + a manual fallback: emailSent=false means the
+                // invitation exists but no mail went out, so show/hand over acceptUrl.
+                emailSent = result.EmailSent,
+                acceptUrl = AcceptUrl(invitation.Token)
             });
         }
         catch (InvalidOperationException ex)
@@ -105,10 +135,13 @@ public class InvitationsController : ControllerBase
     /// </summary>
     [HttpPost("bulk")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> SendBulkInvitations([FromForm] BulkInviteRequest request)
+    public async Task<IActionResult> SendBulkInvitations([FromForm] BulkInviteRequest request, CancellationToken ct = default)
     {
         var userId = GetCurrentUserId();
         if (userId == null) return Unauthorized();
+
+        var (grantor, denied) = await RequireManagerAsync(request.TenantId, ct);
+        if (denied != null) return denied;
 
         if (request.File == null || request.File.Length == 0)
             return BadRequest(new { error = "CSV file is required" });
@@ -148,7 +181,8 @@ public class InvitationsController : ControllerBase
         if (entries.Count == 0)
             return BadRequest(new { error = "CSV file contains no data rows" });
 
-        var result = await _invitationService.SendBulkInvitationsAsync(entries, request.TenantId, userId.Value, User.IsInRole("SuperAdmin"));
+        var result = await _invitationService.SendBulkInvitationsAsync(
+            entries, request.TenantId, userId.Value, grantor!.IsSuperAdmin, ct, callerIsTenantOwner: grantor.IsTenantOwner);
 
         return Ok(new
         {
@@ -169,9 +203,12 @@ public class InvitationsController : ControllerBase
     /// </summary>
     [HttpGet]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> GetInvitations([FromQuery] Guid tenantId)
+    public async Task<IActionResult> GetInvitations([FromQuery] Guid tenantId, CancellationToken ct = default)
     {
-        var invitations = await _invitationService.GetInvitationsByTenantAsync(tenantId);
+        var (_, denied) = await RequireManagerAsync(tenantId, ct);
+        if (denied != null) return denied;
+
+        var invitations = await _invitationService.GetInvitationsByTenantAsync(tenantId, ct);
 
         return Ok(invitations.Select(i => new
         {
@@ -223,9 +260,26 @@ public class InvitationsController : ControllerBase
     /// </summary>
     [HttpDelete("{id}")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> RevokeInvitation(Guid id)
+    public async Task<IActionResult> RevokeInvitation(Guid id, CancellationToken ct = default)
     {
-        var revoked = await _invitationService.RevokeInvitationAsync(id);
+        // Coarse gate first (a caller who manages no tenant gets 403 whether or not the id exists), then the
+        // invitation's own tenant.
+        var userId = GetCurrentUserId();
+        if (userId == null) return Unauthorized();
+        if (!await TenantManagementAuthority.ManagesAnyTenantAsync(_context, userId.Value, User.IsInRole("SuperAdmin"), ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Only a SuperAdmin or a tenant owner/manager can revoke invitations" });
+
+        var invitationTenantId = await _context.Set<IAM.Core.Entities.Invitation>().AsNoTracking()
+            .Where(i => i.Id == id)
+            .Select(i => (Guid?)i.TenantId)
+            .FirstOrDefaultAsync(ct);
+        if (invitationTenantId == null)
+            return NotFound(new { error = "Invitation not found or not pending" });
+
+        var (_, denied) = await RequireManagerAsync(invitationTenantId.Value, ct);
+        if (denied != null) return denied;
+
+        var revoked = await _invitationService.RevokeInvitationAsync(id, ct);
 
         if (!revoked)
         {
@@ -240,9 +294,12 @@ public class InvitationsController : ControllerBase
     /// </summary>
     [HttpGet("pending")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> GetPendingInvitations([FromQuery] Guid tenantId)
+    public async Task<IActionResult> GetPendingInvitations([FromQuery] Guid tenantId, CancellationToken ct = default)
     {
-        var invitations = await _invitationService.GetPendingInvitationsAsync(tenantId);
+        var (_, denied) = await RequireManagerAsync(tenantId, ct);
+        if (denied != null) return denied;
+
+        var invitations = await _invitationService.GetPendingInvitationsAsync(tenantId, ct);
 
         return Ok(invitations.Select(i => new
         {
@@ -284,6 +341,27 @@ public class InvitationsController : ControllerBase
                 ? $"{invitation.InvitedByUser.FirstName} {invitation.InvitedByUser.LastName}".Trim()
                 : null
         });
+    }
+
+    /// <summary>
+    /// The caller's authority over one tenant's invitations (task 4700): SuperAdmin, or an active BuildingOwner /
+    /// BuildingManager UserRole scoped to exactly that tenant. Runs before any lookup or payload validation.
+    /// Null grantor = the denial to send.
+    /// </summary>
+    private async Task<(TenantGrantor? Grantor, IActionResult? Denied)> RequireManagerAsync(Guid tenantId, CancellationToken ct)
+    {
+        var userId = GetCurrentUserId();
+        if (userId == null)
+            return (null, Unauthorized());
+
+        var grantor = await TenantManagementAuthority.ResolveAsync(_context, userId.Value, User.IsInRole("SuperAdmin"), tenantId, ct);
+        if (grantor == null)
+        {
+            return (null, StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only a SuperAdmin or an owner/manager of this tenant can manage its invitations" }));
+        }
+
+        return (grantor, null);
     }
 
     private Guid? GetCurrentUserId()

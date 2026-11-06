@@ -1,5 +1,7 @@
 using IAM.Core.Entities;
+using IAM.Core.Services;
 using IAM.Infrastructure.Data;
+using IAM.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -26,12 +28,25 @@ public class TenantsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> ListTenants(
         [FromQuery] Guid? parentId = null,
-        [FromQuery] string? type = null)
+        [FromQuery] string? type = null,
+        CancellationToken ct = default)
     {
+        // Task 5154: a platform admin sees every tenant; anyone else only the tenants they belong to (and those
+        // below them). null = no restriction.
+        var (visible, denied) = await ResolveVisibleTenantsAsync(ct);
+        if (denied != null)
+            return denied;
+
         var query = _context.Tenants
             .Include(t => t.ParentTenant)
             .Include(t => t.ChildTenants)
             .AsQueryable();
+
+        if (visible != null)
+        {
+            var visibleIds = visible;
+            query = query.Where(t => visibleIds.Contains(t.Id));
+        }
 
         // Filter by parent
         if (parentId.HasValue)
@@ -40,8 +55,17 @@ public class TenantsController : ControllerBase
         }
         else if (parentId == null && !Request.Query.ContainsKey("parentId"))
         {
-            // If parentId not specified at all, return only root tenants
-            query = query.Where(t => t.ParentTenantId == null);
+            // If parentId not specified at all, return only root tenants; for a scoped caller the roots are the
+            // top tenants they can see (their own parent is outside their scope).
+            if (visible == null)
+            {
+                query = query.Where(t => t.ParentTenantId == null);
+            }
+            else
+            {
+                var visibleIds = visible;
+                query = query.Where(t => t.ParentTenantId == null || !visibleIds.Contains(t.ParentTenantId.Value));
+            }
         }
 
         // Filter by type
@@ -60,8 +84,8 @@ public class TenantsController : ControllerBase
             id = t.Id,
             name = t.Name,
             type = t.Type,
-            parentTenantId = t.ParentTenantId,
-            parentTenantName = t.ParentTenant?.Name,
+            parentTenantId = ParentIfVisible(t.ParentTenantId, visible),
+            parentTenantName = ParentIfVisible(t.ParentTenantId, visible) == null ? null : t.ParentTenant?.Name,
             childCount = t.ChildTenants.Count,
             metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(t.Metadata ?? "{}"),
             settings = JsonSerializer.Deserialize<Dictionary<string, object>>(t.Settings ?? "{}"),
@@ -74,8 +98,16 @@ public class TenantsController : ControllerBase
     /// Get tenant hierarchy (tenant with all children recursively)
     /// </summary>
     [HttpGet("{id}/hierarchy")]
-    public async Task<IActionResult> GetTenantHierarchy(Guid id)
+    public async Task<IActionResult> GetTenantHierarchy(Guid id, CancellationToken ct = default)
     {
+        var (visible, denied) = await ResolveVisibleTenantsAsync(ct);
+        if (denied != null)
+            return denied;
+
+        // A tenant outside the caller scope looks like it does not exist.
+        if (visible != null && !visible.Contains(id))
+            return NotFound();
+
         var tenant = await _context.Tenants
             .Include(t => t.ParentTenant)
             .Include(t => t.ChildTenants)
@@ -88,22 +120,22 @@ public class TenantsController : ControllerBase
             return NotFound();
         }
 
-        return Ok(BuildTenantHierarchy(tenant));
+        return Ok(BuildTenantHierarchy(tenant, visible));
     }
 
-    private object BuildTenantHierarchy(Tenant tenant)
+    private object BuildTenantHierarchy(Tenant tenant, HashSet<Guid>? visible)
     {
         return new
         {
             id = tenant.Id,
             name = tenant.Name,
             type = tenant.Type,
-            parentTenantId = tenant.ParentTenantId,
+            parentTenantId = ParentIfVisible(tenant.ParentTenantId, visible),
             metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}"),
             settings = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}"),
             isActive = tenant.IsActive,
             createdAt = tenant.CreatedAt,
-            children = tenant.ChildTenants.Select(c => BuildTenantHierarchy(c))
+            children = tenant.ChildTenants.Select(c => BuildTenantHierarchy(c, visible))
         };
     }
 
@@ -111,8 +143,15 @@ public class TenantsController : ControllerBase
     /// Get specific tenant by ID
     /// </summary>
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetTenant(Guid id)
+    public async Task<IActionResult> GetTenant(Guid id, CancellationToken ct = default)
     {
+        var (visible, denied) = await ResolveVisibleTenantsAsync(ct);
+        if (denied != null)
+            return denied;
+
+        if (visible != null && !visible.Contains(id))
+            return NotFound();
+
         var tenant = await _context.Tenants
             .Include(t => t.ParentTenant)
             .Include(t => t.ChildTenants)
@@ -128,8 +167,8 @@ public class TenantsController : ControllerBase
             id = tenant.Id,
             name = tenant.Name,
             type = tenant.Type,
-            parentTenantId = tenant.ParentTenantId,
-            parentTenantName = tenant.ParentTenant?.Name,
+            parentTenantId = ParentIfVisible(tenant.ParentTenantId, visible),
+            parentTenantName = ParentIfVisible(tenant.ParentTenantId, visible) == null ? null : tenant.ParentTenant?.Name,
             childCount = tenant.ChildTenants.Count,
             metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}"),
             settings = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}"),
@@ -144,7 +183,7 @@ public class TenantsController : ControllerBase
     /// </summary>
     [HttpPost]
     [Authorize(Roles = "SuperAdmin,BuildingOwner")]
-    public async Task<IActionResult> CreateTenant([FromBody] CreateTenantRequest request)
+    public async Task<IActionResult> CreateTenant([FromBody] CreateTenantRequest request, CancellationToken ct = default)
     {
         // Validate
         if (string.IsNullOrWhiteSpace(request.Name))
@@ -155,6 +194,16 @@ public class TenantsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Type))
         {
             return BadRequest(new { error = "Tenant type is required" });
+        }
+
+        // Task 5154: a new tenant can only be placed under a parent the caller manages (any parent for a
+        // SuperAdmin), so it cannot inherit another customer tenant tree. A root tenant (no parent) stays as
+        // before: SuperAdmin or BuildingOwner (decision pending with Martien: platform-admin only?).
+        if (request.ParentTenantId.HasValue)
+        {
+            var (_, _, deniedParent) = await RequireTenantAuthorityAsync(request.ParentTenantId.Value, ct);
+            if (deniedParent != null)
+                return deniedParent;
         }
 
         // Validate parent exists if specified
@@ -205,8 +254,14 @@ public class TenantsController : ControllerBase
     /// </summary>
     [HttpPut("{id}")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> UpdateTenant(Guid id, [FromBody] UpdateTenantRequest request)
+    public async Task<IActionResult> UpdateTenant(Guid id, [FromBody] UpdateTenantRequest request, CancellationToken ct = default)
     {
+        // Task 5154: a platform admin, or a manager/owner of this tenant (or of a tenant above it). Checked before
+        // the tenant is loaded, so a foreign id and an unknown id answer alike for a non-admin.
+        var (_, _, deniedUpdate) = await RequireTenantAuthorityAsync(id, ct);
+        if (deniedUpdate != null)
+            return deniedUpdate;
+
         var tenant = await _context.Tenants.FirstOrDefaultAsync(t => t.Id == id);
 
         if (tenant == null)
@@ -301,8 +356,15 @@ public class TenantsController : ControllerBase
     /// For building management UI
     /// </summary>
     [HttpGet("buildings/{buildingId}/structure")]
-    public async Task<IActionResult> GetBuildingStructure(Guid buildingId)
+    public async Task<IActionResult> GetBuildingStructure(Guid buildingId, CancellationToken ct = default)
     {
+        var (visible, denied) = await ResolveVisibleTenantsAsync(ct);
+        if (denied != null)
+            return denied;
+
+        if (visible != null && !visible.Contains(buildingId))
+            return NotFound(new { error = "Building not found" });
+
         var building = await _context.Tenants
             .Include(t => t.ChildTenants) // Floors
                 .ThenInclude(f => f.ChildTenants) // Rooms
@@ -378,25 +440,100 @@ public class TenantsController : ControllerBase
         }));
     }
 
+    private static bool IsPlatformAdminRole(ClaimsPrincipal user) => user.IsInRole("SuperAdmin") || user.IsInRole("SystemAdmin");
+
     /// <summary>
-    /// List members of a tenant (users with at least one role scoped to this tenant)
+    /// The tenants the caller may read (task 5154): null for a platform admin (everything), otherwise the tenants
+    /// they belong to plus everything below them. A denial is only the missing user id.
+    /// </summary>
+    private async Task<(HashSet<Guid>? Visible, IActionResult? Denied)> ResolveVisibleTenantsAsync(CancellationToken ct)
+    {
+        if (IsPlatformAdminRole(User))
+            return (null, null);
+
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+            return (null, Unauthorized());
+
+        return (await TenantManagementAuthority.GetVisibleTenantIdsAsync(_context, userId, ct), null);
+    }
+
+    /// <summary>A parent id the caller cannot see is not disclosed (null).</summary>
+    private static Guid? ParentIfVisible(Guid? parentId, HashSet<Guid>? visible) =>
+        parentId.HasValue && (visible == null || visible.Contains(parentId.Value)) ? parentId : null;
+
+    /// <summary>
+    /// The caller authority to change this tenant, or to place a new tenant under it (task 5154): SuperAdmin, or an
+    /// active BuildingOwner/BuildingManager row on the tenant or one of its ancestors. Same resolver as the member
+    /// actions. A tenant the caller has no connection to answers 404 (it does not exist for them), a visible one 403.
+    /// </summary>
+    private async Task<(TenantGrantor? Grantor, Guid UserId, IActionResult? Denied)> RequireTenantAuthorityAsync(Guid tenantId, CancellationToken ct)
+    {
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+            return (null, Guid.Empty, Unauthorized());
+
+        var isSuperAdmin = User.IsInRole("SuperAdmin");
+        var grantor = await TenantManagementAuthority.ResolveWithAncestorsAsync(_context, userId, isSuperAdmin, tenantId, ct);
+        if (grantor != null)
+            return (grantor, userId, null);
+
+        var visible = IsPlatformAdminRole(User)
+            ? null
+            : await TenantManagementAuthority.GetVisibleTenantIdsAsync(_context, userId, ct);
+        if (visible != null && !visible.Contains(tenantId))
+            return (null, userId, NotFound());
+
+        return (null, userId, StatusCode(StatusCodes.Status403Forbidden,
+            new { error = "Only a SuperAdmin or an owner/manager of this tenant can change it" }));
+    }
+
+    /// <summary>
+    /// The caller's authority over this tenant's members (task 4700): SuperAdmin, or an active BuildingOwner /
+    /// BuildingManager UserRole scoped to exactly this tenant (a role claim alone, or a role in another tenant,
+    /// confers nothing). Runs before any tenant or member lookup. Null grantor = the denial to send.
+    /// </summary>
+    private async Task<(TenantGrantor? Grantor, Guid UserId, IActionResult? Denied)> RequireManagerAsync(Guid tenantId, CancellationToken ct)
+    {
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+            return (null, Guid.Empty, Unauthorized());
+
+        var grantor = await TenantManagementAuthority.ResolveAsync(_context, userId, User.IsInRole("SuperAdmin"), tenantId, ct);
+        if (grantor == null)
+        {
+            return (null, userId, StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only a SuperAdmin or an owner/manager of this tenant can manage its members" }));
+        }
+
+        return (grantor, userId, null);
+    }
+
+    /// <summary>
+    /// List members of a tenant (users with at least one role scoped to this tenant). SuperAdmin or an
+    /// owner/manager of this tenant.
     /// </summary>
     [HttpGet("{id}/members")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> GetMembers(Guid id)
+    public async Task<IActionResult> GetMembers(Guid id, CancellationToken ct)
     {
-        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == id);
+        var (_, _, denied) = await RequireManagerAsync(id, ct);
+        if (denied != null)
+            return denied;
+
+        var tenantExists = await _context.Tenants.AnyAsync(t => t.Id == id, ct);
         if (!tenantExists)
         {
             return NotFound(new { error = "Tenant not found" });
         }
 
         var userRoles = await _context.UserRoles
+            .AsNoTracking()
             .Include(ur => ur.User)
             .Include(ur => ur.Role)
             .Where(ur => ur.TenantId == id)
             .OrderBy(ur => ur.User.Email)
-            .ToListAsync();
+            .ToListAsync(ct);
 
         var members = userRoles
             .GroupBy(ur => ur.User)
@@ -421,33 +558,50 @@ public class TenantsController : ControllerBase
     }
 
     /// <summary>
-    /// Replace a member's role(s) within this tenant with a single new role
+    /// Replace a member's role(s) within this tenant with a single new role. The caller must manage this tenant,
+    /// may only hand out roles <see cref="TenantRoleGrantRules"/> allows them, cannot change their own role,
+    /// cannot touch an owner-level member unless they are an owner (or SuperAdmin), and the last BuildingOwner
+    /// of a tenant cannot be demoted.
     /// </summary>
     [HttpPut("{id}/members/{userId}/role")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> ChangeMemberRole(Guid id, Guid userId, [FromBody] ChangeMemberRoleRequest request)
+    public async Task<IActionResult> ChangeMemberRole(Guid id, Guid userId, [FromBody] ChangeMemberRoleRequest request, CancellationToken ct)
     {
-        var role = await _context.Roles.FirstOrDefaultAsync(r => r.Id == request.RoleId);
+        var (grantor, currentUserId, denied) = await RequireManagerAsync(id, ct);
+        if (denied != null)
+            return denied;
+
+        var role = await _context.Roles.AsNoTracking().FirstOrDefaultAsync(r => r.Id == request.RoleId, ct);
         if (role == null)
         {
             return NotFound(new { error = "Role not found" });
         }
 
-        if (role.Name.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase) && !User.IsInRole("SuperAdmin"))
+        var problem = TenantRoleGrantRules.Check(role, id, grantor!);
+        if (problem != RoleGrantProblem.None)
         {
-            return Forbid();
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = TenantRoleGrantRules.Describe(problem, role.Name) });
+        }
+
+        if (userId == currentUserId)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "You cannot change your own role" });
         }
 
         var existingRoles = await _context.UserRoles
+            .Include(ur => ur.Role)
             .Where(ur => ur.UserId == userId && ur.TenantId == id)
-            .ToListAsync();
+            .ToListAsync(ct);
 
         if (existingRoles.Count == 0)
         {
             return NotFound(new { error = "User is not a member of this tenant" });
         }
 
-        var currentUserId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var staysOwner = role.Name.Trim().Equals(TenantManagementAuthority.OwnerRoleName, StringComparison.OrdinalIgnoreCase);
+        var guard = await GuardTargetAsync(id, userId, existingRoles, grantor!, staysOwner, ct);
+        if (guard != null)
+            return guard;
 
         _context.UserRoles.RemoveRange(existingRoles);
         _context.UserRoles.Add(new UserRole
@@ -459,31 +613,77 @@ public class TenantsController : ControllerBase
             GrantedAt = DateTime.UtcNow
         });
 
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         return Ok(new { message = "Member role updated", roleId = request.RoleId, roleName = role.Name });
     }
 
     /// <summary>
-    /// Remove a member from this tenant (revokes all of their tenant-scoped roles)
+    /// Remove a member from this tenant (revokes all of their tenant-scoped roles). Same authority as the role
+    /// change: you cannot remove yourself or an owner-level member (unless you are an owner or SuperAdmin), and
+    /// the last BuildingOwner of a tenant cannot be removed.
     /// </summary>
     [HttpDelete("{id}/members/{userId}")]
     [Authorize(Roles = "SuperAdmin,BuildingOwner,BuildingManager")]
-    public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
+    public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken ct)
     {
+        var (grantor, currentUserId, denied) = await RequireManagerAsync(id, ct);
+        if (denied != null)
+            return denied;
+
+        if (userId == currentUserId)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "You cannot remove yourself from a tenant" });
+        }
+
         var existingRoles = await _context.UserRoles
+            .Include(ur => ur.Role)
             .Where(ur => ur.UserId == userId && ur.TenantId == id)
-            .ToListAsync();
+            .ToListAsync(ct);
 
         if (existingRoles.Count == 0)
         {
             return NotFound(new { error = "User is not a member of this tenant" });
         }
 
+        var guard = await GuardTargetAsync(id, userId, existingRoles, grantor!, false, ct);
+        if (guard != null)
+            return guard;
+
         _context.UserRoles.RemoveRange(existingRoles);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(ct);
 
         return Ok(new { message = "Member removed from tenant" });
+    }
+
+    /// <summary>
+    /// Protections on the member being changed or removed: a manager may not touch an owner-level member, and the
+    /// last BuildingOwner of the tenant must stay one (<paramref name="staysOwner"/> = the change leaves them a
+    /// BuildingOwner). Null when the action may proceed.
+    /// </summary>
+    private async Task<IActionResult?> GuardTargetAsync(
+        Guid tenantId, Guid targetUserId, List<UserRole> targetRoles, TenantGrantor grantor, bool staysOwner, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var active = targetRoles.Where(ur => ur.ExpiresAt == null || ur.ExpiresAt > now).ToList();
+
+        if (!grantor.IsTenantOwner && active.Any(ur => TenantRoleGrantRules.IsOwnerLevelRole(ur.Role.Name)))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Only a SuperAdmin or an owner of this tenant can change or remove an owner-level member" });
+        }
+
+        var targetIsOwner = active.Any(ur => ur.Role.Name.Trim().Equals(TenantManagementAuthority.OwnerRoleName, StringComparison.OrdinalIgnoreCase));
+        if (targetIsOwner && !staysOwner)
+        {
+            var owners = await TenantManagementAuthority.GetActiveOwnerIdsAsync(_context, tenantId, ct);
+            if (owners.Count == 1 && owners[0] == targetUserId)
+            {
+                return Conflict(new { error = "The last BuildingOwner of a tenant cannot be demoted or removed" });
+            }
+        }
+
+        return null;
     }
 }
 

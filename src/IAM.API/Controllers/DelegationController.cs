@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -11,6 +12,9 @@ namespace IAM.API.Controllers;
 [Authorize]
 public class DelegationController : ControllerBase
 {
+    /// <summary>Roles that may create, change or delete SoD constraints (task 4712).</summary>
+    private const string SodAdminRoles = "SuperAdmin,SystemAdmin";
+
     private readonly IDelegationService _delegationService;
     private readonly ILogger<DelegationController> _logger;
 
@@ -30,14 +34,15 @@ public class DelegationController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateDelegation([FromBody] CreateDelegationDto dto, CancellationToken ct)
     {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { error = "User ID not found in token" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
         try
         {
             var delegation = await _delegationService.CreateDelegationAsync(
-                dto.DelegatorUserId ?? userId.Value,
+                actor!,
+                dto.DelegatorUserId ?? actor!.UserId,
                 dto.DelegateUserId,
                 dto.TenantId,
                 dto.Permissions,
@@ -49,6 +54,10 @@ public class DelegationController : ControllerBase
 
             return Ok(MapDelegationToResponse(delegation));
         }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
@@ -56,12 +65,16 @@ public class DelegationController : ControllerBase
     }
 
     /// <summary>
-    /// Get delegations for a tenant.
+    /// Get delegations for a tenant. Admins see all of them; everyone else only their own.
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetDelegations([FromQuery] Guid tenantId, CancellationToken ct)
     {
-        var delegations = await _delegationService.GetDelegationsAsync(tenantId, ct);
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        var delegations = await _delegationService.GetDelegationsAsync(actor!, tenantId, ct);
         return Ok(delegations.Select(MapDelegationToResponse));
     }
 
@@ -71,11 +84,22 @@ public class DelegationController : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetDelegation(Guid id, CancellationToken ct)
     {
-        var delegation = await _delegationService.GetDelegationAsync(id, ct);
-        if (delegation == null)
-            return NotFound(new { error = "Delegation not found" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
-        return Ok(MapDelegationToResponse(delegation));
+        try
+        {
+            var delegation = await _delegationService.GetDelegationAsync(actor!, id, ct);
+            if (delegation == null)
+                return NotFound(new { error = "Delegation not found" });
+
+            return Ok(MapDelegationToResponse(delegation));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -98,14 +122,18 @@ public class DelegationController : ControllerBase
     [HttpPost("{id:guid}/approve")]
     public async Task<IActionResult> ApproveDelegation(Guid id, CancellationToken ct)
     {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { error = "User ID not found in token" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
         try
         {
-            var delegation = await _delegationService.ApproveDelegationAsync(id, userId.Value, ct);
+            var delegation = await _delegationService.ApproveDelegationAsync(actor!, id, ct);
             return Ok(MapDelegationToResponse(delegation));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -119,14 +147,18 @@ public class DelegationController : ControllerBase
     [HttpPost("{id:guid}/revoke")]
     public async Task<IActionResult> RevokeDelegation(Guid id, CancellationToken ct)
     {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { error = "User ID not found in token" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
         try
         {
-            var delegation = await _delegationService.RevokeDelegationAsync(id, userId.Value, ct);
+            var delegation = await _delegationService.RevokeDelegationAsync(actor!, id, ct);
             return Ok(MapDelegationToResponse(delegation));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -135,22 +167,34 @@ public class DelegationController : ControllerBase
     }
 
     /// <summary>
-    /// Get effective permissions for a user (including delegated).
+    /// Get effective permissions for a user (including delegated). Your own, or anyone's for an admin.
     /// </summary>
     [HttpGet("effective-permissions")]
     public async Task<IActionResult> GetEffectivePermissions(
         [FromQuery] Guid userId, [FromQuery] Guid tenantId, CancellationToken ct)
     {
-        var permissions = await _delegationService.GetEffectivePermissionsAsync(userId, tenantId, ct);
-        return Ok(new { userId, tenantId, permissions });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
+        {
+            var permissions = await _delegationService.GetEffectivePermissionsAsync(actor!, userId, tenantId, ct);
+            return Ok(new { userId, tenantId, permissions });
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     // ─── SoD Constraints ─────────────────────────────────────
 
     /// <summary>
-    /// Create a new SoD constraint.
+    /// Create a new SoD constraint. Admin-only: the rules also govern tenant admins, so they cannot edit them.
     /// </summary>
     [HttpPost("/api/sod/constraints")]
+    [Authorize(Roles = SodAdminRoles)]
     public async Task<IActionResult> CreateConstraint([FromBody] CreateSodConstraintDto dto, CancellationToken ct)
     {
         try
@@ -182,8 +226,19 @@ public class DelegationController : ControllerBase
     [HttpGet("/api/sod/constraints")]
     public async Task<IActionResult> GetConstraints([FromQuery] Guid tenantId, CancellationToken ct)
     {
-        var constraints = await _delegationService.GetConstraintsAsync(tenantId, ct);
-        return Ok(constraints.Select(MapConstraintToResponse));
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
+        {
+            var constraints = await _delegationService.GetConstraintsAsync(actor!, tenantId, ct);
+            return Ok(constraints.Select(MapConstraintToResponse));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -192,17 +247,29 @@ public class DelegationController : ControllerBase
     [HttpGet("/api/sod/constraints/{id:guid}")]
     public async Task<IActionResult> GetConstraint(Guid id, CancellationToken ct)
     {
-        var constraint = await _delegationService.GetConstraintAsync(id, ct);
-        if (constraint == null)
-            return NotFound(new { error = "SoD constraint not found" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
-        return Ok(MapConstraintToResponse(constraint));
+        try
+        {
+            var constraint = await _delegationService.GetConstraintAsync(actor!, id, ct);
+            if (constraint == null)
+                return NotFound(new { error = "SoD constraint not found" });
+
+            return Ok(MapConstraintToResponse(constraint));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
-    /// Update a SoD constraint.
+    /// Update a SoD constraint. Admin-only.
     /// </summary>
     [HttpPut("/api/sod/constraints/{id:guid}")]
+    [Authorize(Roles = SodAdminRoles)]
     public async Task<IActionResult> UpdateConstraint(Guid id, [FromBody] UpdateSodConstraintDto dto, CancellationToken ct)
     {
         try
@@ -229,9 +296,10 @@ public class DelegationController : ControllerBase
     }
 
     /// <summary>
-    /// Delete a SoD constraint.
+    /// Delete a SoD constraint. Admin-only.
     /// </summary>
     [HttpDelete("/api/sod/constraints/{id:guid}")]
+    [Authorize(Roles = SodAdminRoles)]
     public async Task<IActionResult> DeleteConstraint(Guid id, CancellationToken ct)
     {
         var deleted = await _delegationService.DeleteConstraintAsync(id, ct);
@@ -247,13 +315,24 @@ public class DelegationController : ControllerBase
     [HttpPost("/api/sod/check/{userId:guid}")]
     public async Task<IActionResult> CheckSodViolations(Guid userId, CancellationToken ct)
     {
-        var violations = await _delegationService.CheckSodViolationsAsync(userId, ct);
-        return Ok(new
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
         {
-            userId,
-            violationsFound = violations.Count,
-            violations = violations.Select(MapViolationToResponse)
-        });
+            var violations = await _delegationService.CheckSodViolationsAsync(actor!, userId, ct);
+            return Ok(new
+            {
+                userId,
+                violationsFound = violations.Count,
+                violations = violations.Select(MapViolationToResponse)
+            });
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -262,8 +341,19 @@ public class DelegationController : ControllerBase
     [HttpGet("/api/sod/violations")]
     public async Task<IActionResult> GetViolations([FromQuery] Guid? tenantId, CancellationToken ct)
     {
-        var violations = await _delegationService.GetViolationsAsync(tenantId, ct);
-        return Ok(violations.Select(MapViolationToResponse));
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
+
+        try
+        {
+            var violations = await _delegationService.GetViolationsAsync(actor!, tenantId, ct);
+            return Ok(violations.Select(MapViolationToResponse));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
+        }
     }
 
     /// <summary>
@@ -272,14 +362,18 @@ public class DelegationController : ControllerBase
     [HttpPost("/api/sod/violations/{id:guid}/resolve")]
     public async Task<IActionResult> ResolveViolation(Guid id, [FromBody] ResolveSodViolationDto dto, CancellationToken ct)
     {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { error = "User ID not found in token" });
+        var failure = TryGetActor(out var actor);
+        if (failure != null)
+            return failure;
 
         try
         {
-            var violation = await _delegationService.ResolveViolationAsync(id, userId.Value, dto.Resolution, ct);
+            var violation = await _delegationService.ResolveViolationAsync(actor!, id, dto.Resolution, ct);
             return Ok(MapViolationToResponse(violation));
+        }
+        catch (DelegationAccessDeniedException ex)
+        {
+            return Forbidden(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -288,6 +382,38 @@ public class DelegationController : ControllerBase
     }
 
     // ─── Helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the caller for the service's authority checks. Returns an error result (and no actor) when the
+    /// token has no user id, an unreadable tenant_id, or is a service-account token (service accounts do not
+    /// delegate). Global admin = SuperAdmin or SystemAdmin; same shape as IdentityProvidersController.
+    /// </summary>
+    private IActionResult? TryGetActor(out DelegationActor? actor)
+    {
+        actor = null;
+
+        if (ServiceAccountAuthorization.IsServiceAccount(User))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Delegations are not available to service accounts" });
+
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { error = "User ID not found in token" });
+
+        Guid? tenantId = null;
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var parsedTenantId))
+                return Unauthorized(new { error = "Invalid tenant_id in token" });
+            tenantId = parsedTenantId;
+        }
+
+        actor = new DelegationActor(userId.Value, User.IsInRole("SuperAdmin") || User.IsInRole("SystemAdmin"), tenantId);
+        return null;
+    }
+
+    private ObjectResult Forbidden(DelegationAccessDeniedException ex) =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
 
     private Guid? GetUserId()
     {

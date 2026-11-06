@@ -161,11 +161,25 @@ public class PasskeyController : ControllerBase
 
             var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
             var userAgent = Request.Headers["User-Agent"].ToString();
-            var loginResult = await _authService.LoginBypassPasswordAsync(user, ipAddress, userAgent);
+
+            // A passkey proves possession of one factor, not the account's second factor. Route through
+            // the same gate as password/magic-link/OTP login: when 2FA is enabled this suspends the
+            // login (RequiresTwoFactor, no tokens) and the existing verify-code endpoint completes it.
+            var loginResult = await _authService.CompletePasswordlessLoginAsync(user, ipAddress, userAgent);
 
             if (!loginResult.Success)
             {
                 return Unauthorized(new { error = loginResult.Error });
+            }
+
+            if (loginResult.RequiresTwoFactor)
+            {
+                return Ok(new
+                {
+                    requiresTwoFactor = true,
+                    userId = loginResult.User!.Id,
+                    message = "A verification code has been sent to your email."
+                });
             }
 
             Response.Cookies.Append("refreshToken", loginResult.RefreshToken!, new CookieOptions

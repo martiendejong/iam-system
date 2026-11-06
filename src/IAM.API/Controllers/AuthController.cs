@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using IAM.Core;
 using IAM.Core.Services;
@@ -75,6 +76,19 @@ public class AuthController : ControllerBase
 
         if (!result.Success)
         {
+            // Task 5166: a caller that has to wait gets 429 + Retry-After. This is keyed on the typed
+            // email and the IP, so it looks the same for an unknown email as for a real account.
+            if (result.RetryAfterSeconds > 0)
+            {
+                var retryAfter = result.RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+                Response.Headers.RetryAfter = retryAfter;
+                return StatusCode(StatusCodes.Status429TooManyRequests, new
+                {
+                    error = result.Error,
+                    retryAfterSeconds = result.RetryAfterSeconds
+                });
+            }
+
             return BadRequest(new { error = result.Error });
         }
 
@@ -127,7 +141,7 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.VerifyLoginTotpAsync(request.UserId, request.Code, ipAddress, userAgent, request.RememberMe, ct);
+        var result = await _authService.VerifyLoginTotpAsync(request.UserId, request.Code, request.ChallengeToken, ipAddress, userAgent, request.RememberMe, ct);
 
         if (!result.Success)
         {
@@ -296,5 +310,5 @@ public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record StepUpVerifyRequest(string Email, string Code, bool RememberMe = false);
-public record TwoFactorVerifyRequest(Guid UserId, string Code, bool RememberMe = false);
+public record TwoFactorVerifyRequest(Guid UserId, string Code, string? ChallengeToken = null, bool RememberMe = false);
 public record ResendTwoFactorRequest(Guid UserId, string? ReturnUrl = null);

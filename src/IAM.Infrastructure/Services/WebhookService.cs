@@ -15,25 +15,25 @@ public class WebhookService : IWebhookService
     private readonly IAMDbContext _context;
     private readonly IEventBus _eventBus;
     private readonly ILogger<WebhookService> _logger;
+    private readonly IWebhookUrlGuard _urlGuard;
 
     public WebhookService(
         IAMDbContext context,
         IEventBus eventBus,
-        ILogger<WebhookService> logger)
+        ILogger<WebhookService> logger,
+        IWebhookUrlGuard urlGuard)
     {
         _context = context;
         _eventBus = eventBus;
         _logger = logger;
+        _urlGuard = urlGuard;
     }
 
     public async Task<WebhookSubscription> CreateSubscriptionAsync(WebhookSubscription subscription, CancellationToken ct = default)
     {
-        // Validate the URL is well-formed
-        if (!Uri.TryCreate(subscription.Url, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != "https" && uri.Scheme != "http"))
-        {
-            throw new ArgumentException("Webhook URL must be a valid absolute HTTP or HTTPS URL.");
-        }
+        // The URL must be http(s) and resolve to public addresses only (SSRF guard, task 4702).
+        if (await _urlGuard.CheckAsync(subscription.Url, ct) is { } urlError)
+            throw new ArgumentException(urlError);
 
         // Validate subscribed events
         if (!string.IsNullOrEmpty(subscription.Events))
@@ -108,11 +108,8 @@ public class WebhookService : IWebhookService
 
         if (url != null)
         {
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != "https" && uri.Scheme != "http"))
-            {
-                throw new ArgumentException("Webhook URL must be a valid absolute HTTP or HTTPS URL.");
-            }
+            if (await _urlGuard.CheckAsync(url, ct) is { } urlError)
+                throw new ArgumentException(urlError);
             subscription.Url = url;
         }
 

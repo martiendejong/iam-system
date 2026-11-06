@@ -216,4 +216,76 @@ public class UsersControllerDeleteUserTests : IClassFixture<IAMTestWebApplicatio
             Assert.Null(auditLog!.UserId);
         }
     }
+
+    [Fact]
+    public async Task DeleteUser_RemovesDelegationsWhereUserIsDelegateOrDelegator()
+    {
+        // Arrange - the user is the delegate on one row and the delegator on another.
+        // Delegation.DelegateUserId is OnDelete(Restrict) in IAMDbContext, so without explicit
+        // removal the delete fails with an FK violation on Postgres.
+        var userId = await CreateTargetUserAsync("delegate.cleanup@test.com");
+        var otherUserId = await CreateTargetUserAsync("delegation.peer@test.com");
+        var asDelegateId = Guid.NewGuid();
+        var asDelegatorId = Guid.NewGuid();
+        var unrelatedId = Guid.NewGuid();
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+
+            db.Delegations.Add(new Delegation
+            {
+                Id = asDelegateId,
+                DelegatorUserId = otherUserId,
+                DelegateUserId = userId,
+                TenantId = RootTenantId,
+                Permissions = "[\"users:read\"]",
+                Reason = "delete-user test (as delegate)",
+                ValidFrom = DateTime.UtcNow.AddDays(-1),
+                ValidUntil = DateTime.UtcNow.AddDays(7)
+            });
+
+            db.Delegations.Add(new Delegation
+            {
+                Id = asDelegatorId,
+                DelegatorUserId = userId,
+                DelegateUserId = otherUserId,
+                TenantId = RootTenantId,
+                Permissions = "[\"users:read\"]",
+                Reason = "delete-user test (as delegator)",
+                ValidFrom = DateTime.UtcNow.AddDays(-1),
+                ValidUntil = DateTime.UtcNow.AddDays(7)
+            });
+
+            db.Delegations.Add(new Delegation
+            {
+                Id = unrelatedId,
+                DelegatorUserId = otherUserId,
+                DelegateUserId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                TenantId = RootTenantId,
+                Permissions = "[\"users:read\"]",
+                Reason = "delete-user test (unrelated)",
+                ValidFrom = DateTime.UtcNow.AddDays(-1),
+                ValidUntil = DateTime.UtcNow.AddDays(7)
+            });
+
+            await db.SaveChangesAsync();
+        }
+
+        // Act
+        var response = await _superAdminClient.DeleteAsync($"/api/users/{userId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Assert - both delegation rows involving the deleted user are gone, the unrelated one survives
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+
+            Assert.False(await db.Delegations.AnyAsync(d => d.Id == asDelegateId));
+            Assert.False(await db.Delegations.AnyAsync(d => d.Id == asDelegatorId));
+            Assert.False(await db.Delegations.AnyAsync(d => d.DelegateUserId == userId || d.DelegatorUserId == userId));
+            Assert.True(await db.Delegations.AnyAsync(d => d.Id == unrelatedId));
+            Assert.True(await db.Users.AnyAsync(u => u.Id == otherUserId));
+        }
+    }
 }

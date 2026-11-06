@@ -64,7 +64,7 @@ public class TotpTwoFactorLoginTests
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         var claimsMappingService = new ClaimsMappingService(context);
         var totpService = new TotpService(context);
-        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, totpService, claimsMappingService, NullLogger<AuthService>.Instance);
+        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, totpService, claimsMappingService, NullLogger<AuthService>.Instance, AuthServiceTestFactory.CreateLoginThrottle());
         return (authService, totpService, context);
     }
 
@@ -166,8 +166,9 @@ public class TotpTwoFactorLoginTests
 
         var loginResult = await authService.LoginAsync(user.Email, "Password123!");
         Assert.True(loginResult.RequiresTwoFactor);
+        Assert.NotNull(loginResult.ChallengeToken);
 
-        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, ComputeTotpCode(secret));
+        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, ComputeTotpCode(secret), loginResult.ChallengeToken);
 
         Assert.True(verifyResult.Success);
         Assert.NotNull(verifyResult.AccessToken);
@@ -186,8 +187,9 @@ public class TotpTwoFactorLoginTests
 
         var loginResult = await authService.LoginAsync(user.Email, "Password123!");
         Assert.True(loginResult.RequiresTwoFactor);
+        Assert.NotNull(loginResult.ChallengeToken);
 
-        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, recoveryCodes[0]);
+        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, recoveryCodes[0], loginResult.ChallengeToken);
 
         Assert.True(verifyResult.Success);
         Assert.NotNull(verifyResult.AccessToken);
@@ -203,9 +205,29 @@ public class TotpTwoFactorLoginTests
         await context.SaveChangesAsync();
         await EnableTotpAsync(totpService, user);
 
-        await authService.LoginAsync(user.Email, "Password123!");
+        var loginResult = await authService.LoginAsync(user.Email, "Password123!");
 
-        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, "000000");
+        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, "000000", loginResult.ChallengeToken);
+
+        Assert.False(verifyResult.Success);
+        Assert.Null(verifyResult.AccessToken);
+        Assert.Null(verifyResult.RefreshToken);
+    }
+
+    [Fact]
+    public async Task VerifyLoginTotpAsync_WithoutChallengeToken_Fails()
+    {
+        // Closes the bypass hole: a valid TOTP code alone is not enough — the caller
+        // must prove the password step completed via the challenge token.
+        var (authService, totpService, context) = CreateServices();
+        var user = CreateUser("Password123!");
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+        var secret = await EnableTotpAsync(totpService, user);
+
+        // Supply a valid TOTP code but no challenge token (simulates attacker who
+        // knows userId and has access to the authenticator app but never logged in).
+        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, ComputeTotpCode(secret), challengeToken: null);
 
         Assert.False(verifyResult.Success);
         Assert.Null(verifyResult.AccessToken);
@@ -257,8 +279,9 @@ public class TotpTwoFactorLoginTests
 
         var loginResult = await authService.CompletePasswordlessLoginAsync(user);
         Assert.True(loginResult.RequiresTwoFactor);
+        Assert.NotNull(loginResult.ChallengeToken);
 
-        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, ComputeTotpCode(secret));
+        var verifyResult = await authService.VerifyLoginTotpAsync(user.Id, ComputeTotpCode(secret), loginResult.ChallengeToken);
 
         Assert.True(verifyResult.Success);
         Assert.NotNull(verifyResult.AccessToken);
@@ -292,8 +315,8 @@ public class TotpTwoFactorLoginTests
         public Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-        public Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-        public Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.FromResult(true);
+        public Task<bool> SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default) => Task.FromResult(true);
     }
 

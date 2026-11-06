@@ -37,7 +37,7 @@ export default function IdentityProviderFormPage() {
     formState: { errors },
   } = useForm<IdentityProviderFormData>({
     defaultValues: {
-      autoCreateUsers: true,
+      autoCreateUsers: false,
       isActive: true,
       type: 'Google',
       attributeMapping: '{}',

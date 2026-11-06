@@ -11,6 +11,8 @@ public interface IBulkOperationService
     /// <summary>
     /// Import users from an uploaded file (CSV or JSON).
     /// Validates all rows, creates users, and tracks progress.
+    /// <paramref name="grantor"/> is who is importing (decided from the caller's token, never the file): a row whose
+    /// role that grantor may not hand out (<see cref="TenantRoleGrantRules"/>, task 5146) is a row error and creates no user.
     /// </summary>
     Task<BulkOperation> ImportUsersAsync(
         Guid tenantId,
@@ -18,6 +20,7 @@ public interface IBulkOperationService
         Stream fileStream,
         string fileName,
         BulkOperationFormat format,
+        TenantGrantor grantor,
         bool dryRun = false,
         CancellationToken ct = default);
 

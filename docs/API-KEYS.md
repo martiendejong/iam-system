@@ -24,6 +24,12 @@ Claims on the principal are unchanged from before (`api_key_id`, `api_key_name`,
 caller: an API-key caller may only issue up to its own scope, inside its own tenant; `admin` scope needs a
 SuperAdmin/SystemAdmin user.
 
+A signed-in user (JWT) issues keys according to their real authority (task 4701): a **platform-wide** key (no tenant)
+needs SuperAdmin/SystemAdmin; a **tenant** key needs SuperAdmin/SystemAdmin or a `TenantAdmin` role scoped to that tenant
+(a `tenant_id` claim in the token must match). Everyone else gets 403. A tenant admin who omits `tenantId` gets their own
+tenant (400 if they administer several), never a platform-wide key. `permissions` must be lowercase `resource:action`
+strings without wildcards (max 25) and `rateLimitPerMinute` must be 1-1000; anything else is 400.
+
 Keys that existed before scopes were introduced were backfilled to `write` (what any key could already do). Nothing is
 backfilled to `admin`.
 

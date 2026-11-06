@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
+using IAM.API.Authorization;
+using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -12,10 +14,55 @@ namespace IAM.API.Controllers;
 public class SecretsVaultController : ControllerBase
 {
     private readonly ISecretsVaultService _secretsService;
+    private readonly ISecretsAccessResolver _access;
 
-    public SecretsVaultController(ISecretsVaultService secretsService)
+    public SecretsVaultController(ISecretsVaultService secretsService, ISecretsAccessResolver access)
     {
         _secretsService = secretsService;
+        _access = access;
+    }
+
+    // Task 4704. The service has no caller checks (SecretRotationWorker and SocialAuthService call it directly), so
+    // the controller enforces them: SuperAdmin manages everything, a tenant administrator only secrets of their own
+    // tenant (global secrets without a tenant are SuperAdmin only), everyone else gets 403 on every action.
+    // Secrets created internally for identity providers (idp-client-secret-*) cannot be changed through this API.
+
+    /// <summary>Name prefix of the vault entries SocialAuthService keeps for identity-provider client secrets.</summary>
+    internal const string IdpSecretPrefix = "idp-client-secret-";
+
+    private static bool IsIdpSecret(string? name) =>
+        name != null && name.StartsWith(IdpSecretPrefix, StringComparison.OrdinalIgnoreCase);
+
+    private ObjectResult Forbidden() =>
+        StatusCode(StatusCodes.Status403Forbidden,
+            new { error = "Only SuperAdmin or an administrator of the secret's tenant can manage secrets." });
+
+    private ObjectResult IdpSecretLocked() =>
+        StatusCode(StatusCodes.Status403Forbidden,
+            new { error = "Identity-provider client secrets are managed by the identity provider settings, not this API." });
+
+    /// <summary>
+    /// Loads a secret for an action on it. The privilege check runs BEFORE the lookup, so a caller who manages
+    /// nothing gets 403 for any id (no existence oracle); then the stored secret's tenant must be one the caller
+    /// manages. Returns the error result, or null with the secret set.
+    /// </summary>
+    private async Task<(IActionResult? Error, SecretEntry? Secret)> LoadManagedAsync(Guid id, bool change)
+    {
+        var access = await _access.ResolveAsync(User, HttpContext.RequestAborted);
+        if (!access.HasAny)
+            return (Forbidden(), null);
+
+        var secret = await _secretsService.GetSecretAsync(id, HttpContext.RequestAborted);
+        if (secret == null)
+            return (NotFound(new { error = "Secret not found" }), null);
+
+        if (!access.CanManage(secret.TenantId))
+            return (Forbidden(), null);
+
+        if (change && IsIdpSecret(secret.Name))
+            return (IdpSecretLocked(), null);
+
+        return (null, secret);
     }
 
     /// <summary>
@@ -24,6 +71,13 @@ public class SecretsVaultController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateSecret([FromBody] CreateSecretRequest request)
     {
+        var access = await _access.ResolveAsync(User, HttpContext.RequestAborted);
+        if (!access.HasAny || !access.CanManage(request.TenantId))
+            return Forbidden();
+
+        if (IsIdpSecret(request.Name))
+            return BadRequest(new { error = $"Secret names starting with '{IdpSecretPrefix}' are reserved." });
+
         var userId = GetCurrentUserId();
         if (userId == null)
             return Unauthorized(new { error = "User identity not found" });
@@ -63,13 +117,13 @@ public class SecretsVaultController : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetSecret(Guid id)
     {
-        var secret = await _secretsService.GetSecretAsync(id, HttpContext.RequestAborted);
-        if (secret == null)
-            return NotFound(new { error = "Secret not found" });
+        var (error, secret) = await LoadManagedAsync(id, change: false);
+        if (error != null)
+            return error;
 
         return Ok(new
         {
-            id = secret.Id,
+            id = secret!.Id,
             name = secret.Name,
             tenantId = secret.TenantId,
             secretType = secret.SecretType,
@@ -98,7 +152,30 @@ public class SecretsVaultController : ControllerBase
         [FromQuery] string? secretType = null,
         [FromQuery] bool? isActive = null)
     {
-        var secrets = await _secretsService.GetSecretsAsync(tenantId, secretType, isActive, HttpContext.RequestAborted);
+        var access = await _access.ResolveAsync(User, HttpContext.RequestAborted);
+        if (!access.HasAny)
+            return Forbidden();
+
+        List<SecretEntry> secrets;
+        if (tenantId.HasValue)
+        {
+            if (!access.CanManage(tenantId))
+                return Forbidden();
+
+            secrets = await _secretsService.GetSecretsAsync(tenantId, secretType, isActive, HttpContext.RequestAborted);
+        }
+        else if (access.IsPlatformAdmin)
+        {
+            secrets = await _secretsService.GetSecretsAsync(null, secretType, isActive, HttpContext.RequestAborted);
+        }
+        else
+        {
+            // A tenant administrator sees only the secrets of the tenants they administer (never global ones).
+            secrets = new List<SecretEntry>();
+            foreach (var tenant in access.AdministeredTenants)
+                secrets.AddRange(await _secretsService.GetSecretsAsync(tenant, secretType, isActive, HttpContext.RequestAborted));
+            secrets = secrets.OrderByDescending(s => s.UpdatedAt).ToList();
+        }
 
         var response = secrets.Select(s => new
         {
@@ -130,6 +207,13 @@ public class SecretsVaultController : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> UpdateSecret(Guid id, [FromBody] UpdateSecretRequest request)
     {
+        var (error, _) = await LoadManagedAsync(id, change: true);
+        if (error != null)
+            return error;
+
+        if (IsIdpSecret(request.Name))
+            return BadRequest(new { error = $"Secret names starting with '{IdpSecretPrefix}' are reserved." });
+
         var secret = await _secretsService.UpdateSecretAsync(
             id,
             name: request.Name,
@@ -167,6 +251,10 @@ public class SecretsVaultController : ControllerBase
     [HttpPost("rotate/{id:guid}")]
     public async Task<IActionResult> RotateSecret(Guid id, [FromBody] RotateSecretRequest request)
     {
+        var (error, _) = await LoadManagedAsync(id, change: true);
+        if (error != null)
+            return error;
+
         var userId = GetCurrentUserId();
 
         try
@@ -207,10 +295,9 @@ public class SecretsVaultController : ControllerBase
     [HttpGet("{id:guid}/history")]
     public async Task<IActionResult> GetSecretHistory(Guid id)
     {
-        // Verify secret exists
-        var secret = await _secretsService.GetSecretAsync(id, HttpContext.RequestAborted);
-        if (secret == null)
-            return NotFound(new { error = "Secret not found" });
+        var (error, secret) = await LoadManagedAsync(id, change: false);
+        if (error != null)
+            return error;
 
         var history = await _secretsService.GetSecretHistoryAsync(id, HttpContext.RequestAborted);
 
@@ -228,7 +315,7 @@ public class SecretsVaultController : ControllerBase
         return Ok(new
         {
             secretId = id,
-            secretName = secret.Name,
+            secretName = secret!.Name,
             currentVersion = secret.Version,
             history = response
         });
@@ -240,6 +327,10 @@ public class SecretsVaultController : ControllerBase
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> DeleteSecret(Guid id)
     {
+        var (error, _) = await LoadManagedAsync(id, change: true);
+        if (error != null)
+            return error;
+
         var success = await _secretsService.DeleteSecretAsync(id, HttpContext.RequestAborted);
 
         if (!success)

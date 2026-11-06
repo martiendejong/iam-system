@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Mail;
 using System.Text.RegularExpressions;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -29,7 +30,12 @@ public partial class EmailService : IEmailService
         if (branding == null)
             return (null, null, null, false);
 
-        return (branding.LogoUrl, branding.EmailHeaderHtml, branding.EmailFooterHtml, branding.WhiteLabelEnabled);
+        // Task 5150: stored e-mail HTML is sanitized on save, and again here so rows stored before that are never sent raw.
+        return (
+            BrandingSanitizer.SafeImageUrlOrNull(branding.LogoUrl),
+            BrandingSanitizer.SanitizeEmailHtml(branding.EmailHeaderHtml),
+            BrandingSanitizer.SanitizeEmailHtml(branding.EmailFooterHtml),
+            branding.WhiteLabelEnabled);
     }
 
     public async Task SendEmailVerificationAsync(string email, string username, string verificationToken, CancellationToken ct = default)
@@ -171,7 +177,7 @@ public partial class EmailService : IEmailService
         await SendEmailAsync(email, subject, body, ct);
     }
 
-    public async Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null)
+    public async Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null)
     {
         var inviteUrl = $"{_settings.BaseUrl?.TrimEnd('/')}/accept-invite?token={inviteToken}";
         var branding = await GetBrandingAsync(tenantId, ct);
@@ -190,12 +196,12 @@ public partial class EmailService : IEmailService
             whiteLabel: branding.whiteLabel
         );
 
-        await SendEmailAsync(email, subject, body, ct);
+        return await SendEmailAsync(email, subject, body, ct);
     }
 
-    public async Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default)
+    public async Task<bool> SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default)
     {
-        await SendEmailAsync(email, subject, htmlBody, ct);
+        return await SendEmailAsync(email, subject, htmlBody, ct);
     }
 
     public async Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default)
@@ -236,14 +242,14 @@ public partial class EmailService : IEmailService
 
     // -- Private helpers --
 
-    private async Task SendEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
+    private async Task<bool> SendEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
     {
         if (!_settings.EnableSending)
         {
             _logger.LogInformation(
                 "[EmailService DEV MODE] To: {To} | Subject: {Subject}\n{Body}",
                 toEmail, subject, StripHtmlForLog(htmlBody));
-            return;
+            return true;
         }
 
         try
@@ -270,11 +276,15 @@ public partial class EmailService : IEmailService
 
             await client.SendMailAsync(message, ct);
             _logger.LogInformation("Email sent successfully to {To} with subject '{Subject}'", toEmail, subject);
+            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to send email to {To} with subject '{Subject}'", toEmail, subject);
-            // Never throw - email failures should not break application flow
+            // Never throw - a mail failure must not 500 an auth flow mid-login. But it must
+            // not be invisible either: callers get false and decide what to surface (the
+            // invitation flow reports it to the admin, 18-10 incident).
+            _logger.LogError(ex, "Failed to send email to {To} with subject '{Subject}'", toEmail, subject);
+            return false;
         }
     }
 
@@ -352,7 +362,7 @@ public partial class EmailService : IEmailService
         var headerContent = !string.IsNullOrEmpty(headerHtml)
             ? headerHtml
             : !string.IsNullOrEmpty(logoUrl)
-                ? $"""<img src="{logoUrl}" alt="Logo" style="height:32px;max-width:200px;" />"""
+                ? $"""<img src="{System.Net.WebUtility.HtmlEncode(logoUrl)}" alt="Logo" style="height:32px;max-width:200px;" />"""
                 : """&#128274; IAM System""";
 
         var brandFooterSection = !string.IsNullOrEmpty(footerHtml)

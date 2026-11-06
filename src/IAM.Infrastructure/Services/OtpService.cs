@@ -246,6 +246,28 @@ public class OtpService : IOtpService
         return true;
     }
 
+    public async Task<string> GenerateLoginTotpChallengeAsync(User user)
+    {
+        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        var tokenHash = HashCode(token);
+
+        var otpCode = new OtpCode
+        {
+            UserId = user.Id,
+            Email = user.Email,
+            Code = tokenHash,
+            Purpose = OtpPurpose.LoginTotpChallenge,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5),
+            MaxAttempts = 1
+        };
+
+        _context.OtpCodes.Add(otpCode);
+        await _context.SaveChangesAsync();
+
+        return token;
+    }
+
     public async Task<int> CleanupExpiredCodesAsync()
     {
         var expiredCodes = await _context.OtpCodes

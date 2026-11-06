@@ -5,9 +5,12 @@ namespace IAM.Core.Services;
 public interface IDirectorySyncService
 {
     /// <summary>
-    /// Create a new directory sync configuration
+    /// Create a new directory sync configuration (task 4698). The LDAP URL must be ldaps://, and for a caller
+    /// who is not a SuperAdmin its host must resolve only to public addresses; the group-to-role mapping may
+    /// only name tenant roles; the bind password is stored encrypted.
     /// </summary>
-    Task<DirectorySyncConfig> CreateConfigAsync(DirectorySyncConfig config, CancellationToken ct = default);
+    /// <exception cref="DirectorySyncValidationException">Unknown tenant, bad URL, or a mapping that names a platform-wide, unknown or foreign role.</exception>
+    Task<DirectorySyncConfig> CreateConfigAsync(DirectorySyncConfig config, bool callerIsSuperAdmin = false, CancellationToken ct = default);
 
     /// <summary>
     /// Get a sync configuration by ID
@@ -15,14 +18,21 @@ public interface IDirectorySyncService
     Task<DirectorySyncConfig?> GetConfigAsync(Guid configId, CancellationToken ct = default);
 
     /// <summary>
+    /// The tenant a configuration belongs to, or null when it does not exist (one narrow query, for authorization).
+    /// </summary>
+    Task<Guid?> GetConfigTenantIdAsync(Guid configId, CancellationToken ct = default);
+
+    /// <summary>
     /// Get all sync configurations for a tenant
     /// </summary>
     Task<List<DirectorySyncConfig>> GetConfigsByTenantAsync(Guid tenantId, CancellationToken ct = default);
 
     /// <summary>
-    /// Update an existing sync configuration
+    /// Update an existing sync configuration. The tenant never changes; same validation as create.
     /// </summary>
-    Task<DirectorySyncConfig> UpdateConfigAsync(DirectorySyncConfig config, CancellationToken ct = default);
+    /// <exception cref="InvalidOperationException">The configuration does not exist.</exception>
+    /// <exception cref="DirectorySyncValidationException">Bad URL, or a mapping that names a platform-wide, unknown or foreign role.</exception>
+    Task<DirectorySyncConfig> UpdateConfigAsync(DirectorySyncConfig config, bool callerIsSuperAdmin = false, CancellationToken ct = default);
 
     /// <summary>
     /// Delete a sync configuration
@@ -53,6 +63,12 @@ public interface IDirectorySyncService
     /// Get all active configs that are due for automatic sync
     /// </summary>
     Task<List<DirectorySyncConfig>> GetConfigsDueForSyncAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Encrypts bind passwords that were stored in plain text before task 4698. Idempotent.
+    /// </summary>
+    /// <returns>How many configurations were upgraded.</returns>
+    Task<int> EncryptLegacyBindPasswordsAsync(CancellationToken ct = default);
 }
 
 public class DirectoryTestResult
@@ -61,4 +77,12 @@ public class DirectoryTestResult
     public string Message { get; set; } = string.Empty;
     public int? UserCount { get; set; }
     public string? ServerType { get; set; }
+}
+
+/// <summary>Thrown for an invalid directory-sync payload; controllers map it to HTTP 400 (task 4698).</summary>
+public class DirectorySyncValidationException : Exception
+{
+    public DirectorySyncValidationException(string message) : base(message)
+    {
+    }
 }

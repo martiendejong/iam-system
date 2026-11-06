@@ -24,6 +24,10 @@ public class ApiKeyIssueGuardTests
         public string? IssuedScope { get; private set; }
         public Guid? IssuedTenant { get; private set; }
         public bool Issued { get; private set; }
+        public List<Guid> Administered { get; } = new();
+
+        public Task<IReadOnlyList<Guid>> GetAdministeredTenantIdsAsync(Guid userId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<Guid>>(Administered.ToList());
 
         public Task<(ApiKey Key, string RawKey)> CreateApiKeyAsync(string name, Guid? userId, Guid? tenantId, List<string>? permissions = null,
             DateTime? expiresAt = null, int? rateLimitPerMinute = null, string? description = null, string scope = "read", CancellationToken ct = default)
@@ -127,15 +131,25 @@ public class ApiKeyIssueGuardTests
     }
 
     [Fact]
-    public async Task User_KeepsIssuingReadAndWriteKeys_AsBefore()
+    public async Task User_WithoutAdminAuthority_CannotIssueAnyKey()
     {
-        var (readResult, readService) = await CreateAsync(UserCaller(), scope: null);
+        // Task 4701: read/write keys used to be open to every signed-in user, for any tenant or platform-wide.
+        AssertForbidden(await CreateAsync(UserCaller(), scope: null));
+        AssertForbidden(await CreateAsync(UserCaller(), "write", TenantA));
+        AssertForbidden(await CreateAsync(UserCaller("TenantAdmin"), "read", TenantA)); // role claim without a role row
+    }
+
+    [Fact]
+    public async Task GlobalAdmin_IssuesReadAndWriteKeys_PlatformWideOrForAnyTenant()
+    {
+        var (readResult, readService) = await CreateAsync(UserCaller("SuperAdmin"), scope: null);
         Assert.IsType<CreatedAtActionResult>(readResult);
         Assert.Equal("read", readService.IssuedScope); // default
+        Assert.Null(readService.IssuedTenant);
 
-        var (writeResult, writeService) = await CreateAsync(UserCaller(), "write", TenantA);
+        var (writeResult, writeService) = await CreateAsync(UserCaller("SystemAdmin"), "write", TenantA);
         Assert.IsType<CreatedAtActionResult>(writeResult);
-        Assert.Equal("write", writeService.IssuedScope);
+        Assert.Equal(TenantA, writeService.IssuedTenant);
     }
 
     [Fact]

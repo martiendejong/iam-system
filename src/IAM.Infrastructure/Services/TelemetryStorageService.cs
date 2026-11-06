@@ -210,12 +210,18 @@ public class TelemetryStorageService : ITelemetryStorageService
         command.Parameters.Add(parameter);
     }
 
-    public async Task<List<string>> GetMetricNamesAsync(string? deviceId = null, CancellationToken ct = default)
+    public Task<List<string>> GetMetricNamesAsync(string? deviceId = null, CancellationToken ct = default)
+        => GetMetricNamesAsync(deviceId, null, ct);
+
+    public async Task<List<string>> GetMetricNamesAsync(string? deviceId, Guid? tenantId, CancellationToken ct = default)
     {
         var query = _context.TelemetryRecords.AsQueryable();
 
         if (!string.IsNullOrEmpty(deviceId))
             query = query.Where(r => r.DeviceId == deviceId);
+
+        if (tenantId.HasValue)
+            query = query.Where(r => r.TenantId == tenantId.Value);
 
         return await query
             .Select(r => r.MetricName)

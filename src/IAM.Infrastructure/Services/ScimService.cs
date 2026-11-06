@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -13,10 +14,12 @@ namespace IAM.Infrastructure.Services;
 public class ScimService : IScimService
 {
     private readonly IAMDbContext _context;
+    private readonly IApiKeyCache? _apiKeyCache;
 
-    public ScimService(IAMDbContext context)
+    public ScimService(IAMDbContext context, IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
+        _apiKeyCache = apiKeyCache;
     }
 
     // ---- User Operations ----
@@ -57,7 +60,8 @@ public class ScimService : IScimService
 
     public async Task<ScimUserResource?> GetUserAsync(Guid tenantId, Guid userId, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        // Only users of the token's own tenant exist as far as this token is concerned (task 4699).
+        var user = await UsersInTenant(tenantId).AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             return null;
 
@@ -66,49 +70,81 @@ public class ScimService : IScimService
 
     public async Task<ScimUserResource> ReplaceUserAsync(Guid tenantId, Guid userId, ScimUserResource scimUser, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var user = await ManageableUsersInTenant(tenantId).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             throw new InvalidOperationException("User not found");
 
         var primaryEmail = scimUser.Emails?.FirstOrDefault(e => e.Primary)?.Value
             ?? scimUser.Emails?.FirstOrDefault()?.Value
             ?? scimUser.UserName;
+        var newPhone = scimUser.PhoneNumbers?.FirstOrDefault()?.Value;
+
+        await EnsureNoCollisionAsync(user, primaryEmail, newPhone, ct);
 
         user.Email = primaryEmail;
         user.FirstName = scimUser.Name?.GivenName ?? string.Empty;
         user.LastName = scimUser.Name?.FamilyName ?? string.Empty;
-        user.PhoneNumber = scimUser.PhoneNumbers?.FirstOrDefault()?.Value;
+        user.PhoneNumber = newPhone;
         user.IsActive = scimUser.Active;
         user.UpdatedAt = DateTime.UtcNow;
 
+        IReadOnlyList<string> revokedKeys = Array.Empty<string>();
+        if (!user.IsActive)
+        {
+            await _context.RevokeRefreshTokensAsync(user.Id, ct);
+            revokedKeys = await _context.RevokeApiKeysAsync(user.Id, ct);
+        }
+
         await LogProvisioningAsync(tenantId, "Update", "User", scimUser.ExternalId, user.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(revokedKeys);
 
         return MapUserToScimResource(user);
     }
 
     public async Task<ScimUserResource> PatchUserAsync(Guid tenantId, Guid userId, ScimPatchRequest patchRequest, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var user = await ManageableUsersInTenant(tenantId).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             throw new InvalidOperationException("User not found");
+
+        var originalEmail = user.Email;
+        var originalPhone = user.PhoneNumber;
 
         foreach (var op in patchRequest.Operations)
         {
             ApplyUserPatchOperation(user, op);
         }
 
+        try
+        {
+            await EnsureNoCollisionAsync(user, user.Email, user.PhoneNumber, ct, originalEmail, originalPhone);
+        }
+        catch (ScimUniquenessException)
+        {
+            _context.Entry(user).State = EntityState.Detached; // drop the in-memory edits
+            throw;
+        }
+
         user.UpdatedAt = DateTime.UtcNow;
+
+        IReadOnlyList<string> revokedKeys = Array.Empty<string>();
+        if (!user.IsActive)
+        {
+            await _context.RevokeRefreshTokensAsync(user.Id, ct);
+            revokedKeys = await _context.RevokeApiKeysAsync(user.Id, ct);
+        }
 
         await LogProvisioningAsync(tenantId, "Update", "User", null, user.Id, "Success", $"PATCH: {patchRequest.Operations.Count} operations", ct);
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(revokedKeys);
 
         return MapUserToScimResource(user);
     }
 
     public async Task<bool> DeleteUserAsync(Guid tenantId, Guid userId, CancellationToken ct = default)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var user = await ManageableUsersInTenant(tenantId).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user == null)
             return false;
 
@@ -116,15 +152,20 @@ public class ScimService : IScimService
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
 
+        await _context.RevokeRefreshTokensAsync(user.Id, ct);
+        var revokedKeys = await _context.RevokeApiKeysAsync(user.Id, ct);
+
         await LogProvisioningAsync(tenantId, "Delete", "User", null, user.Id, "Success", "Soft delete (deactivated)", ct);
         await _context.SaveChangesAsync(ct);
+        _apiKeyCache.Forget(revokedKeys);
 
         return true;
     }
 
     public async Task<ScimListResponse<ScimUserResource>> ListUsersAsync(Guid tenantId, ScimQueryOptions options, CancellationToken ct = default)
     {
-        var query = _context.Users.AsQueryable();
+        // The tenant scope is the base of the query: the filter and sort below can only narrow it.
+        var query = UsersInTenant(tenantId).AsNoTracking();
 
         // Apply SCIM filter
         if (!string.IsNullOrWhiteSpace(options.Filter))
@@ -183,24 +224,17 @@ public class ScimService : IScimService
         _context.Groups.Add(group);
         await _context.SaveChangesAsync(ct);
 
-        // Add members if provided
+        // Add members if provided: only users of this tenant, others are skipped like unknown ids (task 4764)
         if (scimGroup.Members?.Any() == true)
         {
-            foreach (var member in scimGroup.Members)
+            foreach (var memberId in await InTenantMemberIdsAsync(tenantId, scimGroup.Members, ct))
             {
-                if (Guid.TryParse(member.Value, out var memberId))
+                _context.GroupMemberships.Add(new GroupMembership
                 {
-                    var userExists = await _context.Users.AnyAsync(u => u.Id == memberId, ct);
-                    if (userExists)
-                    {
-                        _context.GroupMemberships.Add(new GroupMembership
-                        {
-                            GroupId = group.Id,
-                            UserId = memberId,
-                            Role = "member"
-                        });
-                    }
-                }
+                    GroupId = group.Id,
+                    UserId = memberId,
+                    Role = "member"
+                });
             }
             await _context.SaveChangesAsync(ct);
         }
@@ -208,7 +242,7 @@ public class ScimService : IScimService
         await LogProvisioningAsync(tenantId, "Create", "Group", scimGroup.ExternalId, group.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
 
-        return await BuildScimGroupResource(group, ct);
+        return await BuildScimGroupResource(tenantId, group, ct);
     }
 
     public async Task<ScimGroupResource?> GetGroupAsync(Guid tenantId, Guid groupId, CancellationToken ct = default)
@@ -221,7 +255,7 @@ public class ScimService : IScimService
         if (group == null)
             return null;
 
-        return BuildScimGroupResourceFromLoaded(group);
+        return BuildScimGroupResourceFromLoaded(group, await InTenantUserIdsAsync(tenantId, group.Members.Select(m => m.UserId), ct));
     }
 
     public async Task<ScimGroupResource> ReplaceGroupAsync(Guid tenantId, Guid groupId, ScimGroupResource scimGroup, CancellationToken ct = default)
@@ -241,28 +275,21 @@ public class ScimService : IScimService
 
         if (scimGroup.Members?.Any() == true)
         {
-            foreach (var member in scimGroup.Members)
+            foreach (var memberId in await InTenantMemberIdsAsync(tenantId, scimGroup.Members, ct))
             {
-                if (Guid.TryParse(member.Value, out var memberId))
+                _context.GroupMemberships.Add(new GroupMembership
                 {
-                    var userExists = await _context.Users.AnyAsync(u => u.Id == memberId, ct);
-                    if (userExists)
-                    {
-                        _context.GroupMemberships.Add(new GroupMembership
-                        {
-                            GroupId = group.Id,
-                            UserId = memberId,
-                            Role = "member"
-                        });
-                    }
-                }
+                    GroupId = group.Id,
+                    UserId = memberId,
+                    Role = "member"
+                });
             }
         }
 
         await LogProvisioningAsync(tenantId, "Update", "Group", scimGroup.ExternalId, group.Id, "Success", null, ct);
         await _context.SaveChangesAsync(ct);
 
-        return await BuildScimGroupResource(group, ct);
+        return await BuildScimGroupResource(tenantId, group, ct);
     }
 
     public async Task<ScimGroupResource> PatchGroupAsync(Guid tenantId, Guid groupId, ScimPatchRequest patchRequest, CancellationToken ct = default)
@@ -276,7 +303,7 @@ public class ScimService : IScimService
 
         foreach (var op in patchRequest.Operations)
         {
-            await ApplyGroupPatchOperationAsync(group, op, ct);
+            await ApplyGroupPatchOperationAsync(tenantId, group, op, ct);
         }
 
         group.UpdatedAt = DateTime.UtcNow;
@@ -284,7 +311,7 @@ public class ScimService : IScimService
         await LogProvisioningAsync(tenantId, "Update", "Group", null, group.Id, "Success", $"PATCH: {patchRequest.Operations.Count} operations", ct);
         await _context.SaveChangesAsync(ct);
 
-        return await BuildScimGroupResource(group, ct);
+        return await BuildScimGroupResource(tenantId, group, ct);
     }
 
     public async Task<bool> DeleteGroupAsync(Guid tenantId, Guid groupId, CancellationToken ct = default)
@@ -340,12 +367,14 @@ public class ScimService : IScimService
             .Take(count)
             .ToListAsync(ct);
 
+        var inTenantMembers = await InTenantUserIdsAsync(tenantId, groups.SelectMany(g => g.Members).Select(m => m.UserId), ct);
+
         return new ScimListResponse<ScimGroupResource>
         {
             TotalResults = totalResults,
             StartIndex = startIndex,
             ItemsPerPage = groups.Count,
-            Resources = groups.Select(BuildScimGroupResourceFromLoaded).ToList()
+            Resources = groups.Select(g => BuildScimGroupResourceFromLoaded(g, inTenantMembers)).ToList()
         };
     }
 
@@ -426,6 +455,58 @@ public class ScimService : IScimService
 
     // ---- Private Helpers ----
 
+    /// <summary>
+    /// Users that belong to the tenant (task 4699): they hold a non-expired UserRoles row for it, or this
+    /// tenant's SCIM log shows a successful Create for them (SCIM-provisioned users have no role yet).
+    /// Users have no tenant column; everything else behaves as if it does not exist for this token.
+    /// </summary>
+    private IQueryable<User> UsersInTenant(Guid tenantId)
+    {
+        var now = DateTime.UtcNow;
+        return _context.Users.Where(u =>
+            _context.UserRoles.Any(ur => ur.UserId == u.Id && ur.TenantId == tenantId
+                && (ur.ExpiresAt == null || ur.ExpiresAt > now))
+            || _context.ScimProvisioningLogs.Any(l => l.TenantId == tenantId
+                && l.ResourceType == "User" && l.Operation == "Create" && l.Status == "Success"
+                && l.ResourceId == u.Id));
+    }
+
+    /// <summary>
+    /// In-tenant users SCIM may change or deactivate: not anyone who also holds a role with no tenant or in
+    /// another tenant (platform admins and multi-tenant users are never changed through one tenant's token).
+    /// Fails closed: an expired role still counts.
+    /// </summary>
+    private IQueryable<User> ManageableUsersInTenant(Guid tenantId) =>
+        UsersInTenant(tenantId).Where(u =>
+            !_context.UserRoles.Any(ur => ur.UserId == u.Id && (ur.TenantId == null || ur.TenantId != tenantId)));
+
+    /// <summary>
+    /// An email (or phone number) cannot be moved onto another account: magic-link and OTP login find the
+    /// account by it. The error never says whose it is.
+    /// </summary>
+    private async Task EnsureNoCollisionAsync(
+        User user, string? newEmail, string? newPhone, CancellationToken ct,
+        string? originalEmail = null, string? originalPhone = null)
+    {
+        originalEmail ??= user.Email;
+        originalPhone ??= user.PhoneNumber;
+
+        var email = newEmail?.Trim();
+        if (!string.IsNullOrEmpty(email) && !string.Equals(email, originalEmail?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            var lowered = email.ToLowerInvariant();
+            if (await _context.Users.AnyAsync(u => u.Id != user.Id && u.Email.ToLower() == lowered, ct))
+                throw new ScimUniquenessException("The email address is already in use");
+        }
+
+        var phone = newPhone?.Trim();
+        if (!string.IsNullOrEmpty(phone) && !string.Equals(phone, originalPhone?.Trim(), StringComparison.Ordinal))
+        {
+            if (await _context.Users.AnyAsync(u => u.Id != user.Id && u.PhoneNumber == phone, ct))
+                throw new ScimUniquenessException("The phone number is already in use");
+        }
+    }
+
     private ScimUserResource MapUserToScimResource(User user)
     {
         return new ScimUserResource
@@ -458,7 +539,33 @@ public class ScimService : IScimService
         };
     }
 
-    private ScimGroupResource BuildScimGroupResourceFromLoaded(Group group)
+    /// <summary>
+    /// The ids among the candidates that are users of the tenant (task 4764): the one in-tenant rule behind every
+    /// group member write and every group response. Everything else is treated as if it did not exist.
+    /// </summary>
+    private async Task<HashSet<Guid>> InTenantUserIdsAsync(Guid tenantId, IEnumerable<Guid> candidateIds, CancellationToken ct)
+    {
+        var ids = candidateIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new HashSet<Guid>();
+
+        return (await UsersInTenant(tenantId).Where(u => ids.Contains(u.Id)).Select(u => u.Id).ToListAsync(ct)).ToHashSet();
+    }
+
+    /// <summary>Member ids of a SCIM group body that are in-tenant users; malformed, unknown and foreign ids are skipped.</summary>
+    private async Task<List<Guid>> InTenantMemberIdsAsync(Guid tenantId, IEnumerable<ScimMember> members, CancellationToken ct)
+    {
+        var parsed = members
+            .Select(m => Guid.TryParse(m.Value, out var id) ? id : (Guid?)null)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+        var allowed = await InTenantUserIdsAsync(tenantId, parsed, ct);
+        return parsed.Where(allowed.Contains).ToList();
+    }
+
+    private ScimGroupResource BuildScimGroupResourceFromLoaded(Group group, HashSet<Guid> inTenantUserIds)
     {
         return new ScimGroupResource
         {
@@ -466,7 +573,7 @@ public class ScimService : IScimService
             Id = group.Id.ToString(),
             DisplayName = group.Name,
             Members = group.Members
-                .Where(m => m.IsActive)
+                .Where(m => m.IsActive && inTenantUserIds.Contains(m.UserId))
                 .Select(m => new ScimMember
                 {
                     Value = m.UserId.ToString(),
@@ -485,14 +592,15 @@ public class ScimService : IScimService
         };
     }
 
-    private async Task<ScimGroupResource> BuildScimGroupResource(Group group, CancellationToken ct)
+    private async Task<ScimGroupResource> BuildScimGroupResource(Guid tenantId, Group group, CancellationToken ct)
     {
         var fullGroup = await _context.Groups
             .Include(g => g.Members.Where(m => m.IsActive))
                 .ThenInclude(m => m.User)
             .FirstOrDefaultAsync(g => g.Id == group.Id, ct);
 
-        return BuildScimGroupResourceFromLoaded(fullGroup ?? group);
+        var loaded = fullGroup ?? group;
+        return BuildScimGroupResourceFromLoaded(loaded, await InTenantUserIdsAsync(tenantId, loaded.Members.Select(m => m.UserId), ct));
     }
 
     private void ApplyUserPatchOperation(User user, ScimPatchOperation op)
@@ -556,7 +664,7 @@ public class ScimService : IScimService
         }
     }
 
-    private async Task ApplyGroupPatchOperationAsync(Group group, ScimPatchOperation op, CancellationToken ct)
+    private async Task ApplyGroupPatchOperationAsync(Guid tenantId, Group group, ScimPatchOperation op, CancellationToken ct)
     {
         var path = op.Path?.ToLowerInvariant()?.Trim();
         var valueStr = op.Value?.ToString() ?? string.Empty;
@@ -573,7 +681,8 @@ public class ScimService : IScimService
             case "add":
                 if (path == "members")
                 {
-                    var members = TryParseMembers(op.Value);
+                    // Only users of this tenant can be added; other ids are skipped like unknown ids (task 4764)
+                    var members = await InTenantUserIdsAsync(tenantId, TryParseMembers(op.Value), ct);
                     foreach (var memberId in members)
                     {
                         var exists = await _context.GroupMemberships
@@ -627,25 +736,60 @@ public class ScimService : IScimService
         }
     }
 
+    private const int MaxFilterLength = 512;
+    private const int MaxFilterTerms = 10;
+
+    private static readonly Regex FilterTermRegex = new(
+        @"^(\w+(?:\.\w+)?)\s+(eq|co|sw|pr|gt|lt|ge|le)\s*(?:""([^""]*)""|(\S+))?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Splits a SCIM filter into its single "attribute operator value" terms. A filter that is one
+    /// term is used as is; otherwise it is split on " and " exactly once (no recursion), and every
+    /// part must itself be a term. Anything else is rejected, never ignored.
+    /// </summary>
+    private static List<Match> ParseFilterTerms(string filter)
+    {
+        var trimmed = filter.Trim();
+        if (trimmed.Length > MaxFilterLength)
+            throw new ScimFilterException($"Filter is longer than {MaxFilterLength} characters");
+
+        var whole = FilterTermRegex.Match(trimmed);
+        if (whole.Success)
+            return new List<Match> { whole };
+
+        var parts = Regex.Split(trimmed, @"\s+and\s+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        if (parts.Length < 2)
+            throw new ScimFilterException("Filter is not a valid 'attribute operator value' expression");
+        if (parts.Length > MaxFilterTerms)
+            throw new ScimFilterException($"Filter has more than {MaxFilterTerms} 'and' terms");
+
+        var terms = new List<Match>(parts.Length);
+        foreach (var part in parts)
+        {
+            var m = FilterTermRegex.Match(part.Trim());
+            if (!m.Success)
+                throw new ScimFilterException("Filter contains a term that is not a valid 'attribute operator value' expression");
+            terms.Add(m);
+        }
+        return terms;
+    }
+
+    private static ScimFilterException UnsupportedFilter(string attribute, string op, string? why = null) =>
+        new($"Filter '{attribute} {op}' is not supported{(why == null ? "" : ": " + why)}");
+
     private IQueryable<User> ApplyUserFilter(IQueryable<User> query, string filter)
     {
-        // Parse SCIM filter expressions: attribute operator value
-        // Supported operators: eq, co, sw, pr, gt, lt
-        var match = Regex.Match(filter.Trim(),
-            @"^(\w+(?:\.\w+)?)\s+(eq|co|sw|pr|gt|lt|ge|le)\s*(?:""([^""]*)""|(\S+))?$",
-            RegexOptions.IgnoreCase);
-
-        if (!match.Success)
+        // Supported operators: eq, co, sw, pr, gt, lt, ge, le (per attribute, see ApplyUserFilterTerm)
+        foreach (var term in ParseFilterTerms(filter))
         {
-            // Try compound filter with "and"
-            var andParts = Regex.Split(filter, @"\s+and\s+", RegexOptions.IgnoreCase);
-            foreach (var part in andParts)
-            {
-                query = ApplyUserFilter(query, part.Trim());
-            }
-            return query;
+            query = ApplyUserFilterTerm(query, term);
         }
+        return query;
+    }
 
+    private static IQueryable<User> ApplyUserFilterTerm(IQueryable<User> query, Match match)
+    {
         var attribute = match.Groups[1].Value.ToLowerInvariant();
         var op = match.Groups[2].Value.ToLowerInvariant();
         var value = match.Groups[3].Success ? match.Groups[3].Value : match.Groups[4].Value;
@@ -675,29 +819,31 @@ public class ScimService : IScimService
 
             ("active", "eq") => bool.TryParse(value, out var isActive)
                 ? query.Where(u => u.IsActive == isActive)
-                : query,
+                : throw UnsupportedFilter(attribute, op, "value must be true or false"),
 
             ("externalid", "eq") => query, // ExternalId not stored on User, return all
-            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(u => u.Id == id) : query,
+            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(u => u.Id == id) : throw UnsupportedFilter(attribute, op, "value must be a GUID"),
 
-            ("meta.created", "gt") => DateTime.TryParse(value, out var gt) ? query.Where(u => u.CreatedAt > gt) : query,
-            ("meta.created", "lt") => DateTime.TryParse(value, out var lt) ? query.Where(u => u.CreatedAt < lt) : query,
-            ("meta.created", "ge") => DateTime.TryParse(value, out var ge) ? query.Where(u => u.CreatedAt >= ge) : query,
-            ("meta.created", "le") => DateTime.TryParse(value, out var le) ? query.Where(u => u.CreatedAt <= le) : query,
+            ("meta.created", "gt") => DateTime.TryParse(value, out var gt) ? query.Where(u => u.CreatedAt > gt) : throw UnsupportedFilter(attribute, op, "value must be a date"),
+            ("meta.created", "lt") => DateTime.TryParse(value, out var lt) ? query.Where(u => u.CreatedAt < lt) : throw UnsupportedFilter(attribute, op, "value must be a date"),
+            ("meta.created", "ge") => DateTime.TryParse(value, out var ge) ? query.Where(u => u.CreatedAt >= ge) : throw UnsupportedFilter(attribute, op, "value must be a date"),
+            ("meta.created", "le") => DateTime.TryParse(value, out var le) ? query.Where(u => u.CreatedAt <= le) : throw UnsupportedFilter(attribute, op, "value must be a date"),
 
-            _ => query // Unknown filter, return unfiltered
+            _ => throw UnsupportedFilter(attribute, op) // never fall back to an unfiltered list
         };
     }
 
     private IQueryable<Group> ApplyGroupFilter(IQueryable<Group> query, string filter)
     {
-        var match = Regex.Match(filter.Trim(),
-            @"^(\w+(?:\.\w+)?)\s+(eq|co|sw|pr)\s*(?:""([^""]*)""|(\S+))?$",
-            RegexOptions.IgnoreCase);
+        foreach (var term in ParseFilterTerms(filter))
+        {
+            query = ApplyGroupFilterTerm(query, term);
+        }
+        return query;
+    }
 
-        if (!match.Success)
-            return query;
-
+    private static IQueryable<Group> ApplyGroupFilterTerm(IQueryable<Group> query, Match match)
+    {
         var attribute = match.Groups[1].Value.ToLowerInvariant();
         var op = match.Groups[2].Value.ToLowerInvariant();
         var value = match.Groups[3].Success ? match.Groups[3].Value : match.Groups[4].Value;
@@ -707,8 +853,8 @@ public class ScimService : IScimService
             ("displayname", "eq") => query.Where(g => g.Name == value),
             ("displayname", "co") => query.Where(g => g.Name.Contains(value)),
             ("displayname", "sw") => query.Where(g => g.Name.StartsWith(value)),
-            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(g => g.Id == id) : query,
-            _ => query
+            ("id", "eq") => Guid.TryParse(value, out var id) ? query.Where(g => g.Id == id) : throw UnsupportedFilter(attribute, op, "value must be a GUID"),
+            _ => throw UnsupportedFilter(attribute, op)
         };
     }
 

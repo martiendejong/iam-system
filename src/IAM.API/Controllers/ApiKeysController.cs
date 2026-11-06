@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using Hazina.Security.ApiKeys;
+using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -34,21 +35,34 @@ public class ApiKeysController : ControllerBase
             return BadRequest(new { error = "scope must be one of: read, write, admin." });
 
         var tenantId = request.TenantId;
-        var denied = CheckMayIssue(scope, ref tenantId);
-        if (denied != null)
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = denied });
+        var ct = HttpContext.RequestAborted;
+        var check = User.IsApiKey()
+            ? CheckApiKeyMayIssue(scope, tenantId)
+            : await CheckHumanMayIssueAsync(scope, userId.Value, tenantId, ct);
+        if (check.Error != null)
+            return StatusCode(check.Status, new { error = check.Error });
+        tenantId = check.TenantId;
 
-        var (apiKey, rawKey) = await _apiKeyService.CreateApiKeyAsync(
-            name: request.Name,
-            userId: userId,
-            tenantId: tenantId,
-            permissions: request.Permissions,
-            expiresAt: request.ExpiresAt,
-            rateLimitPerMinute: request.RateLimitPerMinute,
-            description: request.Description,
-            scope: scope.ToClaimValue(),
-            ct: HttpContext.RequestAborted
-        );
+        ApiKey apiKey;
+        string rawKey;
+        try
+        {
+            (apiKey, rawKey) = await _apiKeyService.CreateApiKeyAsync(
+                name: request.Name,
+                userId: userId,
+                tenantId: tenantId,
+                permissions: request.Permissions,
+                expiresAt: request.ExpiresAt,
+                rateLimitPerMinute: request.RateLimitPerMinute,
+                description: request.Description,
+                scope: scope.ToClaimValue(),
+                ct: ct
+            );
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
 
         return CreatedAtAction(nameof(GetApiKeys), new
         {
@@ -193,8 +207,8 @@ public class ApiKeysController : ControllerBase
 
     /// <summary>
     /// A key can never be minted with more power than the caller has:
-    /// an API-key caller may only issue keys up to its own scope, inside its own tenant; an admin-scope key
-    /// needs an admin user. Returns null when allowed.
+    /// an API-key caller may only issue keys up to its own scope, inside its own tenant. Human callers are
+    /// checked in <see cref="CheckHumanMayIssueAsync"/>. Returns null when allowed.
     /// </summary>
     private string? CheckMayIssue(ApiKeyScope scope, ref Guid? tenantId)
     {
@@ -219,11 +233,57 @@ public class ApiKeysController : ControllerBase
             return null;
         }
 
-        // Admin scope is the one power that did not exist before scopes: it takes an admin user to hand it out.
-        if (scope == ApiKeyScope.Admin && !User.IsInRole("SuperAdmin") && !User.IsInRole("SystemAdmin"))
-            return "Only SuperAdmin/SystemAdmin users can issue admin-scope API keys.";
-
         return null;
+    }
+
+    private sealed record IssueCheck(int Status, string? Error, Guid? TenantId);
+
+    private IssueCheck CheckApiKeyMayIssue(ApiKeyScope scope, Guid? requestedTenant)
+    {
+        var tenantId = requestedTenant;
+        var denied = CheckMayIssue(scope, ref tenantId);
+        return new IssueCheck(StatusCodes.Status403Forbidden, denied, tenantId);
+    }
+
+    /// <summary>
+    /// A human caller issues keys according to its real authority (task 4701): platform-wide keys need
+    /// SuperAdmin/SystemAdmin; a tenant key needs SuperAdmin/SystemAdmin or a TenantAdmin role scoped to that
+    /// tenant (a tenant_id claim, when present, must match). Everyone else gets 403. A tenant admin who omits the
+    /// tenant gets their own tenant - never platform-wide. Admin scope stays global-admin only.
+    /// </summary>
+    private async Task<IssueCheck> CheckHumanMayIssueAsync(ApiKeyScope scope, Guid userId, Guid? requestedTenant, CancellationToken ct)
+    {
+        const int Forbidden = StatusCodes.Status403Forbidden;
+
+        if (User.IsInRole("SuperAdmin") || User.IsInRole("SystemAdmin"))
+            return new IssueCheck(Forbidden, null, requestedTenant);
+
+        if (scope == ApiKeyScope.Admin)
+            return new IssueCheck(Forbidden, "Only SuperAdmin/SystemAdmin users can issue admin-scope API keys.", null);
+
+        var administered = (await _apiKeyService.GetAdministeredTenantIdsAsync(userId, ct)).ToList();
+
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim))
+        {
+            if (!Guid.TryParse(tenantClaim, out var claimed))
+                return new IssueCheck(Forbidden, "Token tenant is invalid.", null);
+            administered = administered.Where(t => t == claimed).ToList();
+        }
+
+        if (administered.Count == 0)
+            return new IssueCheck(Forbidden, "Only SuperAdmin/SystemAdmin or a tenant admin can issue API keys.", null);
+
+        if (requestedTenant is null)
+        {
+            return administered.Count == 1
+                ? new IssueCheck(Forbidden, null, administered[0])
+                : new IssueCheck(StatusCodes.Status400BadRequest, "tenantId is required: you administer several tenants.", null);
+        }
+
+        return administered.Contains(requestedTenant.Value)
+            ? new IssueCheck(Forbidden, null, requestedTenant)
+            : new IssueCheck(Forbidden, "You can only issue API keys for a tenant you administer.", null);
     }
 
     /// <summary>

@@ -8,7 +8,11 @@ public interface ICertificateAuthorityService
     Task<(DeviceCertificate Certificate, string PrivateKeyPem)> IssueCertificateAsync(Guid deviceId, CertificateRequest request, Guid? issuedByUserId = null, CancellationToken ct = default);
     Task<bool> RevokeCertificateAsync(Guid certificateId, string reason, Guid? revokedByUserId = null, CancellationToken ct = default);
     Task<CertificateValidationResult> ValidateCertificateAsync(string certificatePem, CancellationToken ct = default);
-    Task<List<DeviceCertificate>> GetExpiringCertificatesAsync(int daysBeforeExpiry = 30, CancellationToken ct = default);
+    Task<List<DeviceCertificate>> GetExpiringCertificatesAsync(int daysBeforeExpiry = 30, IReadOnlyCollection<Guid>? tenantIds = null, CancellationToken ct = default);
+    /// <summary>Tenant of a stored device, or null when there is none (task 5148: authorization uses the stored tenant).</summary>
+    Task<Guid?> GetDeviceTenantIdAsync(Guid deviceId, CancellationToken ct = default);
+    /// <summary>Tenant of the device a stored certificate belongs to, or null when the certificate is unknown.</summary>
+    Task<Guid?> GetCertificateTenantIdAsync(Guid certificateId, CancellationToken ct = default);
     Task<(DeviceCertificate NewCertificate, string PrivateKeyPem)> RenewCertificateAsync(Guid certificateId, Guid? renewedByUserId = null, CancellationToken ct = default);
     Task<string> GetCrlPemAsync(CancellationToken ct = default); // Certificate Revocation List
 }

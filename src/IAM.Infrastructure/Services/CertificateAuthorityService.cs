@@ -18,6 +18,7 @@ public class CertificateAuthorityService : ICertificateAuthorityService
     private readonly IConfiguration _configuration;
     private readonly ILogger<CertificateAuthorityService> _logger;
 
+    private readonly CertificateAuthoritySettings _settings;
     private readonly string _caCertificatePath;
     private readonly string _caCertificatePassword;
     private readonly int _defaultValidityDays;
@@ -29,14 +30,18 @@ public class CertificateAuthorityService : ICertificateAuthorityService
     public CertificateAuthorityService(
         IAMDbContext context,
         IConfiguration configuration,
+        CertificateAuthoritySettings settings,
         ILogger<CertificateAuthorityService> logger)
     {
         _context = context;
         _configuration = configuration;
         _logger = logger;
 
-        _caCertificatePath = configuration["Ca:CertificatePath"] ?? "./ca-certs/ca.pfx";
-        _caCertificatePassword = configuration["Ca:CertificatePassword"] ?? "IAM-CA-Default-Password";
+        // Task 5165: path and password come from the settings resolved (and validated) at startup. There is no
+        // fallback password here: a missing one stopped the app before this constructor could run.
+        _settings = settings;
+        _caCertificatePath = settings.CertificatePath;
+        _caCertificatePassword = settings.CertificatePassword;
         _defaultValidityDays = configuration.GetValue<int>("Ca:DefaultValidityDays", 365);
         _rootValidityYears = configuration.GetValue<int>("Ca:RootValidityYears", 10);
         _caSubjectName = configuration["Ca:SubjectName"] ?? "CN=IAM System CA, O=IAM System";
@@ -76,8 +81,12 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         if (!device.IsActive)
             throw new InvalidOperationException($"Device {deviceId} is not active");
 
-        var validityDays = request.ValidityDays > 0 ? request.ValidityDays : _defaultValidityDays;
-        var keySizeBits = request.KeySizeInBits >= 2048 ? request.KeySizeInBits : 2048;
+        // Task 5148: the limits hold here as well as in the controller, so no caller of the service can exceed them.
+        var validityDays = request.ValidityDays > 0 ? request.ValidityDays : Math.Min(_defaultValidityDays, CertificateIssuingRules.MaxValidityDays);
+        var keySizeBits = request.KeySizeInBits;
+        var problem = CertificateIssuingRules.Check(validityDays, keySizeBits, request.CommonName, request.Organization, request.OrganizationalUnit);
+        if (problem != null)
+            throw new InvalidOperationException(problem);
 
         using var caCert = await GetOrCreateCaCertificateAsync(ct);
 
@@ -85,13 +94,16 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         using var deviceKey = RSA.Create(keySizeBits);
 
         // Build the subject name
-        var subjectBuilder = new StringBuilder($"CN={request.CommonName}");
+        // Built from typed parts, never by pasting text into a "CN=..., O=..." string, so a separator inside a name
+        // field stays part of its value and cannot add another name part (task 5148).
+        var subjectBuilder = new X500DistinguishedNameBuilder();
+        subjectBuilder.AddCommonName(request.CommonName);
         if (!string.IsNullOrWhiteSpace(request.Organization))
-            subjectBuilder.Append($", O={request.Organization}");
+            subjectBuilder.AddOrganizationName(request.Organization);
         if (!string.IsNullOrWhiteSpace(request.OrganizationalUnit))
-            subjectBuilder.Append($", OU={request.OrganizationalUnit}");
+            subjectBuilder.AddOrganizationalUnitName(request.OrganizationalUnit);
 
-        var subjectName = new X500DistinguishedName(subjectBuilder.ToString());
+        var subjectName = subjectBuilder.Build();
 
         // Create certificate request (CSR)
         var csr = new X509CertificateRequest(
@@ -266,15 +278,38 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
     public async Task<List<DeviceCertificate>> GetExpiringCertificatesAsync(
         int daysBeforeExpiry = 30,
+        IReadOnlyCollection<Guid>? tenantIds = null,
         CancellationToken ct = default)
     {
         var cutoffDate = DateTime.UtcNow.AddDays(daysBeforeExpiry);
 
-        return await _context.DeviceCertificates
+        var query = _context.DeviceCertificates
             .Include(c => c.Device)
-            .Where(c => c.Status == "Active" && c.NotAfter <= cutoffDate)
+            .Where(c => c.Status == "Active" && c.NotAfter <= cutoffDate);
+
+        // Task 5148: a caller who manages some tenants only sees the certificates of those tenants' devices.
+        if (tenantIds != null)
+            query = query.Where(c => tenantIds.Contains(c.Device!.TenantId));
+
+        return await query
             .OrderBy(c => c.NotAfter)
             .ToListAsync(ct);
+    }
+
+    public async Task<Guid?> GetDeviceTenantIdAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        return await _context.Devices.AsNoTracking()
+            .Where(d => d.Id == deviceId)
+            .Select(d => (Guid?)d.TenantId)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<Guid?> GetCertificateTenantIdAsync(Guid certificateId, CancellationToken ct = default)
+    {
+        return await _context.DeviceCertificates.AsNoTracking()
+            .Where(c => c.Id == certificateId)
+            .Select(c => (Guid?)c.Device!.TenantId)
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<(DeviceCertificate NewCertificate, string PrivateKeyPem)> RenewCertificateAsync(
@@ -309,14 +344,15 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
         using (parsedCert)
         {
-            commonName = GetRdnValue(parsedCert.Subject, "CN") ?? existingCert.Device.DeviceId;
-            organization = GetRdnValue(parsedCert.Subject, "O");
-            organizationalUnit = GetRdnValue(parsedCert.Subject, "OU");
+            commonName = GetRdnValue(parsedCert.SubjectName, "CN") ?? existingCert.Device.DeviceId;
+            organization = GetRdnValue(parsedCert.SubjectName, "O");
+            organizationalUnit = GetRdnValue(parsedCert.SubjectName, "OU");
         }
 
         // Calculate the same validity period as the original
         var originalValidityDays = (int)(existingCert.NotAfter - existingCert.NotBefore).TotalDays;
         var validityDays = originalValidityDays > 0 ? originalValidityDays : _defaultValidityDays;
+        validityDays = Math.Min(validityDays, CertificateIssuingRules.MaxValidityDays); // older certificates may be longer
 
         // Issue new certificate with the same subject
         var request = new CertificateRequest
@@ -325,7 +361,7 @@ public class CertificateAuthorityService : ICertificateAuthorityService
             Organization = organization,
             OrganizationalUnit = organizationalUnit,
             ValidityDays = validityDays,
-            KeySizeInBits = 2048
+            KeySizeInBits = CertificateIssuingRules.AllowedKeySizes[0]
         };
 
         var (newCert, privateKeyPem) = await IssueCertificateAsync(
@@ -379,29 +415,17 @@ public class CertificateAuthorityService : ICertificateAuthorityService
 
     // ─── Private helpers ──────────────────────────────────────────────
 
+    private const X509KeyStorageFlags CaKeyStorageFlags = X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
+
     private async Task<X509Certificate2> GetOrCreateCaCertificateAsync(CancellationToken ct)
     {
-        // Fast path: check if PFX already exists on disk
-        if (File.Exists(_caCertificatePath))
-        {
-            return new X509Certificate2(
-                _caCertificatePath,
-                _caCertificatePassword,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
-        }
-
-        // Slow path: generate new CA certificate (thread-safe)
+        // One caller at a time: generating a new CA and the one-time re-protect of an old key file both write the
+        // file, so neither may run twice concurrently.
         await _caLock.WaitAsync(ct);
         try
         {
-            // Double-check after acquiring lock
             if (File.Exists(_caCertificatePath))
-            {
-                return new X509Certificate2(
-                    _caCertificatePath,
-                    _caCertificatePassword,
-                    X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
-            }
+                return LoadCaCertificate();
 
             return GenerateAndStoreCaCertificate();
         }
@@ -409,6 +433,79 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         {
             _caLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Opens the CA key file with the configured password. Only if that fails AND an explicit
+    /// <see cref="CertificateAuthoritySettings.LegacyCertificatePassword"/> is configured, the file is opened with the
+    /// legacy password and re-saved with the configured one (same key, same certificate, same thumbprint). The legacy
+    /// password is never a fallback for anything else.
+    /// </summary>
+    private X509Certificate2 LoadCaCertificate()
+    {
+        if (_settings.UsesLegacyDefaultLocation)
+        {
+            _logger.LogWarning(
+                "CA key file is still at the old default location {Path}. Move it outside the application folder and set Ca:CertificatePath.",
+                _caCertificatePath);
+        }
+
+        try
+        {
+            return X509CertificateLoader.LoadPkcs12FromFile(_caCertificatePath, _caCertificatePassword, CaKeyStorageFlags);
+        }
+        catch (CryptographicException ex)
+        {
+            if (_settings.LegacyCertificatePassword == null)
+                throw CannotOpen(ex, legacyTried: false);
+
+            X509Certificate2 legacyCert;
+            try
+            {
+                legacyCert = X509CertificateLoader.LoadPkcs12FromFile(
+                    _caCertificatePath, _settings.LegacyCertificatePassword, CaKeyStorageFlags);
+            }
+            catch (CryptographicException)
+            {
+                throw CannotOpen(ex, legacyTried: true);
+            }
+
+            using (legacyCert)
+            {
+                return ReProtectCaFile(legacyCert);
+            }
+        }
+    }
+
+    private InvalidOperationException CannotOpen(Exception inner, bool legacyTried) =>
+        new(
+            $"The CA key file at '{_caCertificatePath}' could not be opened with the configured Ca:CertificatePassword" +
+            (legacyTried ? " or with Ca:LegacyCertificatePassword" : string.Empty) +
+            ". Check that Ca:CertificatePassword is the password this file was saved with; to upgrade a file made by an " +
+            "older version, also set Ca:LegacyCertificatePassword to the password it was made with (one-time).",
+            inner);
+
+    private X509Certificate2 ReProtectCaFile(X509Certificate2 openedWithLegacyPassword)
+    {
+        var pfxBytes = openedWithLegacyPassword.Export(X509ContentType.Pfx, _caCertificatePassword);
+
+        // Prove the new file opens with the new password and is the same CA before replacing anything.
+        var reopened = X509CertificateLoader.LoadPkcs12(pfxBytes, _caCertificatePassword, CaKeyStorageFlags);
+        if (!string.Equals(reopened.Thumbprint, openedWithLegacyPassword.Thumbprint, StringComparison.Ordinal))
+        {
+            reopened.Dispose();
+            throw new InvalidOperationException("Re-protecting the CA key file changed the CA thumbprint; the file was left untouched.");
+        }
+
+        var tempPath = _caCertificatePath + ".tmp";
+        File.WriteAllBytes(tempPath, pfxBytes);
+        File.Move(tempPath, _caCertificatePath, overwrite: true);
+
+        _logger.LogWarning(
+            "CA key file {Path} was protected with the legacy password and has been re-saved with the configured Ca:CertificatePassword (thumbprint {Thumbprint} unchanged). Remove Ca:LegacyCertificatePassword from configuration.",
+            _caCertificatePath, reopened.Thumbprint);
+
+        return reopened;
     }
 
     private X509Certificate2 GenerateAndStoreCaCertificate()
@@ -497,20 +594,19 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         return BitConverter.ToString(serialBytes).Replace("-", ":");
     }
 
-    private static string? GetRdnValue(string distinguishedName, string rdnType)
+    private static string? GetRdnValue(X500DistinguishedName distinguishedName, string rdnType)
     {
-        // Parse "CN=value, O=org, OU=unit" format
-        var parts = distinguishedName.Split(',', StringSplitOptions.TrimEntries);
-        foreach (var part in parts)
+        // Read the parsed name (escaped separators stay inside their value), not a split on ','.
+        var oid = rdnType.ToUpperInvariant() switch { "CN" => "2.5.4.3", "O" => "2.5.4.10", "OU" => "2.5.4.11", _ => null };
+        if (oid == null)
+            return null;
+
+        foreach (var rdn in distinguishedName.EnumerateRelativeDistinguishedNames())
         {
-            var equalsIndex = part.IndexOf('=');
-            if (equalsIndex > 0)
-            {
-                var key = part[..equalsIndex].Trim();
-                var value = part[(equalsIndex + 1)..].Trim();
-                if (key.Equals(rdnType, StringComparison.OrdinalIgnoreCase))
-                    return value;
-            }
+            if (rdn.HasMultipleElements)
+                continue;
+            if (rdn.GetSingleElementType().Value == oid)
+                return rdn.GetSingleElementValue();
         }
         return null;
     }
