@@ -2375,6 +2375,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("EligibleRoleId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -2703,6 +2706,9 @@ namespace IAM.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(100)");
 
                     b.Property<string>("BreakGlassApprovers")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("BreakGlassConfirmations")
                         .HasColumnType("jsonb");
 
                     b.Property<DateTime?>("CheckedInAt")
