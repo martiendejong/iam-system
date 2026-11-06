@@ -39,20 +39,20 @@ public class IoTDeviceController : BuildingManagementControllerBase
     }
 
     [HttpGet]
-    [ProducesResponseType(typeof(IEnumerable<IoTDevice>), 200)]
-    public async Task<ActionResult<IEnumerable<IoTDevice>>> GetAll([FromQuery] bool includeInactive = false, CancellationToken ct = default)
+    [ProducesResponseType(typeof(IEnumerable<IoTDeviceSummary>), 200)]
+    public async Task<ActionResult<IEnumerable<IoTDeviceSummary>>> GetAll([FromQuery] bool includeInactive = false, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
 
         var devices = await _deviceService.GetAllAsync(scope.TenantId, includeInactive);
-        return Ok(devices);
+        return Ok(IoTDeviceSummary.ForReader(devices, scope.CanManage));
     }
 
     [HttpGet("{id}")]
-    [ProducesResponseType(typeof(IoTDevice), 200)]
+    [ProducesResponseType(typeof(IoTDeviceSummary), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<IoTDevice>> GetById(Guid id, CancellationToken ct = default)
+    public async Task<ActionResult<IoTDeviceSummary>> GetById(Guid id, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
@@ -62,13 +62,13 @@ public class IoTDeviceController : BuildingManagementControllerBase
         if (device == null)
             return NotFound();
 
-        return Ok(device);
+        return Ok(IoTDeviceSummary.ForReader(device, scope.CanManage));
     }
 
     [HttpGet("device-id/{deviceId}")]
-    [ProducesResponseType(typeof(IoTDevice), 200)]
+    [ProducesResponseType(typeof(IoTDeviceSummary), 200)]
     [ProducesResponseType(404)]
-    public async Task<ActionResult<IoTDevice>> GetByDeviceId(string deviceId, CancellationToken ct = default)
+    public async Task<ActionResult<IoTDeviceSummary>> GetByDeviceId(string deviceId, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
@@ -78,51 +78,51 @@ public class IoTDeviceController : BuildingManagementControllerBase
         if (device == null)
             return NotFound();
 
-        return Ok(device);
+        return Ok(IoTDeviceSummary.ForReader(device, scope.CanManage));
     }
 
     [HttpGet("room/{roomId}")]
-    [ProducesResponseType(typeof(IEnumerable<IoTDevice>), 200)]
-    public async Task<ActionResult<IEnumerable<IoTDevice>>> GetByRoom(Guid roomId, CancellationToken ct = default)
+    [ProducesResponseType(typeof(IEnumerable<IoTDeviceSummary>), 200)]
+    public async Task<ActionResult<IEnumerable<IoTDeviceSummary>>> GetByRoom(Guid roomId, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
 
         var devices = await _deviceService.GetByRoomAsync(roomId, scope.TenantId);
-        return Ok(devices);
+        return Ok(IoTDeviceSummary.ForReader(devices, scope.CanManage));
     }
 
     [HttpGet("type/{type}")]
-    [ProducesResponseType(typeof(IEnumerable<IoTDevice>), 200)]
-    public async Task<ActionResult<IEnumerable<IoTDevice>>> GetByType(DeviceType type, CancellationToken ct = default)
+    [ProducesResponseType(typeof(IEnumerable<IoTDeviceSummary>), 200)]
+    public async Task<ActionResult<IEnumerable<IoTDeviceSummary>>> GetByType(DeviceType type, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
 
         var devices = await _deviceService.GetByTypeAsync(type, scope.TenantId);
-        return Ok(devices);
+        return Ok(IoTDeviceSummary.ForReader(devices, scope.CanManage));
     }
 
     [HttpGet("status/{status}")]
-    [ProducesResponseType(typeof(IEnumerable<IoTDevice>), 200)]
-    public async Task<ActionResult<IEnumerable<IoTDevice>>> GetByStatus(DeviceStatus status, CancellationToken ct = default)
+    [ProducesResponseType(typeof(IEnumerable<IoTDeviceSummary>), 200)]
+    public async Task<ActionResult<IEnumerable<IoTDeviceSummary>>> GetByStatus(DeviceStatus status, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
 
         var devices = await _deviceService.GetByStatusAsync(status, scope.TenantId);
-        return Ok(devices);
+        return Ok(IoTDeviceSummary.ForReader(devices, scope.CanManage));
     }
 
     [HttpGet("streaming")]
-    [ProducesResponseType(typeof(IEnumerable<IoTDevice>), 200)]
-    public async Task<ActionResult<IEnumerable<IoTDevice>>> GetStreamingDevices(CancellationToken ct = default)
+    [ProducesResponseType(typeof(IEnumerable<IoTDeviceSummary>), 200)]
+    public async Task<ActionResult<IEnumerable<IoTDeviceSummary>>> GetStreamingDevices(CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
 
         var devices = await _deviceService.GetStreamingDevicesAsync(scope.TenantId);
-        return Ok(devices);
+        return Ok(IoTDeviceSummary.ForReader(devices, scope.CanManage));
     }
 
     [HttpPost]
