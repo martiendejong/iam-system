@@ -69,6 +69,12 @@ public class AuthResult
     public bool RequiresTwoFactor { get; set; }
 
     /// <summary>
+    /// True when the sign-in / token renewal was refused by a tenant IP allowlist (task 5570).
+    /// Error holds the generic ISignInNetworkGate.RefusalMessage; the caller answers 403.
+    /// </summary>
+    public bool NetworkBlocked { get; set; }
+
+    /// <summary>
     /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,
     /// resolved from the user's organization Token Configuration when one exists,
     /// otherwise today's default. Unset (0) when no tokens were issued.

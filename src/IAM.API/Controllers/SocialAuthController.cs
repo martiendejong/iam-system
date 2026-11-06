@@ -50,10 +50,19 @@ public class SocialAuthController : ControllerBase
         Guid providerId,
         [FromBody] SocialCallbackRequest request)
     {
-        var result = await _socialAuthService.HandleCallbackAsync(providerId, request.Code, request.State);
+        // Task 5570: the address the tenant IP allowlist is checked against - RemoteIpAddress after
+        // UseForwardedHeaders (trusted proxy only), never a header or body value.
+        var result = await _socialAuthService.HandleCallbackAsync(
+            providerId, request.Code, request.State,
+            HttpContext.Connection.RemoteIpAddress?.ToString(), Request.Headers["User-Agent"].ToString());
 
         if (!result.Success)
         {
+            if (result.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
+            }
+
             return BadRequest(new { error = result.Error });
         }
 
