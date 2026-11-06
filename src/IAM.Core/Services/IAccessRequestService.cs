@@ -28,6 +28,12 @@ public interface IAccessRequestService
     Task<AccessRequest?> GetRequestAsync(Guid requestId, CancellationToken ct = default);
 
     /// <summary>
+    /// True when the user is the requester or is assigned to one of the request's approval steps, directly or through
+    /// the step's approver role (task 5631). Tenant administrators are decided by the caller.
+    /// </summary>
+    Task<bool> IsRequesterOrApproverAsync(AccessRequest request, Guid userId, CancellationToken ct = default);
+
+    /// <summary>
     /// Get access requests submitted by a specific user.
     /// </summary>
     Task<List<AccessRequest>> GetMyRequestsAsync(Guid requesterId, CancellationToken ct = default);

@@ -179,6 +179,29 @@ public class AccessRequestService : IAccessRequestService
             .FirstOrDefaultAsync(r => r.Id == requestId, ct);
     }
 
+    public async Task<bool> IsRequesterOrApproverAsync(AccessRequest request, Guid userId, CancellationToken ct = default)
+    {
+        if (request.RequesterId == userId)
+            return true;
+
+        var steps = await _context.ApprovalSteps
+            .AsNoTracking()
+            .Where(s => s.AccessRequestId == request.Id)
+            .Select(s => new { s.ApproverId, s.ApproverRoleId })
+            .ToListAsync(ct);
+
+        if (steps.Any(s => s.ApproverId == userId))
+            return true;
+
+        var roleIds = steps.Where(s => s.ApproverRoleId != null).Select(s => s.ApproverRoleId!.Value).Distinct().ToList();
+        if (roleIds.Count == 0)
+            return false;
+
+        return await _context.UserRoles
+            .AsNoTracking()
+            .AnyAsync(ur => ur.UserId == userId && roleIds.Contains(ur.RoleId), ct);
+    }
+
     public async Task<List<AccessRequest>> GetMyRequestsAsync(Guid requesterId, CancellationToken ct = default)
     {
         return await _context.AccessRequests
