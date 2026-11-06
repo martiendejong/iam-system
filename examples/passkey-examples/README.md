@@ -189,8 +189,15 @@ Authorization: Bearer <token>
 
 {
   "username": "user@example.com",
-  "displayName": "John Doe"
+  "displayName": "John Doe",
+  "currentPassword": "...",   // re-confirmation: current password, OR
+  "emailCode": "123456"       // a one-time code from POST /api/mfa/confirmation-code
 }
+
+Without a valid confirmation the server answers 403 {"code":"confirmation_required"}
+(423 when the account is locked) and issues no challenge. A wrong password counts toward
+the normal login lockout. The code is e-mailed to the verified address, valid for 10
+minutes and single use. A success is audited and e-mailed to the owner.
 
 Response:
 {

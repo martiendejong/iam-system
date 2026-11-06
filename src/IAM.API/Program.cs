@@ -106,6 +106,7 @@ builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"))
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
+builder.Services.AddScoped<IAM.API.Auth.SensitiveActionGuard>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
 builder.Services.AddScoped<IAccountLinkingService, AccountLinkingService>();
