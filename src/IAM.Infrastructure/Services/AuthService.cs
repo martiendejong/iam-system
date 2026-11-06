@@ -212,7 +212,10 @@ public class AuthService : IAuthService
         // Password failures no longer touch FailedLoginAttempts / IsLockedOut / LockoutEnd; they carry
         // the 2FA counter. While a second factor is still pending a correct password must NOT reset it
         // (it would hand out a fresh set of code guesses); an expired lock is the one thing to clear.
-        if (!user.TwoFactorEnabled || user.IsLockedOut)
+        // Task 5569: a user of a Require-MFA organization owes the e-mailed code even when they never
+        // switched 2FA on themselves, so that code is pending exactly like an enrolled user's.
+        var mfaRequiredByOrganization = await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id);
+        if ((!user.TwoFactorEnabled && !mfaRequiredByOrganization) || user.IsLockedOut)
         {
             LoginLockout.Reset(user);
         }
@@ -235,7 +238,7 @@ public class AuthService : IAuthService
             };
         }
 
-        if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
+        if (HasEmailTwoFactor(user) || mfaRequiredByOrganization)
         {
             await _context.SaveChangesAsync();
             await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
@@ -380,6 +383,17 @@ public class AuthService : IAuthService
             return InvalidRefreshToken();
         }
 
+        // Task 5569: a session that never completed a second factor cannot be extended once the user
+        // belongs to a Require-MFA organization (the setting was switched on after sign-in, or the
+        // user joined such an organization). Same generic error as any unusable token: the client
+        // falls back to the normal sign-in, which asks for the code. Rotation below carries the flag
+        // forward, so a session that did complete MFA keeps refreshing.
+        if (!storedToken.MfaCompleted &&
+            await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, storedToken.UserId))
+        {
+            return InvalidRefreshToken();
+        }
+
         // ANOMALY DETECTION: Check if device fingerprint changed
         var ipChanged = !string.IsNullOrEmpty(storedToken.IpAddress) &&
                         !string.IsNullOrEmpty(ipAddress) &&
@@ -426,7 +440,8 @@ public class AuthService : IAuthService
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress ?? storedToken.IpAddress,    // Use new IP or fall back to original
             UserAgent = userAgent ?? storedToken.UserAgent,    // Use new UA or fall back to original
-            RememberMe = storedToken.RememberMe                // Carry the choice forward through rotation
+            RememberMe = storedToken.RememberMe,               // Carry the choice forward through rotation
+            MfaCompleted = storedToken.MfaCompleted            // ...and the second factor completed at sign-in
         };
 
         // SINGLE-USE TOKENS: Revoke the old refresh token immediately; Rotate also records
@@ -437,7 +452,7 @@ public class AuthService : IAuthService
         await _context.SaveChangesAsync();
 
         // Generate new access token with token binding (binds to NEW refresh token ID)
-        var accessToken = GenerateAccessToken(storedToken.User, accessMinutes, newRefreshTokenId);
+        var accessToken = GenerateAccessToken(storedToken.User, accessMinutes, newRefreshTokenId, storedToken.MfaCompleted);
 
         return new AuthResult
         {
@@ -536,6 +551,30 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> LoginBypassPasswordAsync(User user, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
     {
+        // Task 5569: this public entry never completes a second factor, so for a Require-MFA member it
+        // suspends the sign-in with the code challenge instead of issuing tokens.
+        if (user.IsActive && await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id))
+        {
+            await _otpService.SendLoginTwoFactorCodeAsync(user);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresTwoFactor = true,
+                User = user
+            };
+        }
+
+        return await IssueSessionAsync(user, ipAddress, userAgent, rememberMe, mfaCompleted: false);
+    }
+
+    /// <summary>
+    /// Issues the session tokens. Callers must already have passed every gate; <paramref name="mfaCompleted"/>
+    /// records whether this sign-in completed a second factor (carried by the access token's amr claim and
+    /// the refresh token, so the refresh path cannot be used to skip the factor later).
+    /// </summary>
+    private async Task<AuthResult> IssueSessionAsync(User user, string? ipAddress, string? userAgent, bool rememberMe, bool mfaCompleted)
+    {
         if (!user.IsActive)
         {
             return new AuthResult
@@ -573,13 +612,14 @@ public class AuthService : IAuthService
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
             IpAddress = ipAddress,
             UserAgent = userAgent,
-            RememberMe = rememberMe
+            RememberMe = rememberMe,
+            MfaCompleted = mfaCompleted
         };
 
         _context.RefreshTokens.Add(refreshTokenEntity);
         await _context.SaveChangesAsync();
 
-        var accessToken = GenerateAccessToken(user, accessMinutes, refreshTokenId);
+        var accessToken = GenerateAccessToken(user, accessMinutes, refreshTokenId, mfaCompleted);
 
         return new AuthResult
         {
@@ -588,13 +628,14 @@ public class AuthService : IAuthService
             RefreshToken = refreshToken,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
-            RefreshTokenLifetimeDays = refreshDays
+            RefreshTokenLifetimeDays = refreshDays,
+            MfaCompleted = mfaCompleted
         };
     }
 
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
-        if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
+        if (HasEmailTwoFactor(user) || await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id))
         {
             await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
 
@@ -606,7 +647,7 @@ public class AuthService : IAuthService
             };
         }
 
-        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
+        return await IssueSessionAsync(user, ipAddress, userAgent, rememberMe, mfaCompleted: false);
     }
 
     public async Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
@@ -636,7 +677,8 @@ public class AuthService : IAuthService
             };
         }
 
-        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
+        // The emailed MfaVerification code was just entered: that is a completed second factor.
+        return await IssueSessionAsync(user, ipAddress, userAgent, rememberMe, mfaCompleted: true);
     }
 
     public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
@@ -646,7 +688,8 @@ public class AuthService : IAuthService
                 .ThenInclude(ur => ur.Role)
             .FirstOrDefaultAsync(u => u.Id == userId);
 
-        if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
+        if (user == null ||
+            !(HasEmailTwoFactor(user) || await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id)))
         {
             return new AuthResult
             {
@@ -688,14 +731,15 @@ public class AuthService : IAuthService
             };
         }
 
-        return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
+        return await IssueSessionAsync(user, ipAddress, userAgent, rememberMe, mfaCompleted: true);
     }
 
     public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null)
     {
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
 
-        if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
+        if (user == null ||
+            !(HasEmailTwoFactor(user) || await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id)))
         {
             // Don't reveal account state to an unauthenticated caller
             return true;
@@ -735,7 +779,10 @@ public class AuthService : IAuthService
         Error = "Invalid or expired refresh token"
     };
 
-    private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null)
+    private static bool HasEmailTwoFactor(User user) =>
+        user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email;
+
+    private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null, bool mfaCompleted = false)
     {
         var claims = new List<Claim>
         {
@@ -748,6 +795,12 @@ public class AuthService : IAuthService
         if (refreshTokenId.HasValue)
         {
             claims.Add(new Claim("refresh_token_id", refreshTokenId.Value.ToString()));
+        }
+
+        // Task 5569: tell resource servers that a second factor was completed in this session.
+        if (mfaCompleted)
+        {
+            claims.Add(new Claim(OrganizationMfaPolicy.AuthenticationMethodsClaimType, OrganizationMfaPolicy.MultiFactorValue));
         }
 
         // Add roles

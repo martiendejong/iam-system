@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Security.Claims;
 using IAM.Core.Services;
+using IAM.Infrastructure.Services;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore;
@@ -116,6 +117,21 @@ public class AuthorizationController : ControllerBase
         // Federated app-role gate — shared with the refresh_token grant in Exchange, see
         // EvaluateAppRoleGateAsync. Only the denial rendering differs: login shows an HTML
         // page, refresh returns an OAuth invalid_grant error, prompt=none returns access_denied.
+        // Task 5569: a member of a Require-MFA organization only gets tokens from a session whose
+        // sign-in completed a second factor. A session without it (created before the setting was
+        // switched on, or by a route that never asked for the factor) is treated as not signed in,
+        // so the normal login - which asks for the e-mailed code - runs again.
+        var sessionHasMfa = result.Principal.HasClaim(OrganizationMfaPolicy.SessionMfaClaimType, "true");
+        if (!sessionHasMfa && await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id))
+        {
+            if (silent)
+                return SilentSignInDenied(Errors.LoginRequired, "Multi-factor authentication is required for this account.");
+
+            var mfaReturnUrl = Request.Path + QueryString.Create(
+                Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
+            return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(mfaReturnUrl)}");
+        }
+
         var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
         if (!gate.Allowed)
         {
@@ -164,6 +180,14 @@ public class AuthorizationController : ControllerBase
         if (tenantIdForToken.HasValue)
         {
             identity.SetClaim(TenantIdClaimType, tenantIdForToken.Value.ToString());
+        }
+
+        // Task 5569: record that this sign-in completed a second factor. It lands in the access and
+        // id tokens, and in the refresh token's stored principal, which is what the refresh_token
+        // grant checks below.
+        if (sessionHasMfa)
+        {
+            identity.AddClaim(new Claim(OrganizationMfaPolicy.AuthenticationMethodsClaimType, OrganizationMfaPolicy.MultiFactorValue));
         }
 
         // Set scopes
@@ -237,6 +261,24 @@ public class AuthorizationController : ControllerBase
                         [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
                         [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
                             "The user account is no longer active."
+                    }));
+            }
+
+            // Task 5569: the Require-MFA setting can be switched on while a refresh token is still valid.
+            // A token whose sign-in never completed a second factor (no amr=mfa in its stored principal)
+            // cannot be exchanged or refreshed for a member of such an organization.
+            if (!claimsPrincipal.HasClaim(OrganizationMfaPolicy.AuthenticationMethodsClaimType, OrganizationMfaPolicy.MultiFactorValue) &&
+                await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id))
+            {
+                _logger.LogWarning("Refused {GrantType} for {Email}: the session did not complete the required second factor",
+                    request.GrantType, user.Email);
+                return Forbid(
+                    authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                    properties: new AuthenticationProperties(new Dictionary<string, string?>
+                    {
+                        [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
+                        [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
+                            "Multi-factor authentication is required. Sign in again."
                     }));
             }
 
@@ -360,6 +402,17 @@ public class AuthorizationController : ControllerBase
                 }
                 await _context.SaveChangesAsync();
                 return Unauthorized(new { error = Errors.InvalidGrant, error_description = "Invalid credentials." });
+            }
+
+            // Task 5569: the password grant can only prove the password. A member of a Require-MFA
+            // organization has to sign in through the interactive flow, which asks for the second factor.
+            if (await OrganizationMfaPolicy.IsMfaRequiredAsync(_context, user.Id))
+            {
+                return Unauthorized(new
+                {
+                    error = Errors.InvalidGrant,
+                    error_description = "Multi-factor authentication is required for this account. Use the interactive sign-in."
+                });
             }
 
             user.FailedLoginAttempts = 0;
@@ -532,6 +585,12 @@ public class AuthorizationController : ControllerBase
 
             // Include role claims in both access and identity tokens
             case Claims.Role:
+                yield return Destinations.AccessToken;
+                yield return Destinations.IdentityToken;
+                yield break;
+
+            // Task 5569: authentication-methods claim (amr=mfa) in both tokens
+            case OrganizationMfaPolicy.AuthenticationMethodsClaimType:
                 yield return Destinations.AccessToken;
                 yield return Destinations.IdentityToken;
                 yield break;

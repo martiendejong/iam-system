@@ -2818,6 +2818,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<string>("IpAddress")
                         .HasColumnType("text");
 
+                    b.Property<bool>("MfaCompleted")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("RememberMe")
                         .HasColumnType("boolean");
 
