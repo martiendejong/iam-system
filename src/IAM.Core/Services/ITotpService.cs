@@ -10,6 +10,8 @@ public interface ITotpService
     Task<bool> ValidateTotpLoginAsync(Guid userId, string code, CancellationToken ct = default);
     Task<List<string>> GenerateRecoveryCodesAsync(Guid userId, int count = 8, CancellationToken ct = default);
     Task<bool> UseRecoveryCodeAsync(Guid userId, string code, CancellationToken ct = default);
+    /// <summary>Encrypts legacy plain-text TOTP secrets in place (idempotent). Returns how many were converted.</summary>
+    Task<int> EncryptLegacySecretsAsync(CancellationToken ct = default);
 }
 
 public class TotpSetupResult

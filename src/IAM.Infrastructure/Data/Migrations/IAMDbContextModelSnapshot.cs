@@ -4430,6 +4430,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<int>("TwoFactorMethod")
                         .HasColumnType("integer");
 
+                    b.Property<long?>("TwoFactorLastUsedStep")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("TwoFactorSecret")
                         .HasColumnType("text");
 

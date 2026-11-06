@@ -23,7 +23,10 @@ public class User
 
     // MFA
     public bool TwoFactorEnabled { get; set; }
+    /// <summary>Authenticator secret: "enc:&lt;vault secret id&gt;" (encrypted) or legacy plain base32.</summary>
     public string? TwoFactorSecret { get; set; }
+    /// <summary>Last accepted TOTP time step; codes from this step or earlier are refused (replay guard).</summary>
+    public long? TwoFactorLastUsedStep { get; set; }
     public TwoFactorMethod TwoFactorMethod { get; set; } = TwoFactorMethod.None;
 
     // Password reset
