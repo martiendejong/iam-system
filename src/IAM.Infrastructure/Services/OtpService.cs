@@ -175,31 +175,68 @@ public class OtpService : IOtpService
             return false;
         }
 
-        // Check max attempts
-        if (otpCode.Attempts >= otpCode.MaxAttempts)
+        var otpId = otpCode.Id;
+
+        if (!_context.Database.IsRelational())
         {
-            _logger.LogWarning("OTP validation failed: max attempts exceeded");
+            // Non-relational providers (EF InMemory, unit tests only) cannot run ExecuteUpdateAsync.
+            // Production always uses Postgres and takes the atomic path below.
+            return await ValidateNonAtomicAsync(otpCode, codeHash, email ?? phoneNumber, purpose);
+        }
+
+        // Count this guess atomically: the WHERE clause is the limit, so parallel guesses can never
+        // push Attempts past MaxAttempts. 0 rows updated = limit reached or code used/expired meanwhile.
+        var now = DateTime.UtcNow;
+        var counted = await _context.OtpCodes
+            .Where(c => c.Id == otpId && c.UsedAt == null && c.ExpiresAt > now && c.Attempts < c.MaxAttempts)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.Attempts, c => c.Attempts + 1));
+
+        if (counted == 0)
+        {
+            _logger.LogWarning("OTP validation failed: max attempts exceeded or code no longer valid");
             return false;
         }
 
-        // Increment attempts
-        otpCode.Attempts++;
-
-        // Verify hash
         if (otpCode.Code != codeHash)
         {
-            await _context.SaveChangesAsync();
-            _logger.LogDebug("OTP validation failed: code mismatch (attempt {Attempt}/{Max})",
-                otpCode.Attempts, otpCode.MaxAttempts);
+            _logger.LogDebug("OTP validation failed: code mismatch");
             return false;
         }
 
-        // Mark as used
-        otpCode.UsedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
+        // Consume the code exactly once: only the request that flips UsedAt from NULL wins.
+        var consumed = await _context.OtpCodes
+            .Where(c => c.Id == otpId && c.UsedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, DateTime.UtcNow));
+
+        if (consumed == 0)
+        {
+            _logger.LogWarning("OTP validation failed: code already used by a concurrent request");
+            return false;
+        }
 
         _logger.LogInformation("OTP validated successfully for {Target} purpose {Purpose}",
             email ?? phoneNumber, purpose);
+        return true;
+    }
+
+    private async Task<bool> ValidateNonAtomicAsync(OtpCode otpCode, string codeHash, string? target, OtpPurpose purpose)
+    {
+        if (otpCode.Attempts >= otpCode.MaxAttempts)
+        {
+            return false;
+        }
+
+        otpCode.Attempts++;
+
+        if (otpCode.Code != codeHash)
+        {
+            await _context.SaveChangesAsync();
+            return false;
+        }
+
+        otpCode.UsedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        _logger.LogInformation("OTP validated successfully for {Target} purpose {Purpose}", target, purpose);
         return true;
     }
 
