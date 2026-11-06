@@ -50,7 +50,6 @@ public class ResourcePermissionService : IResourcePermissionService
     {
         permission.UpdatedAt = DateTime.UtcNow;
 
-        _context.ResourcePermissions.Update(permission);
         await _context.SaveChangesAsync();
 
         return permission;

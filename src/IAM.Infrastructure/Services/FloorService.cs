@@ -61,7 +61,6 @@ public class FloorService : IFloorService
     {
         floor.UpdatedAt = DateTime.UtcNow;
 
-        _context.Floors.Update(floor);
         await _context.SaveChangesAsync();
 
         return floor;
