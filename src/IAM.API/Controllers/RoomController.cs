@@ -37,6 +37,11 @@ public class RoomController : BuildingManagementControllerBase
 
         var room = await _roomService.GetByIdAsync(id, scope.TenantId);
         if (room == null) return NotFound();
+
+        // Task 5571: the room carries its devices with their stream details; a plain member gets them through
+        // GET {id}/devices instead, which returns the reduced shape. Nothing is saved on a GET, so clearing is safe.
+        if (!scope.CanManage)
+            room.Devices = new List<IoTDevice>();
         return Ok(room);
     }
 
@@ -119,7 +124,7 @@ public class RoomController : BuildingManagementControllerBase
     }
 
     [HttpGet("{id}/devices")]
-    public async Task<ActionResult<IEnumerable<IoTDevice>>> GetDevices(Guid id, CancellationToken ct = default)
+    public async Task<ActionResult<IEnumerable<IoTDeviceSummary>>> GetDevices(Guid id, CancellationToken ct = default)
     {
         var scope = await ReadScopeAsync(ct);
         if (scope.Failure != null) return scope.Failure;
@@ -127,7 +132,7 @@ public class RoomController : BuildingManagementControllerBase
         var exists = await _roomService.ExistsAsync(id, scope.TenantId);
         if (!exists) return NotFound();
         var devices = await _roomService.GetDevicesAsync(id, scope.TenantId);
-        return Ok(devices);
+        return Ok(IoTDeviceSummary.ForReader(devices, scope.CanManage));
     }
 
     [HttpGet("{id}/groups")]

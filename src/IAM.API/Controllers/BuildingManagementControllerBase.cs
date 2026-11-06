@@ -33,6 +33,8 @@ public abstract class BuildingManagementControllerBase : ControllerBase
     protected sealed class TenantScope
     {
         public Guid TenantId { get; init; }
+        /// <summary>True when the caller may also change data in this tenant (SuperAdmin or building-management role).</summary>
+        public bool CanManage { get; init; }
         public ActionResult? Failure { get; init; }
     }
 
@@ -85,7 +87,7 @@ public abstract class BuildingManagementControllerBase : ControllerBase
                 ? "Only SuperAdmin or a building owner/manager of this tenant can change building-management data."
                 : "You do not have access to the building-management data of this tenant.");
 
-        return new TenantScope { TenantId = tenantId.Value };
+        return new TenantScope { TenantId = tenantId.Value, CanManage = access.CanManage(tenantId.Value) };
     }
 
     private TenantScope Fail(int status, string error) =>
