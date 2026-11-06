@@ -74,6 +74,7 @@ builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.PostConfigure<EmailSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.Configure<IAM.Core.Configuration.OnboardingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.OnboardingOptions.SectionName));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();
@@ -107,6 +108,7 @@ builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationSer
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
 builder.Services.AddScoped<ISocialAuthService, SocialAuthService>();
 builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"));
+builder.Services.PostConfigure<SmsSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddScoped<IOtpService, OtpService>();
@@ -447,6 +449,12 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Task 5576: fail closed when e-mail sending is disabled outside Development.
+MessagingStartupCheck.Validate(
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<EmailSettings>>().Value,
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmsSettings>>().Value,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("IAM.Startup"));
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
