@@ -1,9 +1,11 @@
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 
 namespace IAM.API.Controllers;
 
@@ -13,10 +15,76 @@ namespace IAM.API.Controllers;
 public class GroupsController : ControllerBase
 {
     private readonly IGroupService _groupService;
+    private readonly ITenantAccessResolver _access;
 
-    public GroupsController(IGroupService groupService)
+    public GroupsController(IGroupService groupService, ITenantAccessResolver access)
     {
         _groupService = groupService;
+        _access = access;
+    }
+
+    // Task 5161. Reading a group exposes member names, e-mail addresses, roles and the permission roles attached to
+    // it, so the read routes follow the tenant rule of the device endpoints: members of the group's tenant and
+    // SuperAdmin can read it; an active member of the group itself can read that one group (SCIM and AddMember do
+    // not require a tenant role). Everyone else, including device/service tokens and tokens scoped to another
+    // tenant, gets the same 403 whether or not the group exists. The tenant always comes from the stored group.
+
+    private ObjectResult ForbiddenRead() =>
+        StatusCode(StatusCodes.Status403Forbidden, new { error = "You do not have access to the groups of this tenant." });
+
+    /// <summary>True when the caller may read this stored group: tenant read access, or an active membership of the group itself.</summary>
+    private bool CanReadGroup(TenantAccess access, Group group)
+    {
+        if (access.CanRead(group.TenantId))
+        {
+            return true;
+        }
+
+        // The group-member exception needs a real user token: device and service-account tokens are refused outright
+        // and an API key is a credential of its own, not its owner's memberships.
+        if (access.IsRefused || User.IsApiKey())
+        {
+            return false;
+        }
+
+        // A tenant-scoped token carries authority only inside its own tenant.
+        var tenantClaim = User.FindFirst("tenant_id")?.Value;
+        if (!string.IsNullOrWhiteSpace(tenantClaim)
+            && !(Guid.TryParse(tenantClaim, out var claimedTenant) && claimedTenant == group.TenantId))
+        {
+            return false;
+        }
+
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+        {
+            return false;
+        }
+
+        var now = DateTime.UtcNow;
+        return group.Members.Any(m => m.UserId == userId && m.IsActive && (m.ExpiresAt == null || m.ExpiresAt > now));
+    }
+
+    /// <summary>
+    /// Loads a group for a read route. Returns null plus the response to send when the caller may not read it;
+    /// an unknown id answers a non-admin exactly like a foreign group (403), only a caller who can read every
+    /// tenant learns that the id does not exist.
+    /// </summary>
+    private async Task<(Group? Group, IActionResult? Denied)> LoadReadableGroupAsync(Guid id, CancellationToken ct)
+    {
+        var access = await _access.ResolveAsync(User, ct);
+        if (access.IsRefused)
+        {
+            return (null, ForbiddenRead());
+        }
+
+        var group = await _groupService.GetGroupAsync(id, ct);
+        if (group == null)
+        {
+            return (null, access.AllTenants ? NotFound(new { error = "Group not found" }) : ForbiddenRead());
+        }
+
+        return CanReadGroup(access, group) ? (group, null) : (null, ForbiddenRead());
     }
 
     /// <summary>
@@ -119,12 +187,12 @@ public class GroupsController : ControllerBase
     /// Get group by ID with members and roles
     /// </summary>
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetGroup(Guid id)
+    public async Task<IActionResult> GetGroup(Guid id, CancellationToken ct = default)
     {
-        var group = await _groupService.GetGroupAsync(id);
+        var (group, denied) = await LoadReadableGroupAsync(id, ct);
         if (group == null)
         {
-            return NotFound(new { error = "Group not found" });
+            return denied!;
         }
 
         return Ok(new
@@ -176,9 +244,17 @@ public class GroupsController : ControllerBase
     /// List groups by tenant
     /// </summary>
     [HttpGet("by-tenant/{tenantId:guid}")]
-    public async Task<IActionResult> GetGroupsByTenant(Guid tenantId)
+    public async Task<IActionResult> GetGroupsByTenant(Guid tenantId, CancellationToken ct = default)
     {
-        var groups = await _groupService.GetGroupsByTenantAsync(tenantId);
+        // Listing a tenant needs membership of that tenant (or SuperAdmin); the group-member exception covers
+        // single groups only, never a list.
+        var access = await _access.ResolveAsync(User, ct);
+        if (!access.CanRead(tenantId))
+        {
+            return ForbiddenRead();
+        }
+
+        var groups = await _groupService.GetGroupsByTenantAsync(tenantId, ct);
 
         return Ok(groups.Select(g => new
         {
@@ -350,9 +426,15 @@ public class GroupsController : ControllerBase
     /// List members of a group
     /// </summary>
     [HttpGet("{id:guid}/members")]
-    public async Task<IActionResult> GetMembers(Guid id)
+    public async Task<IActionResult> GetMembers(Guid id, CancellationToken ct = default)
     {
-        var members = await _groupService.GetMembersAsync(id);
+        var (group, denied) = await LoadReadableGroupAsync(id, ct);
+        if (group == null)
+        {
+            return denied!;
+        }
+
+        var members = await _groupService.GetMembersAsync(id, ct);
 
         return Ok(members.Select(m => new
         {
@@ -499,15 +581,25 @@ public class GroupsController : ControllerBase
     /// Get effective permissions for a user through group memberships
     /// </summary>
     [HttpGet("{id:guid}/effective-permissions")]
-    public async Task<IActionResult> GetEffectivePermissions(Guid id, [FromQuery] Guid tenantId)
+    public async Task<IActionResult> GetEffectivePermissions(Guid id, [FromQuery] Guid tenantId, CancellationToken ct = default)
     {
+        // Authorize first so a caller without access cannot tell a missing parameter from a forbidden one's data.
+        // Allowed: the user themselves, an admin of that tenant, SuperAdmin. Device/service tokens: never.
+        var access = await _access.ResolveAsync(User, ct);
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        var isSelf = !User.IsApiKey() && Guid.TryParse(subject, out var callerId) && callerId == id;
+        if (access.IsRefused || !(isSelf || (tenantId != Guid.Empty && access.CanManage(tenantId)) || access.AllTenants))
+        {
+            return ForbiddenRead();
+        }
+
         if (tenantId == Guid.Empty)
         {
             return BadRequest(new { error = "Tenant ID query parameter is required" });
         }
 
         // The id parameter here represents the user ID for which to calculate permissions
-        var permissions = await _groupService.GetEffectivePermissionsAsync(id, tenantId);
+        var permissions = await _groupService.GetEffectivePermissionsAsync(id, tenantId, ct);
 
         return Ok(new
         {

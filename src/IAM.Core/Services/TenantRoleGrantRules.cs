@@ -25,7 +25,17 @@ public enum RoleGrantProblem
     OwnerLevelRole,
 
     /// <summary>A custom role owned by a different tenant.</summary>
-    OtherTenantRole
+    OtherTenantRole,
+
+    /// <summary>
+    /// A federated application role (Category "app:{clientId}" or a "{clientId}:{role}" name, task 5147): access
+    /// tokens carry it as a global role claim, so the downstream app treats the holder as that app's admin.
+    /// SuperAdmin only.
+    /// </summary>
+    FederatedAppRole,
+
+    /// <summary>Any other role <see cref="PrivilegedRoles.IsPrivileged"/> flags (admin-like name, wildcard permission): SuperAdmin only.</summary>
+    PrivilegedRole
 }
 
 /// <summary>
@@ -58,9 +68,36 @@ public static class TenantRoleGrantRules
         "OrganizationOwner",
     };
 
+    /// <summary>
+    /// The one privileged-looking role a manager hands out as part of tenant management (it is in
+    /// <see cref="PrivilegedRoles.Names"/> because the API authorizes on it, but it is exactly what a manager grants).
+    /// </summary>
+    private const string BuildingManagerRoleName = "BuildingManager";
+
     public static bool IsPlatformRole(string? roleName) => roleName != null && PlatformRoleNames.Contains(roleName.Trim());
 
     public static bool IsOwnerLevelRole(string? roleName) => roleName != null && OwnerLevelRoleNames.Contains(roleName.Trim());
+
+    /// <summary>
+    /// True for a federated application role: Category starts with "app:" (how AppRolesController registers them) or
+    /// the name has the "{clientId}:{role}" form. Both are checked, so a custom tenant role that merely carries such a
+    /// name (any Category, any TenantId) is refused too.
+    /// </summary>
+    public static bool IsFederatedAppRole(Role role)
+    {
+        if (role.Category != null && role.Category.TrimStart().StartsWith("app:", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var name = role.Name?.Trim();
+        if (string.IsNullOrEmpty(name))
+            return false;
+
+        var colon = name.IndexOf(':');
+        return colon > 0 && colon < name.Length - 1;
+    }
+
+    private static bool IsTenantManagementRoleName(string? roleName) =>
+        IsOwnerLevelRole(roleName) || string.Equals(roleName?.Trim(), BuildingManagerRoleName, StringComparison.OrdinalIgnoreCase);
 
     public static RoleGrantProblem Check(Role role, Guid tenantId, TenantGrantor grantor)
     {
@@ -72,6 +109,14 @@ public static class TenantRoleGrantRules
 
         if (IsOwnerLevelRole(role.Name) && !grantor.IsTenantOwner)
             return RoleGrantProblem.OwnerLevelRole;
+
+        // Task 5147: federated app roles and other privileged roles are global claims downstream, so a tenant
+        // manager or owner must not hand them out. By name and category, never only by Role.TenantId.
+        if (IsFederatedAppRole(role))
+            return RoleGrantProblem.FederatedAppRole;
+
+        if (!IsTenantManagementRoleName(role.Name) && PrivilegedRoles.IsPrivileged(role))
+            return RoleGrantProblem.PrivilegedRole;
 
         if (role.TenantId.HasValue && role.TenantId.Value != tenantId)
             return RoleGrantProblem.OtherTenantRole;
@@ -85,6 +130,8 @@ public static class TenantRoleGrantRules
         RoleGrantProblem.PlatformRole => $"Role '{roleName}' is a platform-wide role and can only be granted by a SuperAdmin",
         RoleGrantProblem.OwnerLevelRole => $"Role '{roleName}' can only be granted by a SuperAdmin or an owner of this tenant",
         RoleGrantProblem.OtherTenantRole => $"Role '{roleName}' belongs to a different tenant",
+        RoleGrantProblem.FederatedAppRole => $"Role '{roleName}' is an application role and can only be granted by a SuperAdmin",
+        RoleGrantProblem.PrivilegedRole => $"Role '{roleName}' is a privileged role and can only be granted by a SuperAdmin",
         _ => string.Empty
     };
 }

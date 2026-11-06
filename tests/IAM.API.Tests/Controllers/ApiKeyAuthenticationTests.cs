@@ -8,7 +8,9 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using IAM.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -30,7 +32,13 @@ public class ApiKeyAuthenticationTests : IClassFixture<ApiKeyAuthenticationTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
-            builder.ConfigureTestServices(services => services.AddSingleton<IApiKeyAuditSink>(Sink));
+            builder.ConfigureTestServices(services =>
+            {
+                services.AddSingleton<IApiKeyAuditSink>(Sink);
+                // Account merge and erasure open a relational transaction; the in-memory store has none.
+                services.ConfigureDbContext<IAMDbContext>(o =>
+                    o.ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
+            });
         }
     }
 
@@ -328,5 +336,248 @@ public class ApiKeyAuthenticationTests : IClassFixture<ApiKeyAuthenticationTests
             .PostAsJsonAsync("/api/api-keys/introspect", new { keyHash = new string('a', 64) });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // ---- a key dies with its owner (task 5155) ---------------------------------------------------------
+
+    /// <summary>Every way IAM deactivates a user.</summary>
+    public enum DeactivationRoute
+    {
+        AdminEndpoint,
+        LockAccountAlert,
+        ScimDelete,
+        ScimPatchActiveFalse,
+        ScimReplaceActiveFalse,
+        DirectorySync,
+        AccountMerge,
+        DataErasure,
+    }
+
+    private sealed record Owner(Guid UserId, string Email, Guid KeyId, string RawKey);
+
+    /// <summary>A real user with a key of their own (the key the user could have created for scripts or CI).</summary>
+    private async Task<Owner> CreateOwnerWithKeyAsync(string scope = "write", string passwordHash = "not-a-real-hash")
+    {
+        using var scoped = _factory.Services.CreateScope();
+        var db = scoped.ServiceProvider.GetRequiredService<IAMDbContext>();
+        var name = $"owner{Guid.NewGuid():N}"[..14];
+        var user = new User
+        {
+            Email = $"{name}@example.com",
+            PasswordHash = passwordHash,
+            FirstName = name,
+            LastName = "Owner",
+            EmailConfirmed = true,
+            IsActive = true,
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var (key, raw) = await scoped.ServiceProvider.GetRequiredService<IApiKeyService>().CreateApiKeyAsync(
+            $"t5155-{Guid.NewGuid():N}"[..20], userId: user.Id, tenantId: null, permissions: null,
+            expiresAt: null, rateLimitPerMinute: null, description: null, scope: scope);
+        return new Owner(user.Id, user.Email, key.Id, raw);
+    }
+
+    private async Task SetUserActiveAsync(Guid userId, bool active)
+    {
+        using var scoped = _factory.Services.CreateScope();
+        var db = scoped.ServiceProvider.GetRequiredService<IAMDbContext>();
+        (await db.Users.SingleAsync(u => u.Id == userId)).IsActive = active;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<bool> KeyRowIsActiveAsync(Guid keyId)
+    {
+        using var scoped = _factory.Services.CreateScope();
+        var db = scoped.ServiceProvider.GetRequiredService<IAMDbContext>();
+        return await db.ApiKeys.AsNoTracking().Where(k => k.Id == keyId).Select(k => k.IsActive).SingleAsync();
+    }
+
+    /// <summary>What another Jengo app is told about the key (an uncached read of the same store the middleware uses).</summary>
+    private async Task<bool> IntrospectedAsActiveAsync(string rawKey)
+    {
+        var (_, adminRaw) = await CreateKeyAsync("admin");
+        var response = await ClientWith(adminRaw)
+            .PostAsJsonAsync("/api/api-keys/introspect", new { keyHash = ApiKeyHasher.Hash(rawKey) });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("active").GetBoolean();
+    }
+
+    private async Task DeactivateAsync(DeactivationRoute route, Owner owner, Owner bystander)
+    {
+        using var scoped = _factory.Services.CreateScope();
+        var sp = scoped.ServiceProvider;
+        var db = sp.GetRequiredService<IAMDbContext>();
+        var tenantId = Guid.NewGuid();
+
+        switch (route)
+        {
+            case DeactivationRoute.AdminEndpoint:
+            {
+                var admin = _factory.CreateClient();
+                admin.AddAuthorizationHeader(TestAuthenticationHelper.GenerateJwtToken(
+                    Guid.NewGuid(), "root@test.com", new[] { "SuperAdmin" }));
+                var response = await admin.PostAsync($"/api/users/{owner.UserId}/deactivate", content: null);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                break;
+            }
+
+            case DeactivationRoute.LockAccountAlert:
+            {
+                var rule = new AlertRule { Name = $"lock-{Guid.NewGuid():N}", AutoResponseAction = "lock_account", Channels = "[]" };
+                db.AlertRules.Add(rule);
+                await db.SaveChangesAsync();
+                await sp.GetRequiredService<ISecurityAlertService>()
+                    .FireAlertAsync(rule.Id, "Brute force", $"{{\"userId\":\"{owner.UserId}\"}}");
+                break;
+            }
+
+            case DeactivationRoute.ScimDelete:
+            case DeactivationRoute.ScimPatchActiveFalse:
+            case DeactivationRoute.ScimReplaceActiveFalse:
+            {
+                // Task 4699: SCIM only reaches users it provisioned in the tenant.
+                db.ScimProvisioningLogs.Add(new ScimProvisioningLog
+                {
+                    TenantId = tenantId, Operation = "Create", ResourceType = "User", ResourceId = owner.UserId,
+                    Status = "Success", CreatedAt = DateTime.UtcNow,
+                });
+                await db.SaveChangesAsync();
+                var scim = sp.GetRequiredService<IScimService>();
+                if (route == DeactivationRoute.ScimDelete)
+                {
+                    Assert.True(await scim.DeleteUserAsync(tenantId, owner.UserId));
+                }
+                else if (route == DeactivationRoute.ScimPatchActiveFalse)
+                {
+                    await scim.PatchUserAsync(tenantId, owner.UserId, new ScimPatchRequest
+                    {
+                        Operations = { new ScimPatchOperation { Op = "replace", Path = "active", Value = false } }
+                    });
+                }
+                else
+                {
+                    await scim.ReplaceUserAsync(tenantId, owner.UserId, new ScimUserResource { UserName = owner.Email, Active = false });
+                }
+                break;
+            }
+
+            case DeactivationRoute.DirectorySync:
+            {
+                // Task 4698: disable-missing only reaches directory-managed users that are members of the syncing tenant.
+                var role = new Role { Id = Guid.NewGuid(), Name = "Resident", Permissions = "[]" };
+                db.Roles.Add(role);
+                foreach (var member in new[] { owner, bystander })
+                    db.UserRoles.Add(new UserRole { UserId = member.UserId, RoleId = role.Id, TenantId = tenantId, GrantedAt = DateTime.UtcNow });
+                await db.SaveChangesAsync();
+                var sync = ActivatorUtilities.CreateInstance<DirectorySyncService>(sp);
+                Assert.Equal(1, await sync.DisableMissingUsersAsync(tenantId, new HashSet<string> { bystander.Email }, CancellationToken.None));
+                break;
+            }
+
+            case DeactivationRoute.AccountMerge:
+            {
+                var result = await sp.GetRequiredService<IAccountLinkingService>().MergeAccountsAsync(bystander.UserId, owner.UserId);
+                Assert.True(result.Success, result.Error);
+                break;
+            }
+
+            case DeactivationRoute.DataErasure:
+            {
+                var requests = sp.GetRequiredService<IDataRequestService>();
+                var request = await requests.CreateDeletionRequestAsync(owner.UserId, "test");
+                await requests.ProcessDeletionAsync(request.Id, Guid.NewGuid());
+                break;
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(route), route, null);
+        }
+    }
+
+    [Theory]
+    [InlineData(DeactivationRoute.AdminEndpoint)]
+    [InlineData(DeactivationRoute.LockAccountAlert)]
+    [InlineData(DeactivationRoute.ScimDelete)]
+    [InlineData(DeactivationRoute.ScimPatchActiveFalse)]
+    [InlineData(DeactivationRoute.ScimReplaceActiveFalse)]
+    [InlineData(DeactivationRoute.DirectorySync)]
+    [InlineData(DeactivationRoute.AccountMerge)]
+    [InlineData(DeactivationRoute.DataErasure)]
+    public async Task KeyOfADeactivatedOwner_IsRejectedAtOnce_ReportedInactive_AndStaysDeadAfterReactivation(DeactivationRoute route)
+    {
+        var owner = await CreateOwnerWithKeyAsync(passwordHash: route == DeactivationRoute.DirectorySync ? "LDAP_MANAGED" : "not-a-real-hash");
+        var bystander = await CreateOwnerWithKeyAsync(passwordHash: route == DeactivationRoute.DirectorySync ? "LDAP_MANAGED" : "not-a-real-hash");
+        var (_, ownerlessRaw) = await CreateKeyAsync("write");
+        var url = $"/api/app-roles/{Slug()}/users";
+
+        // Each key is used once first, so the middleware has them in its cache: the rejection below must not wait for it to expire.
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(owner.RawKey).GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(bystander.RawKey).GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(ownerlessRaw).GetAsync(url)).StatusCode);
+        Assert.True(await IntrospectedAsActiveAsync(owner.RawKey));
+
+        await DeactivateAsync(route, owner, bystander);
+
+        // Same answer as for a revoked key: 401, audited as revoked, reported inactive to the other apps, revoked in the table.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await ClientWith(owner.RawKey).GetAsync(url)).StatusCode);
+        Assert.Contains(_factory.Sink.For(owner.KeyId.ToString("D")), e => e.Outcome == ApiKeyAuditOutcome.Revoked);
+        Assert.False(await IntrospectedAsActiveAsync(owner.RawKey));
+        Assert.False(await KeyRowIsActiveAsync(owner.KeyId));
+
+        // Nobody else is affected: not the other user's key (for a merge: the surviving primary), not a key without an owner.
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(bystander.RawKey).GetAsync(url)).StatusCode);
+        Assert.True(await KeyRowIsActiveAsync(bystander.KeyId));
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(ownerlessRaw).GetAsync(url)).StatusCode);
+
+        // Reactivating the user does not bring the key back. Clearing the cache makes the middleware answer from the table.
+        await SetUserActiveAsync(owner.UserId, true);
+        _factory.Services.GetRequiredService<IApiKeyCache>().InvalidateAll();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await ClientWith(owner.RawKey).GetAsync(url)).StatusCode);
+        Assert.False(await IntrospectedAsActiveAsync(owner.RawKey));
+    }
+
+    [Fact]
+    public async Task KeyOfAnInactiveOwner_IsRejected_EvenWhenNothingRevokedTheKeyRow()
+    {
+        // The rule lives in the key store lookup, not in the callers: a deactivation route that forgot to revoke
+        // (or a direct database change) still cannot leave a working key behind.
+        var owner = await CreateOwnerWithKeyAsync();
+        var url = $"/api/app-roles/{Slug()}/users";
+        await SetUserActiveAsync(owner.UserId, false);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await ClientWith(owner.RawKey).GetAsync(url)).StatusCode);
+        Assert.Contains(_factory.Sink.For(owner.KeyId.ToString("D")), e => e.Outcome == ApiKeyAuditOutcome.Revoked);
+        Assert.False(await IntrospectedAsActiveAsync(owner.RawKey));
+        Assert.True(await KeyRowIsActiveAsync(owner.KeyId));
+    }
+
+    [Fact]
+    public async Task OwnerlessKey_ThatCarriesNoUser_KeepsWorking_WhileEveryUserIsInactive()
+    {
+        // Service and tenant keys are not tied to a person: no user's state may switch them off.
+        var tenant = Guid.NewGuid();
+        var (_, adminRaw) = await CreateKeyAsync("admin");
+        var (_, tenantRaw) = await CreateKeyAsync("write", tenant);
+        var owner = await CreateOwnerWithKeyAsync();
+        await SetUserActiveAsync(owner.UserId, false);
+
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(adminRaw).GetAsync($"/api/app-roles/{Slug()}/users")).StatusCode);
+        Assert.True(await IntrospectedAsActiveAsync(tenantRaw));
+    }
+
+    [Fact]
+    public async Task KeyOfAnActiveOwner_StillWorks_AndAdminDeactivationOfSomeoneElseLeavesItAlone()
+    {
+        var departed = await CreateOwnerWithKeyAsync();
+        var staying = await CreateOwnerWithKeyAsync("read");
+        var url = $"/api/app-roles/{Slug()}/users";
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(staying.RawKey).GetAsync(url)).StatusCode);
+
+        await DeactivateAsync(DeactivationRoute.AdminEndpoint, departed, staying);
+
+        Assert.Equal(HttpStatusCode.OK, (await ClientWith(staying.RawKey).GetAsync(url)).StatusCode);
+        Assert.True(await IntrospectedAsActiveAsync(staying.RawKey));
     }
 }

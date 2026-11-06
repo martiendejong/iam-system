@@ -666,4 +666,129 @@ public class TenantMemberManagementAuthorizationTests : IClassFixture<IAMTestWeb
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    // ----- task 5147: federated app roles and other privileged global roles are SuperAdmin-only -----
+
+    private async Task<Role> CreateAppRoleAsync(string name, string? category, Guid? tenantId = null, string permissions = "[]")
+    {
+        using var scope = _factory.Services.CreateScope();
+        var role = new Role { Id = Guid.NewGuid(), Name = name, TenantId = tenantId, Category = category, Permissions = permissions };
+        Db(scope).Roles.Add(role);
+        await Db(scope).SaveChangesAsync();
+        return role;
+    }
+
+    /// <summary>Federated app roles as AppRolesController registers them (global, Category app:{client}) plus a lookalike custom role.</summary>
+    private async Task<Role[]> AppAndPrivilegedRolesAsync(Guid tenantId) => new[]
+    {
+        await CreateAppRoleAsync($"taskmanager{Guid.NewGuid():N}:admin", "app:taskmanager"),
+        await CreateAppRoleAsync($"app:vault{Guid.NewGuid():N}:approver", "app:vault"),
+        await CreateAppRoleAsync($"fedha{Guid.NewGuid():N}:member", null),
+        await CreateAppRoleAsync($"custom{Guid.NewGuid():N}:admin", null, tenantId),
+        await CreateAppRoleAsync($"workspace-admin-{Guid.NewGuid():N}", null),
+        await CreateAppRoleAsync($"operator-{Guid.NewGuid():N}", null, permissions: "[\"*\"]"),
+    };
+
+    [Fact]
+    public async Task ChangeRole_ManagerAndOwner_CannotGrantFederatedAppOrPrivilegedRoles_AndTheRowIsUnchanged()
+    {
+        var scene = await CreateSceneAsync();
+
+        foreach (var role in await AppAndPrivilegedRolesAsync(scene.Tenant.Id))
+        {
+            var asManager = await scene.ManagerClient.PutAsJsonAsync(RoleUrl(scene.Tenant.Id, scene.Member.Id), RoleBody(role.Id));
+            var asOwner = await scene.OwnerClient.PutAsJsonAsync(RoleUrl(scene.Tenant.Id, scene.Member.Id), RoleBody(role.Id));
+
+            Assert.True(asManager.StatusCode == HttpStatusCode.Forbidden, $"manager {role.Name}: {(int)asManager.StatusCode}");
+            Assert.True(asOwner.StatusCode == HttpStatusCode.Forbidden, $"owner {role.Name}: {(int)asOwner.StatusCode}");
+        }
+        Assert.Equal(new[] { "Resident" }, await RoleNamesAsync(scene.Member.Id, scene.Tenant.Id));
+    }
+
+    [Fact]
+    public async Task ChangeRole_SuperAdmin_CanGrantFederatedAppAndPrivilegedRoles()
+    {
+        var scene = await CreateSceneAsync();
+        var role = await CreateAppRoleAsync($"taskmanager{Guid.NewGuid():N}:admin", "app:taskmanager");
+
+        var response = await SuperAdmin().PutAsJsonAsync(RoleUrl(scene.Tenant.Id, scene.Member.Id), RoleBody(role.Id));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(new[] { role.Name }, await RoleNamesAsync(scene.Member.Id, scene.Tenant.Id));
+    }
+
+    [Fact]
+    public async Task ChangeRole_ManagerPlainLanguageError_NamesTheRole()
+    {
+        var scene = await CreateSceneAsync();
+        var role = await CreateAppRoleAsync($"taskmanager{Guid.NewGuid():N}:admin", "app:taskmanager");
+
+        var response = await scene.ManagerClient.PutAsJsonAsync(RoleUrl(scene.Tenant.Id, scene.Member.Id), RoleBody(role.Id));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
+        Assert.Contains(role.Name, error);
+        Assert.Contains("SuperAdmin", error);
+    }
+
+    [Fact]
+    public async Task SendInvitation_ManagerAndOwner_CannotInviteIntoFederatedAppOrPrivilegedRoles_SuperAdminCan()
+    {
+        var scene = await CreateSceneAsync();
+        var roles = await AppAndPrivilegedRolesAsync(scene.Tenant.Id);
+
+        foreach (var role in roles)
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await scene.ManagerClient.PostAsJsonAsync("/api/invitations", InviteBody(scene.Tenant.Id, role.Id))).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await scene.OwnerClient.PostAsJsonAsync("/api/invitations", InviteBody(scene.Tenant.Id, role.Id))).StatusCode);
+        }
+        Assert.Equal(0, await InvitationCountAsync(scene.Tenant.Id));
+
+        Assert.Equal(HttpStatusCode.OK, (await SuperAdmin().PostAsJsonAsync("/api/invitations", InviteBody(scene.Tenant.Id, roles[0].Id))).StatusCode);
+    }
+
+    [Fact]
+    public async Task Bulk_ManagerRowsNamingAppRoles_FailPerRow_OrdinaryRowsSucceed()
+    {
+        var scene = await CreateSceneAsync();
+        var app = await CreateAppRoleAsync($"taskmanager{Guid.NewGuid():N}:admin", "app:taskmanager");
+        var csv = $"name,email,role\nA,a@bulk5147.test,{app.Name}\nB,b@bulk5147.test,Resident\n";
+
+        var response = await scene.OwnerClient.PostAsync("/api/invitations/bulk", BulkForm(scene.Tenant.Id, csv));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, body.GetProperty("succeeded").GetInt32());
+        Assert.Equal(1, body.GetProperty("failed").GetInt32());
+    }
+
+    [Fact]
+    public async Task Accept_AnOldInvitationForAnAppRole_FromANonSuperAdminSender_IsRefusedAndRevoked()
+    {
+        var scene = await CreateSceneAsync();
+        var app = await CreateAppRoleAsync($"taskmanager{Guid.NewGuid():N}:admin", "app:taskmanager");
+        var invitation = await SeedInvitationAsync(scene.Tenant.Id, app, scene.OwnerUser.Id);
+
+        var response = await _factory.CreateClient().PostAsJsonAsync($"/api/invitations/{invitation.Token}/accept", AcceptBody);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Revoked", (await GetInvitationAsync(invitation.Id))!.Status);
+        using var scope = _factory.Services.CreateScope();
+        Assert.False(await Db(scope).Users.AnyAsync(u => u.Email == invitation.Email));
+    }
+
+    [Fact]
+    public async Task Accept_AnInvitationForAnAppRole_FromASuperAdminSender_Works()
+    {
+        var scene = await CreateSceneAsync();
+        var superAdminRole = await CreateRoleAsync("SuperAdmin");
+        var sender = await CreateUserAsync();
+        await GrantAsync(sender.Id, superAdminRole, null);
+        var app = await CreateAppRoleAsync($"taskmanager{Guid.NewGuid():N}:admin", "app:taskmanager");
+        var invitation = await SeedInvitationAsync(scene.Tenant.Id, app, sender.Id);
+
+        var response = await _factory.CreateClient().PostAsJsonAsync($"/api/invitations/{invitation.Token}/accept", AcceptBody);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 }

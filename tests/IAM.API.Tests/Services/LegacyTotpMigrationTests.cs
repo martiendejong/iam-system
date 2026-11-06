@@ -46,7 +46,8 @@ public class LegacyTotpMigrationTests
             Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" }), NullLogger<OtpService>.Instance);
         var risk = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         var auth = new AuthService(context, CreateConfiguration(), email, risk, otp,
-            new ClaimsMappingService(context), NullLogger<AuthService>.Instance);
+            new ClaimsMappingService(context), NullLogger<AuthService>.Instance,
+            AuthServiceTestFactory.CreateLoginThrottle());
         return (auth, email, context);
     }
 
@@ -516,8 +517,8 @@ public class LegacyTotpMigrationTests
         public Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-        public Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-        public Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.FromResult(true);
+        public Task<bool> SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default) => Task.FromResult(true);
     }
 

@@ -46,9 +46,9 @@ public class IdentityProviderDefaultRoleGuardTests
             context,
             config,
             new FakeHttpClientFactory(handler ?? new FakeGoogleHandler("unused-sub", "unused@example.com")),
-            new ClaimsMappingService(context),
             new FakeSecretsVaultService(),
-            cache ?? new MemoryCache(new MemoryCacheOptions()));
+            cache ?? new MemoryCache(new MemoryCacheOptions()),
+            AuthServiceTestFactory.Create(context, config));
     }
 
     private static Role AddRole(IAMDbContext context, string name, string permissions = "[\"Room.View\"]", Guid? tenantId = null)

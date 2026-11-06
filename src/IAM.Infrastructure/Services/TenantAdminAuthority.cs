@@ -14,6 +14,34 @@ public static class TenantAdminAuthority
     /// <summary>Role name that makes a user an admin of the tenant its UserRole row is scoped to.</summary>
     public const string RoleName = "TenantAdmin";
 
+    /// <summary>
+    /// Every role that makes someone an administrator of a tenant (task 5160): the same set the audit, secrets, webhook and
+    /// device authorizers use. <see cref="IsAdminOfTenantAsync"/> stays TenantAdmin-only (organization settings, task 4738).
+    /// </summary>
+    public static readonly string[] AdministratorRoleNames = { RoleName, "BuildingOwner", "BuildingManager" };
+
+    /// <summary>True when the user holds an active TenantAdmin, BuildingOwner or BuildingManager role scoped to exactly <paramref name="tenantId"/>.</summary>
+    public static Task<bool> HasAdministratorRoleInTenantAsync(IAMDbContext context, Guid userId, Guid tenantId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return context.UserRoles.AnyAsync(ur =>
+            ur.UserId == userId
+            && ur.TenantId == tenantId
+            && AdministratorRoleNames.Contains(ur.Role.Name)
+            && (ur.ExpiresAt == null || ur.ExpiresAt > now), ct);
+    }
+
+    /// <summary>True when the user holds an active administrator role in at least one tenant - the coarse gate before any lookup by id.</summary>
+    public static Task<bool> HasAdministratorRoleInAnyTenantAsync(IAMDbContext context, Guid userId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return context.UserRoles.AnyAsync(ur =>
+            ur.UserId == userId
+            && ur.TenantId != null
+            && AdministratorRoleNames.Contains(ur.Role.Name)
+            && (ur.ExpiresAt == null || ur.ExpiresAt > now), ct);
+    }
+
     /// <summary>True when the user holds an active TenantAdmin role scoped to exactly <paramref name="tenantId"/>.</summary>
     public static Task<bool> IsAdminOfTenantAsync(IAMDbContext context, Guid userId, Guid tenantId, CancellationToken ct)
     {

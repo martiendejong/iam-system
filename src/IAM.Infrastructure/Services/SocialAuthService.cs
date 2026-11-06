@@ -18,9 +18,6 @@ namespace IAM.Infrastructure.Services;
 
 public class SocialAuthService : ISocialAuthService
 {
-    // Today's default when an organization has never saved a Token Configuration.
-    private const int DefaultRefreshTokenLifetimeDays = 7;
-
     // Prefix used to detect an encrypted client secret stored in the DB.
     // Non-prefixed values are treated as plaintext (migration compatibility).
     private const string EncryptedPrefix = "enc:";
@@ -31,26 +28,26 @@ public class SocialAuthService : ISocialAuthService
     private readonly IAMDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IClaimsMappingService _claimsMappingService;
     private readonly ISecretsVaultService _secretsVault;
     private readonly IMemoryCache _cache;
+    private readonly IAuthService _authService;
     private readonly ILogger<SocialAuthService>? _logger;
 
     public SocialAuthService(
         IAMDbContext context,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
-        IClaimsMappingService claimsMappingService,
         ISecretsVaultService secretsVault,
         IMemoryCache cache,
+        IAuthService authService,
         ILogger<SocialAuthService>? logger = null)
     {
         _context = context;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
-        _claimsMappingService = claimsMappingService;
         _secretsVault = secretsVault;
         _cache = cache;
+        _authService = authService;
         _logger = logger;
     }
 
@@ -82,22 +79,6 @@ public class SocialAuthService : ISocialAuthService
             return storedValue;
 
         return await _secretsVault.GetSecretValueAsync(secretId) ?? storedValue;
-    }
-
-    /// <summary>
-    /// Resolves the access/refresh token lifetime for a login, from the user's
-    /// organization Token Configuration when one exists, otherwise today's defaults
-    /// (Jwt:AccessTokenExpirationMinutes config, hardcoded 7-day refresh). Mirrors
-    /// AuthService.ResolveTokenLifetimeAsync so both login paths agree.
-    /// </summary>
-    private async Task<(int AccessTokenLifetimeMinutes, int RefreshTokenLifetimeDays)> ResolveTokenLifetimeAsync(Guid userId)
-    {
-        var defaultAccessMinutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "5");
-        var orgLifetime = await _claimsMappingService.ResolveTokenLifetimeForUserAsync(userId);
-
-        return orgLifetime != null
-            ? (orgLifetime.AccessTokenLifetimeMinutes, orgLifetime.RefreshTokenLifetimeDays)
-            : (defaultAccessMinutes, DefaultRefreshTokenLifetimeDays);
     }
 
     public async Task<string> GetAuthorizationUrlAsync(Guid providerId, string redirectUri, string state)
@@ -310,8 +291,9 @@ public class SocialAuthService : ISocialAuthService
             _context.ExternalLogins.Add(newExternalLogin);
         }
 
-        // Update last login
-        user.LastLoginAt = DateTime.UtcNow;
+        // Persist the new account and/or external-login link. LastLoginAt is deliberately not stamped
+        // here: it is set when the login actually completes (inside the shared login service), so a
+        // sign-in that is still waiting on a second factor does not count as a completed login.
         await _context.SaveChangesAsync();
 
         // Reload user with roles for token generation
@@ -320,36 +302,11 @@ public class SocialAuthService : ISocialAuthService
                 .ThenInclude(ur => ur.Role)
             .FirstAsync(u => u.Id == user.Id);
 
-        // Resolve this organization's configured token lifetime (falls back to today's
-        // defaults when the user has no tenant or the tenant has no Token Configuration)
-        var (accessMinutes, refreshDays) = await ResolveTokenLifetimeAsync(user.Id);
-
-        // Generate JWT tokens
-        var refreshToken = GenerateRefreshToken();
-        var refreshTokenId = Guid.NewGuid();
-
-        var refreshTokenEntity = new RefreshToken
-        {
-            Id = refreshTokenId,
-            UserId = user.Id,
-            TokenHash = HashToken(refreshToken),
-            ExpiresAt = DateTime.UtcNow.AddDays(refreshDays)
-        };
-
-        _context.RefreshTokens.Add(refreshTokenEntity);
-        await _context.SaveChangesAsync();
-
-        var accessToken = GenerateAccessToken(user, accessMinutes, refreshTokenId);
-
-        return new AuthResult
-        {
-            Success = true,
-            AccessToken = accessToken,
-            RefreshToken = refreshToken,
-            User = user,
-            AccessTokenLifetimeMinutes = accessMinutes,
-            RefreshTokenLifetimeDays = refreshDays
-        };
+        // Task 4573: the provider only proved the first factor. Hand the user to the same gate password,
+        // magic-link and OTP login use, so an account enrolled in 2FA gets a challenge (RequiresTwoFactor,
+        // no tokens) instead of a session. Applies to existing, linked and freshly auto-created accounts
+        // alike. Token issuance lives in one place (AuthService) - nothing here mints tokens directly.
+        return await _authService.CompletePasswordlessLoginAsync(user);
     }
 
     /// <summary>
@@ -1103,55 +1060,6 @@ public class SocialAuthService : ISocialAuthService
         }
 
         return null;
-    }
-
-    private string GenerateAccessToken(User user, int expirationMinutes, Guid? refreshTokenId = null)
-    {
-        var claims = new List<Claim>
-        {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Email, user.Email),
-            new Claim(ClaimTypes.Name, $"{user.FirstName} {user.LastName}")
-        };
-
-        if (refreshTokenId.HasValue)
-        {
-            claims.Add(new Claim("refresh_token_id", refreshTokenId.Value.ToString()));
-        }
-
-        foreach (var userRole in user.UserRoles)
-        {
-            claims.Add(new Claim(ClaimTypes.Role, userRole.Role.Name));
-        }
-
-        var secretKey = _configuration["Jwt:SecretKey"] ?? throw new InvalidOperationException("JWT secret key not configured");
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
-        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-        var token = new JwtSecurityToken(
-            issuer: _configuration["Jwt:Issuer"],
-            audience: _configuration["Jwt:Audience"],
-            claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(expirationMinutes),
-            signingCredentials: credentials
-        );
-
-        return new JwtSecurityTokenHandler().WriteToken(token);
-    }
-
-    private static string GenerateRefreshToken()
-    {
-        var randomBytes = new byte[32];
-        using var rng = RandomNumberGenerator.Create();
-        rng.GetBytes(randomBytes);
-        return Convert.ToBase64String(randomBytes);
-    }
-
-    private static string HashToken(string token)
-    {
-        using var sha256 = SHA256.Create();
-        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
-        return Convert.ToBase64String(hashBytes);
     }
 
     private static string StateEntryKey(string state) => $"SocialAuthState:{state}";

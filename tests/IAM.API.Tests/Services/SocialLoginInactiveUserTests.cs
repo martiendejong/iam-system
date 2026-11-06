@@ -83,9 +83,9 @@ public class SocialLoginInactiveUserTests
             context,
             config,
             new StubHttpClientFactory(new StubProviderHandler(type, UserEmail)),
-            new ClaimsMappingService(context),
             new FakeSecretsVaultService(),
             new MemoryCache(new MemoryCacheOptions()),
+            AuthServiceTestFactory.Create(context, config),
             NullLogger<SocialAuthService>.Instance);
 
         return new Harness { Options = options, Context = context, Service = service, Provider = provider };

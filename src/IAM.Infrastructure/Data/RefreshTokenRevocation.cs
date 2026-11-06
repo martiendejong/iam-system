@@ -19,10 +19,18 @@ public static class RefreshTokenRevocation
     public static Task<int> RevokeRefreshTokensAsync(this IAMDbContext context, Guid userId, CancellationToken ct = default)
         => context.RevokeRefreshTokensAsync(new[] { userId }, ct);
 
+    /// <summary>
+    /// Revokes every still-unrevoked refresh token of one user except <paramref name="exceptTokenId"/>: the session that
+    /// is making the change (task 5157) and stays signed in. A null id keeps nothing. Returns how many were revoked.
+    /// </summary>
+    public static Task<int> RevokeRefreshTokensAsync(this IAMDbContext context, Guid userId, Guid? exceptTokenId, CancellationToken ct = default)
+        => context.RevokeRefreshTokensAsync(new[] { userId }, ct, exceptTokenId);
+
     /// <summary>Revokes every still-unrevoked refresh token of the given users. Returns how many were revoked.</summary>
-    public static async Task<int> RevokeRefreshTokensAsync(this IAMDbContext context, IEnumerable<Guid> userIds, CancellationToken ct = default)
+    public static async Task<int> RevokeRefreshTokensAsync(this IAMDbContext context, IEnumerable<Guid> userIds, CancellationToken ct = default, Guid? exceptTokenId = null)
     {
         var ids = userIds.Distinct().ToArray();
+        var keep = exceptTokenId ?? Guid.Empty;
         if (ids.Length == 0)
         {
             return 0;
@@ -31,7 +39,7 @@ public static class RefreshTokenRevocation
         // Only tokens that are not revoked yet: an already-revoked token keeps its original
         // RevokedAt, which is what lets IsRotated tell a rotation apart from a bulk revoke.
         var tokens = await context.RefreshTokens
-            .Where(rt => ids.Contains(rt.UserId) && rt.RevokedAt == null)
+            .Where(rt => ids.Contains(rt.UserId) && rt.RevokedAt == null && rt.Id != keep)
             .ToListAsync(ct);
 
         var now = DateTime.UtcNow;

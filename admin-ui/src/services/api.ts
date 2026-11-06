@@ -1,8 +1,14 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
-import type { LoginRequest, LoginResponse, PublicIdentityProvider, RegisterRequest, User } from '../types';
+import type { CreateUserRequest, LoginRequest, LoginResponse, PublicIdentityProvider, RegisterRequest, User } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
+
+/** The roles API sends isSystemRole; the UI reads isSystem (task 5222). Keep both so either reader works. */
+function normalizeRole(role: any): any {
+  if (!role || typeof role !== 'object') return role;
+  return { ...role, isSystem: role.isSystem ?? role.isSystemRole ?? false };
+}
 
 class ApiService {
   private client: AxiosInstance;
@@ -89,6 +95,17 @@ class ApiService {
 
   async register(data: RegisterRequest): Promise<void> {
     await this.client.post('/auth/register', data);
+  }
+
+  /**
+   * Admin-create an already-active, pre-verified user with a manually-set password
+   * (SuperAdmin only). Hits POST /users (UsersController.CreateUser), NOT the public
+   * /auth/register endpoint — the latter is disabled by Registration:PublicRegistrationEnabled
+   * and returns 403, which surfaced to admins as the misleading "Failed to create user".
+   * No invitation email is sent; the user can log in immediately with the given password.
+   */
+  async createUser(data: CreateUserRequest): Promise<void> {
+    await this.client.post('/users', data);
   }
 
   async verifyLoginTwoFactor(userId: string, code: string, rememberMe = false): Promise<LoginResponse> {
@@ -203,15 +220,16 @@ class ApiService {
   // Role endpoints
   async getRoles(): Promise<any[]> {
     const response = await this.client.get('/roles');
-    return response.data;
+    return Array.isArray(response.data) ? response.data.map(normalizeRole) : response.data;
   }
 
   async getRole(id: string): Promise<any> {
     const response = await this.client.get(`/roles/${id}`);
-    return response.data;
+    return normalizeRole(response.data);
   }
 
-  async createRole(data: { name: string; description?: string }): Promise<any> {
+  /** tenantId omitted = a global role (SuperAdmin only); a BuildingOwner must send one of their own tenants (task 5163). */
+  async createRole(data: { name: string; description?: string; tenantId?: string }): Promise<any> {
     const response = await this.client.post('/roles', data);
     return response.data;
   }
@@ -238,6 +256,12 @@ class ApiService {
   // Tenant endpoints
   async getTenants(): Promise<any[]> {
     const response = await this.client.get('/tenants');
+    return response.data;
+  }
+
+  /** Tenants where the caller holds any role (id, name, ...). */
+  async getMyTenants(): Promise<any[]> {
+    const response = await this.client.get('/tenants/my-tenants');
     return response.data;
   }
 

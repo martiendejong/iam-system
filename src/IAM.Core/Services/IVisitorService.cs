@@ -23,13 +23,23 @@ public interface IVisitorService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Get a paginated list of visitors for a tenant.
+    /// Get a paginated list of visitors for a tenant, optionally only those hosted by one user.
     /// </summary>
     Task<List<Visitor>> GetVisitorsAsync(
         Guid tenantId,
         int skip = 0,
         int take = 20,
         VisitorStatus? statusFilter = null,
+        Guid? hostUserId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// True when the user holds a non-expired role row for the tenant. Users have no tenant column, so this is what
+    /// "member of the tenant" means (a role row without a tenant does not count).
+    /// </summary>
+    Task<bool> IsTenantMemberAsync(
+        Guid userId,
+        Guid tenantId,
         CancellationToken ct = default);
 
     /// <summary>

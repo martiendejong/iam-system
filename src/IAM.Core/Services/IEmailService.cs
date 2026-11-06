@@ -10,12 +10,16 @@ public interface IEmailService
     Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default);
     Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default);
     Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null);
-    Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null);
+    /// <summary>Returns whether the email was actually handed to the SMTP server. A send
+    /// failure must be visible to the caller: an admin acting on "invitation sent" while
+    /// nothing went out cost a full onboarding round (18-10).</summary>
+    Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null);
 
     /// <summary>
     /// Sends an email using an already-rendered subject/body, bypassing the built-in templates.
     /// Used for tenant-customized email templates (e.g. custom invitation emails).
+    /// Returns whether the email was actually handed to the SMTP server.
     /// </summary>
-    Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default);
+    Task<bool> SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default);
     Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default);
 }

@@ -123,6 +123,7 @@ public class ClaimsMappingService : IClaimsMappingService
         // configured lifetimes for the same tenant).
         var tenantId = await _context.UserRoles
             .Where(ur => ur.UserId == userId && ur.TenantId != null)
+            .WhereActive()
             .Select(ur => ur.TenantId)
             .FirstOrDefaultAsync(ct);
 
@@ -172,6 +173,7 @@ public class ClaimsMappingService : IClaimsMappingService
         {
             var roles = await _context.UserRoles
                 .Where(ur => ur.UserId == userId && (tenantId == null || ur.TenantId == tenantId))
+                .WhereActive()
                 .Include(ur => ur.Role)
                 .Select(ur => ur.Role)
                 .ToListAsync(ct);
@@ -270,6 +272,7 @@ public class ClaimsMappingService : IClaimsMappingService
 
             case ClaimSourceType.RolePermission:
                 var hasRole = await _context.UserRoles
+                    .WhereActive()
                     .AnyAsync(ur => ur.UserId == user.Id && ur.Role.Name == rule.SourcePath
                         && (tenantId == null || ur.TenantId == tenantId), ct);
                 return hasRole ? "true" : null; // Only emit claim if user has the role

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -18,6 +19,7 @@ public class SecurityAlertService : ISecurityAlertService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SecurityAlertService> _logger;
     private readonly IWebhookUrlGuard _urlGuard;
+    private readonly IApiKeyCache? _apiKeyCache;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -30,9 +32,11 @@ public class SecurityAlertService : ISecurityAlertService
         IEmailService emailService,
         IHttpClientFactory httpClientFactory,
         ILogger<SecurityAlertService> logger,
-        IWebhookUrlGuard urlGuard)
+        IWebhookUrlGuard urlGuard,
+        IApiKeyCache? apiKeyCache = null)
     {
         _urlGuard = urlGuard;
+        _apiKeyCache = apiKeyCache;
         _context = context;
         _emailService = emailService;
         _httpClientFactory = httpClientFactory;
@@ -446,13 +450,16 @@ public class SecurityAlertService : ISecurityAlertService
             var user = await _context.Users.FindAsync(new object[] { userId }, ct);
             if (user == null) return;
 
+            IReadOnlyList<string> revokedKeys = Array.Empty<string>();
+
             switch (action)
             {
                 case "lock_account":
                     user.IsActive = false;
                     user.UpdatedAt = DateTime.UtcNow;
-                    // Locking an account that keeps refreshing its tokens locks nothing.
+                    // Locking an account that keeps refreshing its tokens, or calling with its API key, locks nothing.
                     await _context.RevokeRefreshTokensAsync(userId, ct);
+                    revokedKeys = await _context.RevokeApiKeysAsync(userId, ct);
                     _logger.LogWarning("Auto-response: Account locked for user {UserId}", userId);
                     break;
 
@@ -481,6 +488,7 @@ public class SecurityAlertService : ISecurityAlertService
             }
 
             await _context.SaveChangesAsync(ct);
+            _apiKeyCache.Forget(revokedKeys);
         }
         catch (Exception ex)
         {

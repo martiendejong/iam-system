@@ -65,12 +65,19 @@ public class VisitorService : IVisitorService
         int skip = 0,
         int take = 20,
         VisitorStatus? statusFilter = null,
+        Guid? hostUserId = null,
         CancellationToken ct = default)
     {
         var query = _context.Visitors
+            .AsNoTracking()
             .Include(v => v.HostUser)
             .Include(v => v.AccessGrants)
             .Where(v => v.TenantId == tenantId);
+
+        if (hostUserId.HasValue)
+        {
+            query = query.Where(v => v.HostUserId == hostUserId.Value);
+        }
 
         if (statusFilter.HasValue)
         {
@@ -85,11 +92,26 @@ public class VisitorService : IVisitorService
             .ToListAsync(ct);
     }
 
+    public async Task<bool> IsTenantMemberAsync(
+        Guid userId,
+        Guid tenantId,
+        CancellationToken ct = default)
+    {
+        // Same membership rule as TenantAccessResolver: a non-expired UserRoles row for that tenant.
+        var now = DateTime.UtcNow;
+        return await _context.UserRoles
+            .AsNoTracking()
+            .AnyAsync(ur => ur.UserId == userId
+                && ur.TenantId == tenantId
+                && (ur.ExpiresAt == null || ur.ExpiresAt > now), ct);
+    }
+
     public async Task<Visitor?> GetVisitorAsync(
         Guid visitorId,
         CancellationToken ct = default)
     {
         return await _context.Visitors
+            .AsNoTracking()
             .Include(v => v.HostUser)
             .Include(v => v.Tenant)
             .Include(v => v.AccessGrants)

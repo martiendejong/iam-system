@@ -13,6 +13,16 @@ export interface User {
   managerUserId?: string | null;
   /** Human / Agent / Service; users default to Human (task 4057) */
   principalKind?: PrincipalKindValue;
+  /** Role assignments as returned by GET /users/me (task 5222) */
+  roles?: CurrentUserRole[];
+}
+
+/** One role assignment of the signed-in user: tenantId null = global; expiresAt set = time-boxed. */
+export interface CurrentUserRole {
+  id: string;
+  name: string;
+  tenantId?: string | null;
+  expiresAt?: string | null;
 }
 
 // Principal kind (task 4057) - shared by users and service accounts
@@ -39,6 +49,8 @@ export interface Role {
   description?: string;
   category?: string;
   isSystem: boolean;
+  /** Null/absent = global role (all tenants). */
+  tenantId?: string | null;
 }
 
 // Tenant types
@@ -76,6 +88,19 @@ export interface RegisterRequest {
   firstName: string;
   lastName: string;
   phoneNumber?: string;
+}
+
+/**
+ * Payload for the admin create-user flow (POST /users → AdminCreateUserRequest).
+ * Mirrors the backend record exactly: no phoneNumber field (the admin endpoint
+ * ignores it). Kept separate from RegisterRequest so the form cannot silently
+ * send fields the endpoint does not accept.
+ */
+export interface CreateUserRequest {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
 }
 
 export interface LoginResponse {

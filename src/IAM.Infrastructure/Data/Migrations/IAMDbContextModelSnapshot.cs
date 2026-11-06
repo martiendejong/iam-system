@@ -1787,7 +1787,7 @@ namespace IAM.Infrastructure.Data.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("AllowedRedirectUris")
-                        .HasColumnType("jsonb");
+                        .HasColumnType("text");
 
                     b.Property<string>("AttributeMapping")
                         .HasColumnType("jsonb");
@@ -3728,6 +3728,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<DateTime?>("LastAuthenticatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ManagerUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(255)
@@ -3736,6 +3739,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<string>("Permissions")
                         .IsRequired()
                         .HasColumnType("jsonb");
+
+                    b.Property<int>("PrincipalKind")
+                        .HasColumnType("integer");
 
                     b.Property<Guid?>("TenantId")
                         .HasColumnType("uuid");
@@ -3753,6 +3759,8 @@ namespace IAM.Infrastructure.Data.Migrations
 
                     b.HasIndex("ClientId")
                         .IsUnique();
+
+                    b.HasIndex("ManagerUserId");
 
                     b.HasIndex("TenantId");
 
@@ -4398,6 +4406,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<DateTime?>("LockoutEnd")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ManagerUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(255)
@@ -4412,6 +4423,9 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Property<string>("PhoneNumber")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
+
+                    b.Property<int>("PrincipalKind")
+                        .HasColumnType("integer");
 
                     b.Property<string>("TotpAlgorithm")
                         .HasMaxLength(16)
@@ -4433,6 +4447,8 @@ namespace IAM.Infrastructure.Data.Migrations
 
                     b.HasIndex("Email")
                         .IsUnique();
+
+                    b.HasIndex("ManagerUserId");
 
                     b.ToTable("Users", (string)null);
                 });
@@ -5123,8 +5139,6 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.Navigation("ApproverRole");
 
                     b.Navigation("DecidedByUser");
-
-                    b.Navigation("Votes");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.ApprovalVote", b =>
@@ -6070,10 +6084,17 @@ namespace IAM.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("IAM.Core.Entities.ServiceAccount", b =>
                 {
+                    b.HasOne("IAM.Core.Entities.User", "ManagerUser")
+                        .WithMany()
+                        .HasForeignKey("ManagerUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("IAM.Core.Entities.Tenant", "Tenant")
                         .WithMany()
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("ManagerUser");
 
                     b.Navigation("Tenant");
                 });
@@ -6211,6 +6232,16 @@ namespace IAM.Infrastructure.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.User", b =>
+                {
+                    b.HasOne("IAM.Core.Entities.User", "ManagerUser")
+                        .WithMany()
+                        .HasForeignKey("ManagerUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("ManagerUser");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.UserRole", b =>
@@ -6351,6 +6382,11 @@ namespace IAM.Infrastructure.Data.Migrations
             modelBuilder.Entity("IAM.Core.Entities.AlertRule", b =>
                 {
                     b.Navigation("Alerts");
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.ApprovalStep", b =>
+                {
+                    b.Navigation("Votes");
                 });
 
             modelBuilder.Entity("IAM.Core.Entities.Building", b =>

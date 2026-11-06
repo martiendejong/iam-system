@@ -279,8 +279,13 @@ public class ServiceAccountsController : ControllerBase
         if (string.IsNullOrEmpty(request.Resource))
             return BadRequest(new { error = "invalid_request", error_description = "resource (target service) is required" });
 
+        // The subject token must be the caller's own: the service compares it with this id.
+        var callerClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
+        if (!Guid.TryParse(callerClaim, out var callerId))
+            return Unauthorized(new { error = "invalid_grant", error_description = "Token exchange failed. The subject token may be invalid or expired." });
+
         var (success, accessToken, expiresAt) = await _serviceAccountService.ExchangeTokenAsync(
-            request.SubjectToken, request.Resource, request.Scope, HttpContext.RequestAborted);
+            request.SubjectToken, request.Resource, callerId, request.Scope, HttpContext.RequestAborted);
 
         if (!success || accessToken == null)
             return Unauthorized(new { error = "invalid_grant", error_description = "Token exchange failed. The subject token may be invalid or expired." });

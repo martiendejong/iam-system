@@ -1,3 +1,4 @@
+using Hazina.Security.ApiKeys;
 using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -16,11 +17,13 @@ public class UsersController : ControllerBase
 {
     private readonly IAMDbContext _context;
     private readonly IAuthService _authService;
+    private readonly IApiKeyCache? _apiKeyCache;
 
-    public UsersController(IAMDbContext context, IAuthService authService)
+    public UsersController(IAMDbContext context, IAuthService authService, IApiKeyCache? apiKeyCache = null)
     {
         _context = context;
         _authService = authService;
+        _apiKeyCache = apiKeyCache;
     }
 
     /// <summary>
@@ -303,10 +306,12 @@ public class UsersController : ControllerBase
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
 
-        // Revoke all refresh tokens
+        // Revoke all refresh tokens and API keys: reactivating the user must not bring them back
         await _context.RevokeRefreshTokensAsync(id);
+        var revokedKeys = await _context.RevokeApiKeysAsync(id);
 
         await _context.SaveChangesAsync();
+        _apiKeyCache.Forget(revokedKeys);
 
         return Ok(new { message = "User deactivated successfully" });
     }
