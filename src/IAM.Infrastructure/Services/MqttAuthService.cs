@@ -37,8 +37,12 @@ public class MqttAuthService : IMqttAuthService
         _logger = logger;
     }
 
-    public async Task<MqttAuthResult> AuthenticateClientAsync(
+    public Task<MqttAuthResult> AuthenticateClientAsync(
         string clientId, string? username, string? password, CancellationToken ct = default)
+        => AuthenticateClientAsync(clientId, username, password, null, ct);
+
+    public async Task<MqttAuthResult> AuthenticateClientAsync(
+        string clientId, string? username, string? password, string? certFingerprint, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _totalAuthAttempts);
 
@@ -62,12 +66,19 @@ public class MqttAuthService : IMqttAuthService
         }
 
         // Certificate-based authentication:
-        // When username is "certificate" or empty/null, the broker has already validated the
-        // client certificate via TLS. We trust the clientId identity from the broker.
+        // When username is "certificate" or empty/null, the broker must forward the fingerprint of the
+        // client certificate it verified. The clientId alone is client-chosen and proves nothing.
         if (string.IsNullOrEmpty(username) || username.Equals("certificate", StringComparison.OrdinalIgnoreCase))
         {
             if (device.AuthenticationMethod == "certificate")
             {
+                if (!await CertificateBelongsToDeviceAsync(device.Id, certFingerprint, ct))
+                {
+                    Interlocked.Increment(ref _failedAuthAttempts);
+                    _logger.LogWarning("MQTT auth failed: no matching active certificate for {ClientId}", clientId);
+                    return new MqttAuthResult { Allowed = false, Error = "Client certificate fingerprint missing or not registered for this device" };
+                }
+
                 _logger.LogInformation("MQTT auth success (certificate): {ClientId}", clientId);
                 return new MqttAuthResult
                 {
@@ -113,6 +124,51 @@ public class MqttAuthService : IMqttAuthService
         Interlocked.Increment(ref _failedAuthAttempts);
         _logger.LogWarning("MQTT auth failed: unknown auth method {Method} for {ClientId}", device.AuthenticationMethod, clientId);
         return new MqttAuthResult { Allowed = false, Error = $"Unsupported authentication method: {device.AuthenticationMethod}" };
+    }
+
+    /// <summary>
+    /// True when the fingerprint (hex, any case, optional ':' separators; SHA-256 or the stored thumbprint)
+    /// belongs to an Active, currently valid certificate of the device. Fails closed on any missing input.
+    /// </summary>
+    private async Task<bool> CertificateBelongsToDeviceAsync(Guid deviceKey, string? fingerprint, CancellationToken ct)
+    {
+        var wanted = NormalizeFingerprint(fingerprint);
+        if (wanted.Length == 0)
+            return false;
+
+        var now = DateTime.UtcNow;
+        var certs = await _context.DeviceCertificates
+            .AsNoTracking()
+            .Where(c => c.DeviceId == deviceKey && c.Status == "Active" && c.RevokedAt == null
+                        && c.NotBefore <= now && c.NotAfter > now)
+            .ToListAsync(ct);
+
+        foreach (var cert in certs)
+        {
+            if (string.Equals(NormalizeFingerprint(cert.Thumbprint), wanted, StringComparison.Ordinal))
+                return true;
+            if (string.Equals(Sha256OfPem(cert.CertificatePem), wanted, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    private static string NormalizeFingerprint(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "" : value.Replace(":", "").Replace("-", "").Trim().ToUpperInvariant();
+
+    private static string Sha256OfPem(string? pem)
+    {
+        if (string.IsNullOrWhiteSpace(pem))
+            return "";
+        try
+        {
+            using var cert = System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPem(pem);
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(cert.RawData));
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     public async Task<bool> IsSuperuserAsync(string clientId, CancellationToken ct = default)

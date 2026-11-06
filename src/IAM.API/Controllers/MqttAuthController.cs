@@ -65,7 +65,7 @@ public class MqttAuthController : ControllerBase
         }
 
         var result = await _mqttAuthService.AuthenticateClientAsync(
-            request.ClientId, request.Username, request.Password);
+            request.ClientId, request.Username, request.Password, request.CertFingerprint);
 
         if (!result.Allowed)
         {
@@ -148,7 +148,7 @@ public class MqttAuthController : ControllerBase
             return Ok(new { result = "deny" });
 
         var result = await _mqttAuthService.AuthenticateClientAsync(
-            request.ClientId, request.Username, request.Password);
+            request.ClientId, request.Username, request.Password, request.CertFingerprint);
 
         if (!result.Allowed)
         {
@@ -256,6 +256,9 @@ public class MqttAuthRequest
 
     /// <summary>MQTT password (for HMAC: "timestamp:nonce:hmac" format)</summary>
     public string? Password { get; set; }
+
+    /// <summary>Fingerprint (hex) of the client certificate the broker verified; required for certificate devices</summary>
+    public string? CertFingerprint { get; set; }
 }
 
 /// <summary>
@@ -308,6 +311,9 @@ public class EmqxAuthRequest
 
     /// <summary>Client IP address as seen by EMQX</summary>
     public string? PeerHost { get; set; }
+
+    /// <summary>Fingerprint (hex) of the client certificate the broker verified; required for certificate devices</summary>
+    public string? CertFingerprint { get; set; }
 }
 
 /// <summary>
