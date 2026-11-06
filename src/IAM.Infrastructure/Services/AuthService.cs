@@ -320,6 +320,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            RefreshTokenId = refreshTokenId,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
@@ -448,6 +449,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = newRefreshToken,  // Return NEW refresh token (single-use rotation)
+            RefreshTokenId = newRefreshTokenId,
             User = storedToken.User,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
@@ -602,6 +604,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            RefreshTokenId = refreshTokenId,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays

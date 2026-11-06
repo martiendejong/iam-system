@@ -1,3 +1,4 @@
+using IAM.API.Auth;
 using System.Globalization;
 using System.Security.Claims;
 using IAM.Core;
@@ -170,6 +171,9 @@ public class AuthController : ControllerBase
             new(ClaimTypes.Email, result.User.Email),
             new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
         };
+        // Task 5568: bind the cookie to the sign-in (refresh token) it belongs to, so revoking that sign-in ends the cookie.
+        if (result.RefreshTokenId.HasValue)
+            claims.Add(new(AccessTokenSessionValidator.RefreshTokenIdClaim, result.RefreshTokenId.Value.ToString()));
         var identity = new ClaimsIdentity(claims, "IAM.Session");
         var authProperties = rememberMe
             ? new AuthenticationProperties
@@ -225,6 +229,10 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
+        // Task 5568: read the IAM.Session cookie BEFORE rotating. Rotation revokes the refresh token the cookie is bound to,
+        // so authenticating afterwards would hit the revocation check, reject the cookie and sign the browser out of SSO.
+        var sso = await HttpContext.AuthenticateAsync("IAM.Session");
+
         var result = await _authService.RefreshTokenAsync(refreshToken, ipAddress, userAgent);
 
         if (!result.Success)
@@ -241,6 +249,16 @@ public class AuthController : ControllerBase
             SameSite = SameSiteMode.Strict,
             Expires = DateTimeOffset.UtcNow.AddDays(result.RefreshTokenLifetimeDays)
         });
+
+        // Move the cookie to the new refresh token (same user, same lifetime) so a normal refresh does not sign the browser out of SSO.
+        if (sso.Succeeded && sso.Principal != null && result.RefreshTokenId.HasValue)
+        {
+            var claims = sso.Principal.Claims
+                .Where(c => c.Type != AccessTokenSessionValidator.RefreshTokenIdClaim).ToList();
+            claims.Add(new Claim(AccessTokenSessionValidator.RefreshTokenIdClaim, result.RefreshTokenId.Value.ToString()));
+            await HttpContext.SignInAsync("IAM.Session",
+                new ClaimsPrincipal(new ClaimsIdentity(claims, "IAM.Session")), sso.Properties);
+        }
 
         return Ok(new
         {

@@ -350,6 +350,25 @@ public class RefreshTokenSessionEndingTests
     }
 
     [Fact]
+    public async Task SecurityAlert_KillSessionsAutoResponse_RevokesRefreshTokensOfThatUserOnly()
+    {
+        var context = CreateContext();
+        var alerts = CreateSecurityAlertService(context);
+        var user = await AddUserAsync(context, "sessions-killed");
+        var bystander = await AddUserAsync(context, "sessions-kept");
+        await AddTokenAsync(context, user.Id);
+        await AddTokenAsync(context, user.Id);
+        await AddTokenAsync(context, bystander.Id);
+        var rule = await AddAlertRuleAsync(context, "kill_sessions");
+
+        await alerts.FireAlertAsync(rule.Id, "Suspicious", $"{{\"userId\":\"{user.Id}\"}}");
+
+        Assert.True((await context.Users.FindAsync(user.Id))!.IsActive);
+        Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
+        Assert.Equal(1, await ActiveTokenCountAsync(context, bystander.Id));
+    }
+
+    [Fact]
     public async Task SecurityAlert_ForceMfaAutoResponse_DoesNotRevokeRefreshTokens()
     {
         var context = CreateContext();
