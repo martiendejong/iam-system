@@ -11,7 +11,7 @@ namespace IAM.API.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/claims-mapping")]
-[Authorize]
+[Authorize(Roles = "SuperAdmin,SystemAdmin")]
 public class ClaimsMappingController : ControllerBase
 {
     private readonly IClaimsMappingService _claimsMappingService;
