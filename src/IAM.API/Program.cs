@@ -129,6 +129,7 @@ builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
 builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();
 builder.Services.AddScoped<IResolverService, ResolverService>();
+builder.Services.AddScoped<IAuthorityResolverService, AuthorityResolverService>();
 builder.Services.AddScoped<IRegionService, RegionService>();
 builder.Services.AddScoped<IDelegationService, DelegationService>();
 
