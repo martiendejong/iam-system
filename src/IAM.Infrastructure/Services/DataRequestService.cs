@@ -310,6 +310,15 @@ public class DataRequestService : IDataRequestService
             consent.RevokedAt = DateTime.UtcNow;
         }
 
+        // Scrub stored GDPR exports: they still hold the original e-mail, name and phone
+        var storedExports = await _context.DataRequests
+            .Where(r => r.UserId == userId && r.DataUrl != null)
+            .ToListAsync(ct);
+        foreach (var export in storedExports)
+        {
+            export.DataUrl = null;
+        }
+
         // Complete the request
         request.Status = DataRequestStatus.Completed;
         request.CompletedAt = DateTime.UtcNow;
@@ -358,14 +367,66 @@ public class DataRequestService : IDataRequestService
 
     public async Task<List<DataRequest>> GetRequestsAsync(Guid? userId, CancellationToken ct = default)
     {
-        var query = _context.DataRequests.AsQueryable();
+        var query = _context.DataRequests.AsNoTracking();
 
         if (userId.HasValue)
             query = query.Where(r => r.UserId == userId.Value);
 
+        // Project without DataUrl so the (large) export text is never loaded for listings
         return await query
             .OrderByDescending(r => r.RequestedAt)
+            .Select(r => new DataRequest
+            {
+                Id = r.Id,
+                UserId = r.UserId,
+                Type = r.Type,
+                Status = r.Status,
+                RequestedAt = r.RequestedAt,
+                CompletedAt = r.CompletedAt,
+                ProcessedBy = r.ProcessedBy,
+                Notes = r.Notes,
+                ExpiresAt = r.ExpiresAt,
+                HasData = r.DataUrl != null
+            })
             .ToListAsync(ct);
+    }
+
+    public async Task<DataRequest?> GetExportForDownloadAsync(Guid userId, Guid requestId, CancellationToken ct = default)
+    {
+        return await _context.DataRequests
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == requestId && r.UserId == userId, ct);
+    }
+
+    public async Task<int> PurgeExpiredExportsAsync(CancellationToken ct = default)
+    {
+        const int batchSize = 100;
+        var total = 0;
+
+        while (true)
+        {
+            var now = DateTime.UtcNow;
+            // Tracked rows (not ExecuteUpdate) so the EF InMemory provider used by tests works
+            var batch = await _context.DataRequests
+                .Where(r => r.DataUrl != null && r.ExpiresAt != null && r.ExpiresAt < now)
+                .OrderBy(r => r.ExpiresAt)
+                .Take(batchSize)
+                .ToListAsync(ct);
+
+            if (batch.Count == 0)
+                break;
+
+            foreach (var r in batch)
+                r.DataUrl = null;
+
+            await _context.SaveChangesAsync(ct);
+            total += batch.Count;
+        }
+
+        if (total > 0)
+            _logger.LogInformation("Purged {Count} expired data export(s)", total);
+
+        return total;
     }
 
     public async Task<List<DataRequest>> GetPendingRequestsAsync(CancellationToken ct = default)
