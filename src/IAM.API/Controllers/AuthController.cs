@@ -207,7 +207,14 @@ public class AuthController : ControllerBase
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _authService.VerifyStepUpAsync(request.Email, request.Code, ipAddress, userAgent, request.RememberMe);
+        if (string.IsNullOrWhiteSpace(request.Email) && request.UserId == null)
+        {
+            return BadRequest(new { error = "Email or userId is required" });
+        }
+
+        var result = request.UserId is { } userId
+            ? await _authService.VerifyStepUpByUserIdAsync(userId, request.Code, ipAddress, userAgent, request.RememberMe)
+            : await _authService.VerifyStepUpAsync(request.Email!, request.Code, ipAddress, userAgent, request.RememberMe);
 
         if (!result.Success)
         {
@@ -313,6 +320,6 @@ public record LoginRequest(string Email, string Password, string? ReturnUrl = nu
 public record VerifyEmailRequest(string Token);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
-public record StepUpVerifyRequest(string Email, string Code, bool RememberMe = false);
+public record StepUpVerifyRequest(string? Email, string Code, bool RememberMe = false, Guid? UserId = null);
 public record TwoFactorVerifyRequest(Guid UserId, string Code, bool RememberMe = false, string? ChallengeToken = null);
 public record ResendTwoFactorRequest(Guid UserId, string? ReturnUrl = null, string? ChallengeToken = null);

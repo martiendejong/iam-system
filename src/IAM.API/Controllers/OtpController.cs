@@ -74,6 +74,16 @@ public class OtpController : ControllerBase
             return BadRequest(new { error = loginResult.Error });
         }
 
+        if (loginResult.RequiresStepUp)
+        {
+            return Ok(new
+            {
+                requiresStepUp = true,
+                userId = loginResult.User!.Id,
+                message = "Additional verification required. Check your email for a code."
+            });
+        }
+
         if (loginResult.RequiresTwoFactor)
         {
             return Ok(new
@@ -157,6 +167,16 @@ public class OtpController : ControllerBase
         if (!loginResult.Success)
         {
             return BadRequest(new { error = loginResult.Error });
+        }
+
+        if (loginResult.RequiresStepUp)
+        {
+            return Ok(new
+            {
+                requiresStepUp = true,
+                userId = loginResult.User!.Id,
+                message = "Additional verification required. Check your email for a code."
+            });
         }
 
         if (loginResult.RequiresTwoFactor)

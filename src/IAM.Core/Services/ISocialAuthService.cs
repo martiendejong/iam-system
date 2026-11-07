@@ -21,7 +21,7 @@ public interface ISocialAuthService
     /// <summary>
     /// Handle the OAuth callback, exchange code for tokens, and return JWT auth result
     /// </summary>
-    Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state, string? browserSecret);
+    Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state, string? browserSecret, string? ipAddress = null, string? userAgent = null);
 
     /// <summary>
     /// Link an external provider account to an existing IAM user
