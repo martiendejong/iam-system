@@ -10,6 +10,22 @@ That's it! The system automatically creates verified test users on first run.
 
 ---
 
+## Local PostgreSQL and Redis (docker compose)
+
+`docker-compose.yml` publishes PostgreSQL (5432) and Redis (6379) on 127.0.0.1 only, and both need passwords from a git-ignored `.env`:
+
+1. `cp .env.example .env` and set `IAM_POSTGRES_PASSWORD` and `IAM_REDIS_PASSWORD` (generation hints are in the file). `docker compose up` fails fast if either is unset.
+2. Point the API at them in `src/IAM.API/appsettings.Development.json` (or user secrets):
+   - `ConnectionStrings:DefaultConnection` = `Host=localhost;Port=5432;Database=iamdb;Username=iamuser;Password=<IAM_POSTGRES_PASSWORD>`
+   - `Redis:ConnectionString` = `localhost:6379,password=<IAM_REDIS_PASSWORD>`
+3. Scripts: `verify-test-user.ps1` reads `IAM_POSTGRES_PASSWORD` from the environment; run `psql -v iam_password="$IAM_POSTGRES_PASSWORD" -f setup-database.sql`.
+
+**Existing local volume:** Postgres applies `POSTGRES_PASSWORD` only when `postgres-data` is first created. Either reset it (`docker compose down -v`, loses local data) or change it in place:
+`docker exec -it iam-postgres psql -U iamuser -d iamdb -c "ALTER USER iamuser PASSWORD '<new>'"`.
+Redis picks up the new password on restart (`docker compose up -d`).
+
+---
+
 ## Test Users (Pre-Verified)
 
 All test users have their email already verified - you can login immediately.

@@ -448,7 +448,7 @@ Current Stats:
 - Host: localhost:5432
 - Database: iamdb
 - User: iamuser
-- Password: iampassword (development only)
+- Password: set via IAM_POSTGRES_PASSWORD in the git-ignored .env (see .env.example)
 
 **API:**
 - Base URL: https://localhost:5001
