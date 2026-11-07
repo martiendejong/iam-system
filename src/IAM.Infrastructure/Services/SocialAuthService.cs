@@ -128,7 +128,7 @@ public class SocialAuthService : ISocialAuthService
         return $"{authorizationEndpoint}?{queryString}";
     }
 
-    public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state, string? browserSecret)
+    public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state, string? browserSecret, string? ipAddress = null, string? userAgent = null)
     {
         // Consume the state entry exactly once: prevents replays and validates the origin.
         var stateEntry = ConsumeState(state);
@@ -332,7 +332,7 @@ public class SocialAuthService : ISocialAuthService
         // magic-link and OTP login use, so an account enrolled in 2FA gets a challenge (RequiresTwoFactor,
         // no tokens) instead of a session. Applies to existing, linked and freshly auto-created accounts
         // alike. Token issuance lives in one place (AuthService) - nothing here mints tokens directly.
-        return await _authService.CompletePasswordlessLoginAsync(user);
+        return await _authService.CompletePasswordlessLoginAsync(user, ipAddress, userAgent);
     }
 
     /// <summary>

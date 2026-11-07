@@ -122,8 +122,10 @@ class ApiService {
     return response.data;
   }
 
-  async verifyStepUp(email: string, code: string, rememberMe = false): Promise<LoginResponse> {
-    const response = await this.client.post<LoginResponse>('/auth/step-up/verify', { email, code, rememberMe });
+  /** Completes a step-up by e-mail (password login) or, when only the user id is known, by userId (task 5630). */
+  async verifyStepUp(email: string, code: string, rememberMe = false, userId?: string): Promise<LoginResponse> {
+    const body = userId ? { userId, code, rememberMe } : { email, code, rememberMe };
+    const response = await this.client.post<LoginResponse>('/auth/step-up/verify', body);
     if (response.data.accessToken) {
       localStorage.setItem('accessToken', response.data.accessToken);
     }

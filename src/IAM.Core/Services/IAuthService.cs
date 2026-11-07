@@ -30,6 +30,9 @@ public interface IAuthService
     /// (see AuthResult.RequiresStepUp), by validating the emailed OTP and issuing tokens.
     /// </summary>
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
+
+    /// <summary>Same as VerifyStepUpAsync for clients that only know the user id (magic-link, passkey, social).</summary>
+    Task<AuthResult> VerifyStepUpByUserIdAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
     Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? challengeToken, string? returnUrl = null);
 

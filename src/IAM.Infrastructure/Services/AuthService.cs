@@ -256,30 +256,10 @@ public class AuthService : IAuthService
         user.LastLoginAt = DateTime.UtcNow;
 
         // Adaptive MFA: assess login risk before issuing any tokens
-        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
-            user.Id, ipAddress ?? "unknown", userAgent);
-
-        if (riskScore.Action == RiskAction.Block)
+        var riskResult = await ApplyRiskGateAsync(user, ipAddress, userAgent);
+        if (riskResult != null)
         {
-            await _context.SaveChangesAsync();
-            return new AuthResult
-            {
-                Success = false,
-                Error = "Login blocked due to unusual account activity. Please contact support."
-            };
-        }
-
-        if (riskScore.Action == RiskAction.StepUp)
-        {
-            await _context.SaveChangesAsync();
-            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
-
-            return new AuthResult
-            {
-                Success = true,
-                RequiresStepUp = true,
-                User = user
-            };
+            return riskResult;
         }
 
         // Resolve this organization's configured token lifetime (falls back to today's
@@ -612,6 +592,41 @@ public class AuthService : IAuthService
         };
     }
 
+    /// <summary>
+    /// Adaptive-MFA gate shared by password and passwordless login. Returns null when the login may
+    /// proceed (Allow), a failed result for Block, or a RequiresStepUp result (code e-mailed) for StepUp.
+    /// </summary>
+    private async Task<AuthResult?> ApplyRiskGateAsync(User user, string? ipAddress, string? userAgent)
+    {
+        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
+            user.Id, ipAddress ?? "unknown", userAgent);
+
+        if (riskScore.Action == RiskAction.Block)
+        {
+            await _context.SaveChangesAsync();
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Login blocked due to unusual account activity. Please contact support."
+            };
+        }
+
+        if (riskScore.Action == RiskAction.StepUp)
+        {
+            await _context.SaveChangesAsync();
+            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresStepUp = true,
+                User = user
+            };
+        }
+
+        return null;
+    }
+
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
@@ -625,6 +640,22 @@ public class AuthService : IAuthService
                 TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
                 User = user
             };
+        }
+
+        if (!user.IsActive)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Account is inactive"
+            };
+        }
+
+        // Adaptive MFA: same Allow / Step-up / Block outcomes as password login.
+        var riskResult = await ApplyRiskGateAsync(user, ipAddress, userAgent);
+        if (riskResult != null)
+        {
+            return riskResult;
         }
 
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
@@ -658,6 +689,26 @@ public class AuthService : IAuthService
         }
 
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
+    }
+
+    public async Task<AuthResult> VerifyStepUpByUserIdAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
+    {
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        // Ends in LoginBypassPasswordAsync (not the gate), so a verified code is never scored again.
+        return await VerifyStepUpAsync(user.Email, code, ipAddress, userAgent, rememberMe);
     }
 
     public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)

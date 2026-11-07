@@ -167,6 +167,16 @@ public class PasskeyController : ControllerBase
                 return Unauthorized(new { error = loginResult.Error });
             }
 
+            if (loginResult.RequiresStepUp)
+            {
+                return Ok(new
+                {
+                    requiresStepUp = true,
+                    userId = loginResult.User!.Id,
+                    message = "Additional verification required. Check your email for a code."
+                });
+            }
+
             if (loginResult.RequiresTwoFactor)
             {
                 return Ok(new

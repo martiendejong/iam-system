@@ -86,7 +86,8 @@ public class SocialAuthController : ControllerBase
         Guid providerId,
         [FromBody] SocialCallbackRequest request)
     {
-        var result = await _socialAuthService.HandleCallbackAsync(providerId, request.Code, request.State, request.BrowserSecret);
+        var result = await _socialAuthService.HandleCallbackAsync(providerId, request.Code, request.State, request.BrowserSecret,
+            HttpContext.Connection.RemoteIpAddress?.ToString(), Request.Headers["User-Agent"].ToString());
 
         if (!result.Success)
         {
@@ -95,6 +96,16 @@ public class SocialAuthController : ControllerBase
 
         // Task 4573: an account with 2FA enabled is not signed in by the provider alone. Same
         // challenge shape as password / magic-link / OTP / passkey login: no cookie, no token.
+        if (result.RequiresStepUp)
+        {
+            return Ok(new
+            {
+                requiresStepUp = true,
+                userId = result.User!.Id,
+                message = "Additional verification required. Check your email for a code."
+            });
+        }
+
         if (result.RequiresTwoFactor)
         {
             return Ok(new
