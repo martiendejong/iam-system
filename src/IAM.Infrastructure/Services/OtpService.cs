@@ -96,35 +96,82 @@ public class OtpService : IOtpService
 
     public async Task<bool> SendSmsOtpAsync(string phoneNumber, OtpPurpose purpose, string? ipAddress = null)
     {
-        if (!WithinLimits("otp-sms", phoneNumber.Trim(), MaxSmsPerPhonePerHour, ipAddress))
+        var normalized = PhoneNumberNormalizer.Normalize(phoneNumber);
+        if (normalized == null) return true;
+
+        if (!WithinLimits("otp-sms", normalized, MaxSmsPerPhonePerHour, ipAddress))
         {
             _logger.LogWarning("Rate limit exceeded for SMS OTP requests; send skipped");
             return true;
         }
 
-        // Find user by phone number
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.PhoneNumber == phoneNumber);
+        // Only a VERIFIED number identifies an account. Unknown, unverified and ambiguous numbers all
+        // take the same silent path so the response never reveals which case applied.
+        var matches = await _context.Users.Where(u => u.VerifiedPhoneNumber == normalized).Take(2).ToListAsync();
+        var user = matches.Count == 1 ? matches[0] : null;
 
-        if (purpose == OtpPurpose.Login && user == null)
+        if (purpose == OtpPurpose.Login && (user == null || !user.IsActive))
         {
-            _logger.LogDebug("SMS OTP requested for non-existent phone {PhoneNumber}", phoneNumber);
+            _logger.LogDebug("SMS login OTP not sent: no single active account with this verified number");
             return true;
         }
 
-        if (purpose == OtpPurpose.Login && user != null && !user.IsActive)
+        await IssueSmsCodeAsync(user?.Id, normalized, purpose);
+        return true;
+    }
+
+    public async Task<PhoneVerificationSendResult> SendPhoneVerificationAsync(User user, string? ipAddress = null)
+    {
+        var normalized = PhoneNumberNormalizer.Normalize(user.PhoneNumber);
+        if (!PhoneNumberNormalizer.IsValid(normalized))
+            return PhoneVerificationSendResult.InvalidNumber;
+
+        if (await _context.Users.AnyAsync(u => u.Id != user.Id && u.VerifiedPhoneNumber == normalized))
+            return PhoneVerificationSendResult.AlreadyVerifiedElsewhere;
+
+        if (!WithinLimits("otp-sms", normalized!, MaxSmsPerPhonePerHour, ipAddress))
+            return PhoneVerificationSendResult.RateLimited;
+
+        await IssueSmsCodeAsync(user.Id, normalized!, OtpPurpose.PhoneVerification);
+        return PhoneVerificationSendResult.Sent;
+    }
+
+    public async Task<PhoneVerificationConfirmResult> ConfirmPhoneVerificationAsync(User user, string code)
+    {
+        var normalized = PhoneNumberNormalizer.Normalize(user.PhoneNumber);
+        if (!PhoneNumberNormalizer.IsValid(normalized))
+            return PhoneVerificationConfirmResult.InvalidNumber;
+
+        if (await _context.Users.AnyAsync(u => u.Id != user.Id && u.VerifiedPhoneNumber == normalized))
+            return PhoneVerificationConfirmResult.AlreadyVerifiedElsewhere;
+
+        if (!await ValidateOtpAsync(null, normalized, code, OtpPurpose.PhoneVerification))
+            return PhoneVerificationConfirmResult.InvalidCode;
+
+        user.MarkPhoneVerified(normalized!);
+        try
         {
-            _logger.LogDebug("SMS OTP requested for inactive user phone {PhoneNumber}", phoneNumber);
-            return true;
+            await _context.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Lost a race with another account verifying the same number: the unique index decides.
+            user.VerifiedPhoneNumber = null;
+            user.PhoneVerifiedAt = null;
+            return PhoneVerificationConfirmResult.AlreadyVerifiedElsewhere;
         }
 
+        return PhoneVerificationConfirmResult.Verified;
+    }
+
+    private async Task IssueSmsCodeAsync(Guid? userId, string normalizedPhone, OtpPurpose purpose)
+    {
         var code = GenerateNumericCode();
-        var codeHash = HashCode(code);
-
         var otpCode = new OtpCode
         {
-            UserId = user?.Id,
-            PhoneNumber = phoneNumber,
-            Code = codeHash,
+            UserId = userId,
+            PhoneNumber = normalizedPhone,
+            Code = HashCode(code),
             Purpose = purpose,
             ExpiresAt = DateTime.UtcNow.AddMinutes(ExpiryMinutes),
             MaxAttempts = MaxAttemptsPerCode
@@ -133,12 +180,10 @@ public class OtpService : IOtpService
         _context.OtpCodes.Add(otpCode);
         await _context.SaveChangesAsync();
 
-        // Send SMS with the plain code
         var message = $"Your IAM System verification code is: {code}. It expires in {ExpiryMinutes} minutes.";
-        await _smsService.SendSmsAsync(phoneNumber, message);
+        await _smsService.SendSmsAsync(normalizedPhone, message);
 
-        _logger.LogInformation("SMS OTP sent to {PhoneNumber} for purpose {Purpose}", phoneNumber, purpose);
-        return true;
+        _logger.LogInformation("SMS OTP sent for purpose {Purpose}", purpose);
     }
 
     private bool WithinLimits(string channel, string subject, int perSubjectLimit, string? ipAddress)
@@ -158,6 +203,11 @@ public class OtpService : IOtpService
         }
 
         var codeHash = HashCode(code);
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            phoneNumber = PhoneNumberNormalizer.Normalize(phoneNumber);
+            if (phoneNumber == null) return false;
+        }
 
         // Find the most recent matching OTP
         var query = _context.OtpCodes

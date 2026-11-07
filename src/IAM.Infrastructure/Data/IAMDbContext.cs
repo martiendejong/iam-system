@@ -113,6 +113,9 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.PhoneNumber).HasMaxLength(50);
+            entity.Property(e => e.VerifiedPhoneNumber).HasMaxLength(50);
+            // One verified number belongs to exactly one account (enforced by the database).
+            entity.HasIndex(e => e.VerifiedPhoneNumber).IsUnique().HasFilter("\"VerifiedPhoneNumber\" IS NOT NULL");
             entity.Property(e => e.AvatarUrl).HasMaxLength(500);
 
             entity.HasMany(e => e.UserRoles)

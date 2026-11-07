@@ -43,6 +43,7 @@ public class SendRequestEnumerationTests
     {
         Email = address,
         PhoneNumber = phone,
+        VerifiedPhoneNumber = phone,
         PasswordHash = "x",
         FirstName = "T",
         LastName = "U",

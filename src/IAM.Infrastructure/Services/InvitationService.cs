@@ -558,8 +558,9 @@ public class InvitationService : IInvitationService
         var trustedDevices = await _context.TrustedDevices.Where(d => d.UserId == userId).ToListAsync(ct);
         var magicLinks = await _context.MagicLinkTokens.Where(m => m.UserId == userId && m.UsedAt == null).ToListAsync(ct);
         var oldPhone = user.PhoneNumber;
+        var oldNormalizedPhone = PhoneNumberNormalizer.Normalize(user.PhoneNumber);
         var otpCodes = await _context.OtpCodes
-            .Where(o => o.UsedAt == null && (o.UserId == userId || (oldPhone != null && o.PhoneNumber == oldPhone)))
+            .Where(o => o.UsedAt == null && (o.UserId == userId || (oldPhone != null && (o.PhoneNumber == oldPhone || o.PhoneNumber == oldNormalizedPhone))))
             .ToListAsync(ct);
         var revokedApiKeyHashes = await _context.RevokeApiKeysAsync(userId, ct);
         var sessions = await _context.UserSessions.Where(s => s.UserId == userId && !s.IsRevoked).ToListAsync(ct);
@@ -586,7 +587,7 @@ public class InvitationService : IInvitationService
         user.TwoFactorEnabled = false;
         user.TwoFactorSecret = null;
         user.TwoFactorMethod = TwoFactorMethod.None;
-        user.PhoneNumber = null;
+        user.SetPhoneNumber(null);
         user.AvatarUrl = null;
         user.FailedLoginAttempts = 0;
         user.IsLockedOut = false;
