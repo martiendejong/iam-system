@@ -6,10 +6,10 @@ services:
     container_name: iam-postgres
     environment:
       POSTGRES_USER: iamuser
-      POSTGRES_PASSWORD: iampassword
+      POSTGRES_PASSWORD: ${IAM_POSTGRES_PASSWORD:?Set IAM_POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: iamdb
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -21,12 +21,16 @@ services:
   redis:
     image: redis:7-alpine
     container_name: iam-redis
+    environment:
+      IAM_REDIS_PASSWORD: ${IAM_REDIS_PASSWORD:?Set IAM_REDIS_PASSWORD in .env (see .env.example)}
+    command: ["redis-server", "--requirepass", "${IAM_REDIS_PASSWORD:?Set IAM_REDIS_PASSWORD in .env (see .env.example)}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # REDISCLI_AUTH keeps the password out of the process arguments
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$IAM_REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
