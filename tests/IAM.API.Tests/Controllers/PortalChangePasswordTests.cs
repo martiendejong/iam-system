@@ -64,7 +64,7 @@ public class PortalChangePasswordTests
     private static PortalController CreateController(IAMDbContext context, Guid userId, Guid? refreshTokenId = null, Guid? sessionHeaderId = null)
     {
         var controller = new PortalController(
-            context, new SessionService(context, NullLogger<SessionService>.Instance), NullLogger<PortalController>.Instance);
+            context, new SessionService(context, NullLogger<SessionService>.Instance), null!, NullLogger<PortalController>.Instance);
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId.ToString()) };
         if (refreshTokenId.HasValue)
             claims.Add(new Claim("refresh_token_id", refreshTokenId.Value.ToString()));

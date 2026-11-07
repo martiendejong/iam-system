@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -14,15 +15,18 @@ public class PortalController : ControllerBase
 {
     private readonly IAMDbContext _context;
     private readonly ISessionService _sessionService;
+    private readonly IOtpService _otpService;
     private readonly ILogger<PortalController> _logger;
 
     public PortalController(
         IAMDbContext context,
         ISessionService sessionService,
+        IOtpService otpService,
         ILogger<PortalController> logger)
     {
         _context = context;
         _sessionService = sessionService;
+        _otpService = otpService;
         _logger = logger;
     }
 
@@ -49,6 +53,7 @@ public class PortalController : ControllerBase
             firstName = user.FirstName,
             lastName = user.LastName,
             phoneNumber = user.PhoneNumber,
+            phoneVerified = user.VerifiedPhoneNumber != null,
             avatarUrl = user.AvatarUrl,
             createdAt = user.CreatedAt
         });
@@ -75,7 +80,7 @@ public class PortalController : ControllerBase
             user.LastName = request.LastName.Trim();
 
         // Allow setting phone to null (clearing it)
-        user.PhoneNumber = request.PhoneNumber?.Trim();
+        user.SetPhoneNumber(request.PhoneNumber);
         user.AvatarUrl = request.AvatarUrl?.Trim();
         user.UpdatedAt = DateTime.UtcNow;
 
@@ -88,9 +93,51 @@ public class PortalController : ControllerBase
             firstName = user.FirstName,
             lastName = user.LastName,
             phoneNumber = user.PhoneNumber,
+            phoneVerified = user.VerifiedPhoneNumber != null,
             avatarUrl = user.AvatarUrl,
             createdAt = user.CreatedAt
         });
+    }
+
+    // ─── Phone verification ────────────────────────────────────
+
+    /// <summary>Send a code to the profile phone number. The number is only usable for SMS login once confirmed.</summary>
+    [HttpPost("phone/verification/send")]
+    public async Task<IActionResult> SendPhoneVerification(CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized(new { error = "Invalid user" });
+        var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
+        if (user == null) return NotFound(new { error = "User not found" });
+
+        var result = await _otpService.SendPhoneVerificationAsync(user, HttpContext.Connection.RemoteIpAddress?.ToString());
+        return result switch
+        {
+            PhoneVerificationSendResult.Sent => Ok(new { message = "A verification code has been sent to your phone number." }),
+            PhoneVerificationSendResult.InvalidNumber => BadRequest(new { error = "Enter your phone number in international format, for example +31612345678." }),
+            PhoneVerificationSendResult.AlreadyVerifiedElsewhere => Conflict(new { error = "This phone number is already verified on another account." }),
+            _ => StatusCode(429, new { error = "Too many requests. Try again later." })
+        };
+    }
+
+    /// <summary>Confirm the code sent to the profile phone number.</summary>
+    [HttpPost("phone/verification/confirm")]
+    public async Task<IActionResult> ConfirmPhoneVerification([FromBody] PhoneVerificationConfirmRequest request, CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized(new { error = "Invalid user" });
+        var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
+        if (user == null) return NotFound(new { error = "User not found" });
+        if (string.IsNullOrWhiteSpace(request.Code)) return BadRequest(new { error = "Code is required" });
+
+        var result = await _otpService.ConfirmPhoneVerificationAsync(user, request.Code.Trim());
+        return result switch
+        {
+            PhoneVerificationConfirmResult.Verified => Ok(new { phoneVerified = true }),
+            PhoneVerificationConfirmResult.InvalidNumber => BadRequest(new { error = "Enter your phone number in international format, for example +31612345678." }),
+            PhoneVerificationConfirmResult.AlreadyVerifiedElsewhere => Conflict(new { error = "This phone number is already verified on another account." }),
+            _ => BadRequest(new { error = "Invalid or expired verification code" })
+        };
     }
 
     // ─── Password ──────────────────────────────────────────────
@@ -257,6 +304,7 @@ public class PortalController : ControllerBase
 
 // ─── Request DTOs ──────────────────────────────────────────
 
+public record PhoneVerificationConfirmRequest(string Code);
 public record PortalUpdateProfileRequest(
     string? FirstName,
     string? LastName,

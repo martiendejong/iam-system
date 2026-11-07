@@ -84,7 +84,7 @@ public class ScimService : IScimService
         user.Email = primaryEmail;
         user.FirstName = scimUser.Name?.GivenName ?? string.Empty;
         user.LastName = scimUser.Name?.FamilyName ?? string.Empty;
-        user.PhoneNumber = newPhone;
+        user.SetPhoneNumber(newPhone);
         user.IsActive = scimUser.Active;
         user.UpdatedAt = DateTime.UtcNow;
 
@@ -645,7 +645,7 @@ public class ScimService : IScimService
                         break;
                     case "phonenumbers[type eq \"work\"].value":
                     case "phonenumbers":
-                        user.PhoneNumber = valueStr;
+                        user.SetPhoneNumber(valueStr);
                         break;
                 }
                 break;
@@ -657,7 +657,7 @@ public class ScimService : IScimService
                 switch (path)
                 {
                     case "phonenumbers":
-                        user.PhoneNumber = null;
+                        user.SetPhoneNumber(null);
                         break;
                 }
                 break;

@@ -136,10 +136,17 @@ public class OtpController : ControllerBase
         }
 
         // Find user and generate JWT tokens
-        var user = await _context.Users
+        // Find user (verified number only)
+        var normalizedPhone = PhoneNumberNormalizer.Normalize(request.PhoneNumber);
+        var matches = await _context.Users
             .Include(u => u.UserRoles)
                 .ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber);
+            .Where(u => u.VerifiedPhoneNumber == normalizedPhone)
+            .Take(2)
+            .ToListAsync();
+
+        // Verified numbers are unique, but if more than one account ever matched, refuse rather than pick one.
+        var user = matches.Count == 1 ? matches[0] : null;
 
         if (user == null || !user.IsActive)
         {

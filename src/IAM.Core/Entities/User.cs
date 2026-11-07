@@ -8,6 +8,32 @@ public class User
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? PhoneNumber { get; set; }
+
+    /// <summary>
+    /// The normalized (E.164-style) phone number the user proved to hold with an SMS code. Only this
+    /// value is used for SMS-OTP login, and it is unique across accounts (filtered unique index).
+    /// Null = no verified number. Never set it directly except through <see cref="MarkPhoneVerified"/>.
+    /// </summary>
+    public string? VerifiedPhoneNumber { get; set; }
+    public DateTime? PhoneVerifiedAt { get; set; }
+
+    /// <summary>Changes the profile phone number. Any change drops the verified state.</summary>
+    public void SetPhoneNumber(string? phoneNumber)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(phoneNumber) ? null : phoneNumber.Trim();
+        PhoneNumber = trimmed;
+        if (VerifiedPhoneNumber != null && PhoneNumberNormalizer.Normalize(trimmed) != VerifiedPhoneNumber)
+        {
+            VerifiedPhoneNumber = null;
+            PhoneVerifiedAt = null;
+        }
+    }
+
+    public void MarkPhoneVerified(string normalizedPhone)
+    {
+        VerifiedPhoneNumber = normalizedPhone;
+        PhoneVerifiedAt = DateTime.UtcNow;
+    }
     public string? AvatarUrl { get; set; }
 
     // Email verification

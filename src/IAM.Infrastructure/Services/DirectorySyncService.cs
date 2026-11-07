@@ -616,7 +616,7 @@ public class DirectorySyncService : IDirectorySyncService
 
                 if (existingUser.PhoneNumber != phoneNumber)
                 {
-                    existingUser.PhoneNumber = phoneNumber;
+                    existingUser.SetPhoneNumber(phoneNumber);
                     hasChanges = true;
                 }
 

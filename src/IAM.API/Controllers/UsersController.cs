@@ -182,7 +182,7 @@ public class UsersController : ControllerBase
         if (!string.IsNullOrWhiteSpace(request.Email))
             user.Email = request.Email;
         if (!string.IsNullOrWhiteSpace(request.PhoneNumber))
-            user.PhoneNumber = request.PhoneNumber;
+            user.SetPhoneNumber(request.PhoneNumber);
 
         user.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
