@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -403,6 +404,11 @@ public class InvitationService : IInvitationService
                     };
                 }
 
+                if (!PasswordPolicy.IsValid(password))
+                {
+                    return new InvitationAcceptResult { Success = false, Error = PasswordPolicy.TooShortMessage };
+                }
+
                 // Only stages changes; they are saved together with the role grant below.
                 accountReset = await ResetUnconfirmedAccountAsync(existingUser, password, firstName, lastName, ct);
             }
@@ -413,6 +419,11 @@ public class InvitationService : IInvitationService
             if (string.IsNullOrWhiteSpace(password))
             {
                 return new InvitationAcceptResult { Success = false, Error = "Password is required for new accounts" };
+            }
+
+            if (!PasswordPolicy.IsValid(password))
+            {
+                return new InvitationAcceptResult { Success = false, Error = PasswordPolicy.TooShortMessage };
             }
 
             user = new User

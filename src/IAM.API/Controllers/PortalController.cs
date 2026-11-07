@@ -108,8 +108,8 @@ public class PortalController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
             return BadRequest(new { error = "Current password and new password are required" });
 
-        if (request.NewPassword.Length < 8)
-            return BadRequest(new { error = "New password must be at least 8 characters" });
+        if (!IAM.Core.Security.PasswordPolicy.IsValid(request.NewPassword))
+            return BadRequest(new { error = IAM.Core.Security.PasswordPolicy.TooShortMessage });
 
         var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
         if (user == null)
