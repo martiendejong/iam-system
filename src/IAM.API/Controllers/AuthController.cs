@@ -292,6 +292,11 @@ public class AuthController : ControllerBase
     [HttpPost("reset-password")]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
     {
+        if (!IAM.Core.Security.PasswordPolicy.IsValid(request.NewPassword))
+        {
+            return BadRequest(new { error = IAM.Core.Security.PasswordPolicy.TooShortMessage });
+        }
+
         var success = await _authService.ResetPasswordAsync(request.Token, request.NewPassword);
 
         if (!success)

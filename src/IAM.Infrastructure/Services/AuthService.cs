@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using IAM.Core;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -114,12 +115,12 @@ public class AuthService : IAuthService
             };
         }
 
-        if (password.Length < 8)
+        if (!PasswordPolicy.IsValid(password))
         {
             return new AuthResult
             {
                 Success = false,
-                Error = "Password must be at least 8 characters"
+                Error = PasswordPolicy.TooShortMessage
             };
         }
 
@@ -753,6 +754,12 @@ public class AuthService : IAuthService
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)
     {
+        // Refused before the token lookup, so a too-short password never consumes the reset token.
+        if (string.IsNullOrEmpty(token) || !PasswordPolicy.IsValid(newPassword))
+        {
+            return false;
+        }
+
         var tokenHash = HashVerificationToken(token);
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.PasswordResetToken == tokenHash
