@@ -136,6 +136,7 @@ builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();
 builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
 builder.Services.AddScoped<IAM.API.Authorization.ISecretsAccessResolver, IAM.API.Authorization.SecretsAccessResolver>();
 builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
+builder.Services.AddScoped<IAccountGuessingGuard, AccountGuessingGuard>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
 builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();

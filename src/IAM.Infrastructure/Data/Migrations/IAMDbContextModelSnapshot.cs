@@ -2088,6 +2088,44 @@ namespace IAM.Infrastructure.Data.Migrations
                     b.ToTable("Locations", (string)null);
                 });
 
+            modelBuilder.Entity("IAM.Core.Entities.LoginFailureSignal", b =>
+                {
+                    b.Property<string>("AccountKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("SourceKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime>("LastFailureAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("AccountKey", "SourceKey");
+
+                    b.HasIndex("LastFailureAt");
+
+                    b.HasIndex("AccountKey", "LastFailureAt");
+
+                    b.ToTable("LoginFailureSignals", (string)null);
+                });
+
+            modelBuilder.Entity("IAM.Core.Entities.AccountGuessingAlertMark", b =>
+                {
+                    b.Property<string>("AccountKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime>("AlertedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("AccountKey");
+
+                    b.HasIndex("AlertedAt");
+
+                    b.ToTable("AccountGuessingAlertMarks", (string)null);
+                });
+
             modelBuilder.Entity("IAM.Core.Entities.LoginRiskScore", b =>
                 {
                     b.Property<Guid>("Id")

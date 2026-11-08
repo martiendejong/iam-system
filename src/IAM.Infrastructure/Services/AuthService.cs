@@ -39,6 +39,7 @@ public class AuthService : IAuthService
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
     private readonly ILoginThrottle _loginThrottle;
+    private readonly IAccountGuessingGuard? _accountGuard;
     private readonly ITwoFactorChallengeService _twoFactorChallenge;
 
     public AuthService(
@@ -50,7 +51,8 @@ public class AuthService : IAuthService
         IClaimsMappingService claimsMappingService,
         ILogger<AuthService> logger,
         ILoginThrottle loginThrottle,
-        ITwoFactorChallengeService twoFactorChallenge)
+        ITwoFactorChallengeService twoFactorChallenge,
+        IAccountGuessingGuard? accountGuard = null)
     {
         _context = context;
         _configuration = configuration;
@@ -60,6 +62,7 @@ public class AuthService : IAuthService
         _claimsMappingService = claimsMappingService;
         _logger = logger;
         _loginThrottle = loginThrottle;
+        _accountGuard = accountGuard;
         _twoFactorChallenge = twoFactorChallenge;
     }
 
@@ -193,6 +196,21 @@ public class AuthService : IAuthService
 
         if (user == null || !passwordValid)
         {
+            // Task 5852: count the failure against the typed e-mail across ALL sources. Identical work
+            // for an unknown and a known e-mail; the response below does not depend on it.
+            if (_accountGuard != null)
+            {
+                try
+                {
+                    await _accountGuard.RecordFailureAsync(email, ipAddress, user?.Id, user != null);
+                }
+                catch (Exception ex)
+                {
+                    // The signal is best effort; never turn a wrong password into a 500.
+                    _logger.LogError(ex, "Recording the account failure signal failed");
+                }
+            }
+
             return new AuthResult
             {
                 Success = false,
@@ -249,6 +267,22 @@ public class AuthService : IAuthService
                 Success = true,
                 RequiresTwoFactor = true,
                 TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
+                User = user
+            };
+        }
+
+        // Task 5852: many sources have been guessing at this account, so a correct password alone is not
+        // enough. Reuse the e-mailed step-up code (the real owner just types it; nothing is locked). The
+        // code mail is capped per address per hour by the OTP service.
+        if (_accountGuard != null && await _accountGuard.IsStepUpRequiredAsync(email))
+        {
+            await _context.SaveChangesAsync();
+            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresStepUp = true,
                 User = user
             };
         }
