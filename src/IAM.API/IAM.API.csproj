@@ -48,7 +48,7 @@
     404'd until someone manually xcopied a dist build onto the deploy target. Build the SPA and
     fold its output into the publish payload so `dotnet publish` alone is sufficient.
   -->
-  <Target Name="PublishAdminUi" AfterTargets="ComputeFilesToPublish">
+  <Target Name="PublishAdminUi" AfterTargets="ComputeFilesToPublish" Condition="'$(SkipAdminUiBuild)' != 'true'">
     <Exec Command="npm install" WorkingDirectory="$(AdminUiRoot)" Condition="!Exists('$(AdminUiRoot)node_modules')" />
     <Exec Command="npm run build" WorkingDirectory="$(AdminUiRoot)" />
 
