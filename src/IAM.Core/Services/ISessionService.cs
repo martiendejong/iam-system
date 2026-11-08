@@ -2,14 +2,11 @@ using IAM.Core.Entities;
 
 namespace IAM.Core.Services;
 
+/// <summary>
+/// Task 5568: a session is a real sign-in, i.e. an active refresh token; its id is the refresh token id.
+/// </summary>
 public interface ISessionService
 {
-    /// <summary>
-    /// Create a new session and return it with the raw (unhashed) session token set on SessionToken.
-    /// The caller should store/transmit this token; only the hash is persisted.
-    /// </summary>
-    Task<UserSession> CreateSessionAsync(Guid userId, string? ipAddress, string? userAgent, TimeSpan duration, CancellationToken ct = default);
-
     /// <summary>
     /// Get all active (non-revoked, non-expired) sessions for a user.
     /// </summary>
@@ -31,17 +28,7 @@ public interface ISessionService
     Task<int> RevokeAllUserSessionsAsync(Guid userId, string reason = "admin_action", CancellationToken ct = default);
 
     /// <summary>
-    /// Validate a session token (raw token, will be hashed for lookup). Returns true if session is active.
-    /// </summary>
-    Task<bool> ValidateSessionAsync(string sessionToken, CancellationToken ct = default);
-
-    /// <summary>
-    /// Update the LastActivityAt timestamp for a session identified by raw token.
-    /// </summary>
-    Task UpdateActivityAsync(string sessionToken, CancellationToken ct = default);
-
-    /// <summary>
-    /// Remove expired sessions from the database. Returns count cleaned up.
+    /// Remove leftover rows of the unused UserSessions table. Returns count cleaned up.
     /// </summary>
     Task<int> CleanupExpiredSessionsAsync(CancellationToken ct = default);
 

@@ -1,4 +1,4 @@
-using Hazina.Security.ApiKeys;
+﻿using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -43,6 +43,11 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
+        await WordPressSsoSeeder.SeedAppRolesAsync(
+            context,
+            WordPressSsoSeeder.ResolveSites(_configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
+            _logger,
+            cancellationToken);
         await SeedAdminUserAsync(context, cancellationToken);
 
         // Security check: alert if test accounts exist in non-development environment
@@ -640,11 +645,14 @@ public class DatabaseSeeder : IHostedService
                 RedirectUris =
                 {
                     new Uri("https://coaching.martiendejong.nl/coaching/api/auth/iam/callback"),
+                    new Uri("https://growth.portofgiethoorn.com/coaching/api/auth/iam/callback"),
+                    new Uri("http://localhost:5210/api/auth/iam/callback"),
                     new Uri("http://localhost:5188/api/auth/iam/callback")
                 },
                 PostLogoutRedirectUris =
                 {
-                    new Uri("https://coaching.martiendejong.nl/coaching/")
+                    new Uri("https://coaching.martiendejong.nl/coaching/"),
+                    new Uri("https://growth.portofgiethoorn.com/coaching/")
                 },
                 Permissions =
                 {
@@ -1187,6 +1195,54 @@ public class DatabaseSeeder : IHostedService
             }, cancellationToken);
         }
 
+        // Fedha Boekhouding — PKCE public client (task 5933, board boekhouding)
+        if (await manager.FindByClientIdAsync("fedha-app", cancellationToken) == null)
+        {
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "fedha-app",
+                ClientType = OpenIddictConstants.ClientTypes.Public,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Fedha Boekhouding",
+                RedirectUris =
+                {
+                    new Uri("https://fedha.martiendejong.nl/api/auth/iam/callback"),
+                    new Uri("http://localhost:5054/api/auth/iam/callback")
+                },
+                PostLogoutRedirectUris =
+                {
+                    new Uri("https://fedha.martiendejong.nl"),
+                    new Uri("http://localhost:5054")
+                },
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Authorization,
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
+                    OpenIddictConstants.Permissions.GrantTypes.RefreshToken,
+                    OpenIddictConstants.Permissions.ResponseTypes.Code,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
+                },
+                Requirements =
+                {
+                    OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
+                }
+            }, cancellationToken);
+        }
+
+        // WordPress SSO (task 5804, board 44): one confidential PKCE client per WordPress site that runs the
+        // Jengo IAM SSO plugin - test.prospergenics.com built in, further sites from the WordPressSso:Sites
+        // configuration section. See WordPressSsoSeeder for the recipe (secrets come from configuration on
+        // the IAM host, never from git; a site without a secret is not registered).
+        await WordPressSsoSeeder.SeedClientsAsync(
+            manager,
+            WordPressSsoSeeder.ResolveSites(configuration, provider.GetRequiredService<ILogger<DatabaseSeeder>>()),
+            provider.GetRequiredService<ILogger<DatabaseSeeder>>(),
+            cancellationToken);
+
         // Task 4059: Vault resolver client — confidential, client_credentials only.
         // Secret is read from config key "VaultResolver:ClientSecret" (never committed to git).
         // In production the value comes from the vault or an environment variable.
@@ -1215,6 +1271,31 @@ public class DatabaseSeeder : IHostedService
                     OpenIddictConstants.Permissions.Endpoints.Token,
                     OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
                     $"{OpenIddictConstants.Permissions.Prefixes.Scope}{IAM.API.Controllers.ResolverController.ResolverScope}"
+                }
+            }, cancellationToken);
+        }
+        // Squid Proxy (Password grant / ROPC) - used by the Squid basic-auth helper
+        if (await manager.FindByClientIdAsync("squid-proxy", cancellationToken) == null)
+        {
+            var squidSecret = configuration["Clients:SquidProxy:Secret"]
+                ?? (env.IsDevelopment()
+                    ? "squid-proxy-secret-dev"
+                    : throw new InvalidOperationException("Clients:SquidProxy:Secret not configured in production"));
+            await manager.CreateAsync(new OpenIddictApplicationDescriptor
+            {
+                ClientId = "squid-proxy",
+                ClientSecret = squidSecret,
+                ClientType = OpenIddictConstants.ClientTypes.Confidential,
+                ConsentType = OpenIddictConstants.ConsentTypes.Implicit,
+                DisplayName = "Squid Proxy (basic auth helper)",
+                Permissions =
+                {
+                    OpenIddictConstants.Permissions.Endpoints.Token,
+                    OpenIddictConstants.Permissions.GrantTypes.Password,
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.OpenId}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Profile}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Email}",
+                    $"{OpenIddictConstants.Permissions.Prefixes.Scope}{OpenIddictConstants.Scopes.Roles}"
                 }
             }, cancellationToken);
         }

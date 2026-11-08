@@ -55,7 +55,7 @@ public class EmailTwoFactorLoginTests
         var otpService = new OtpService(context, emailService, smsService, emailSettings, NullLogger<OtpService>.Instance);
         var riskAssessmentService = new RiskAssessmentService(context, NullLogger<RiskAssessmentService>.Instance);
         var claimsMappingService = new ClaimsMappingService(context);
-        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, claimsMappingService, NullLogger<AuthService>.Instance, AuthServiceTestFactory.CreateLoginThrottle());
+        var authService = new AuthService(context, CreateConfiguration(), emailService, riskAssessmentService, otpService, claimsMappingService, NullLogger<AuthService>.Instance, AuthServiceTestFactory.CreateLoginThrottle(), new SignInNetworkGate(context, NullLogger<SignInNetworkGate>.Instance), AuthServiceTestFactory.CreateChallengeService());
         return (authService, otpService, emailService, context);
     }
 
@@ -106,7 +106,7 @@ public class EmailTwoFactorLoginTests
         Assert.True(loginResult.RequiresTwoFactor);
         var sentCode = emailService.SentTwoFactorCodes[0].Code;
 
-        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, sentCode);
+        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, loginResult.TwoFactorChallengeToken, sentCode);
 
         Assert.True(verifyResult.Success);
         Assert.NotNull(verifyResult.AccessToken);
@@ -121,10 +121,10 @@ public class EmailTwoFactorLoginTests
         context.Users.Add(user);
         await context.SaveChangesAsync();
 
-        await authService.LoginAsync(user.Email, "Password123!");
+        var loginResult = await authService.LoginAsync(user.Email, "Password123!");
         Assert.NotEmpty(emailService.SentTwoFactorCodes);
 
-        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, "000000");
+        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, loginResult.TwoFactorChallengeToken, "000000");
 
         Assert.False(verifyResult.Success);
         Assert.Null(verifyResult.AccessToken);
@@ -166,8 +166,8 @@ public class EmailTwoFactorLoginTests
         context.Users.Add(user);
         await context.SaveChangesAsync();
 
-        await authService.LoginAsync(user.Email, "Password123!");
-        await authService.ResendLoginTwoFactorCodeAsync(user.Id, "/portal/profile");
+        var loginResult = await authService.LoginAsync(user.Email, "Password123!");
+        await authService.ResendLoginTwoFactorCodeAsync(user.Id, loginResult.TwoFactorChallengeToken, "/portal/profile");
 
         Assert.Equal(2, emailService.SentVerifyUrls.Count);
         Assert.Contains("returnUrl=%2Fportal%2Fprofile", emailService.SentVerifyUrls[1]);
@@ -206,7 +206,7 @@ public class EmailTwoFactorLoginTests
         Assert.True(loginResult.RequiresTwoFactor);
         var sentCode = emailService.SentTwoFactorCodes[0].Code;
 
-        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, sentCode);
+        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, loginResult.TwoFactorChallengeToken, sentCode);
 
         Assert.True(verifyResult.Success);
         Assert.NotNull(verifyResult.AccessToken);
@@ -238,7 +238,7 @@ public class EmailTwoFactorLoginTests
         context.Users.Add(user);
         await context.SaveChangesAsync();
 
-        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, "123456");
+        var verifyResult = await authService.VerifyLoginTwoFactorAsync(user.Id, null, "123456");
 
         Assert.False(verifyResult.Success);
     }
@@ -251,11 +251,11 @@ public class EmailTwoFactorLoginTests
         context.Users.Add(user);
         await context.SaveChangesAsync();
 
-        await authService.LoginAsync(user.Email, "Password123!");
+        var loginResult = await authService.LoginAsync(user.Email, "Password123!");
         var sentCode = emailService.SentTwoFactorCodes[0].Code;
 
-        var firstAttempt = await authService.VerifyLoginTwoFactorAsync(user.Id, sentCode);
-        var secondAttempt = await authService.VerifyLoginTwoFactorAsync(user.Id, sentCode);
+        var firstAttempt = await authService.VerifyLoginTwoFactorAsync(user.Id, loginResult.TwoFactorChallengeToken, sentCode);
+        var secondAttempt = await authService.VerifyLoginTwoFactorAsync(user.Id, loginResult.TwoFactorChallengeToken, sentCode);
 
         Assert.True(firstAttempt.Success);
         Assert.False(secondAttempt.Success);
@@ -281,8 +281,8 @@ public class EmailTwoFactorLoginTests
         public Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default) => Task.CompletedTask;
         public Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-        public Task SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-        public Task SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.FromResult(true);
+        public Task<bool> SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.FromResult(true);
         public Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default) => Task.FromResult(true);
     }
 

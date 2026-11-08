@@ -10,6 +10,9 @@ interface Tenant {
   slug: string;
 }
 
+const NOT_ENFORCED_NOTE =
+  'Country restrictions and geofences are saved but not applied at sign-in yet: there is no GeoIP source to match them against. Only the IP Allowlist is enforced.';
+
 type TabType = 'allowlist' | 'geo' | 'geofence' | 'blocked' | 'check';
 
 export default function NetworkPolicyPage() {
@@ -397,6 +400,9 @@ export default function NetworkPolicyPage() {
             {/* Geo Restrictions Tab */}
             {activeTab === 'geo' && (
               <div>
+                <div role="note" className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <strong>Not enforced yet.</strong> {NOT_ENFORCED_NOTE}
+                </div>
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">Country-Level Geo Restrictions</h2>
                 <p className="text-sm text-gray-500 mb-4">
                   Restrict access based on the country of the requesting IP address. Use ISO 3166-1 alpha-2 country codes (e.g., NL, DE, US, GB).
@@ -475,6 +481,9 @@ export default function NetworkPolicyPage() {
             {/* Geofences Tab */}
             {activeTab === 'geofence' && (
               <div>
+                <div role="note" className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <strong>Not enforced yet.</strong> {NOT_ENFORCED_NOTE}
+                </div>
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-lg font-semibold text-gray-900">Geofences</h2>
                   <button

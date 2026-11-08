@@ -1,10 +1,12 @@
-﻿using System.Net;
+﻿﻿using System.Net;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Hazina.Security.ApiKeys;
 using IAM.API.Auth;
+using IAM.API.Mcp;
 using IAM.API.Middleware;
+using Jengo.Mcp;
 using IAM.API.Workers;
 using IAM.Core.Interfaces;
 using Microsoft.AspNetCore.Authentication;
@@ -59,13 +61,18 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 // Per-IP + typed-email progressive delay for password sign-ins (task 5166). Singleton: the state lives in IMemoryCache.
 builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
+builder.Services.AddSingleton<ITwoFactorChallengeService, TwoFactorChallengeService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.Authorization.AuditAccessResolver>();
 builder.Services.AddScoped<IAM.API.Authorization.ITelemetryAccessAuthorizer, IAM.API.Authorization.TelemetryAccessAuthorizer>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IAM.Core.Services.IEmergencyOverrideCallerAccess, IAM.API.Authorization.EmergencyOverrideCallerAccess>();
+builder.Services.Configure<IAM.Core.Configuration.PolicyTestingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.PolicyTestingOptions.SectionName));
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
+builder.Services.AddSingleton<IPasskeyChallengeStore, PasskeyChallengeStore>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
@@ -74,14 +81,23 @@ builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationSer
 builder.Services.AddSingleton<IDeviceLoginGuard, DeviceLoginGuard>();
 builder.Services.AddSingleton<IDeviceGatewayVerifier, DeviceGatewayVerifier>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.PostConfigure<EmailSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
+builder.Services.Configure<IAM.Core.Configuration.OnboardingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.OnboardingOptions.SectionName));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<ITotpService, TotpService>();
 builder.Services.AddScoped<IGroupService, GroupService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
+builder.Services.Configure<IAM.Core.Configuration.ConditionLimitsOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.ConditionLimitsOptions.SectionName));
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
+// Task 5800: remote MCP server at /mcp (agent-safe user onboarding via invitations). Auth for
+// /mcp is additive and self-contained, independent of the JWT bearer / IAM.Session cookie schemes:
+// an API key (X-Api-Key, or bearer for ChatGPT connectors) from the Mcp:Keys configuration array,
+// each key bound to one IAM user. AddIamMcp also exempts /mcp from the Hazina X-Api-Key middleware,
+// which would otherwise 401 the MCP key before it reaches the MCP auth scheme.
+builder.Services.AddIamMcp();
 // Task 5165: the CA key file password must be configured outside Development. Resolved here, at startup and before
 // any CA file is read, so a missing Ca:CertificatePassword stops the app (same style as the OpenIddict signing
 // certificate check below) instead of falling back to a password that is written in the source.
@@ -99,8 +115,10 @@ builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationSer
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
 builder.Services.AddScoped<ISocialAuthService, SocialAuthService>();
 builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"));
+builder.Services.PostConfigure<SmsSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
+builder.Services.AddSingleton<IRequestThrottle, InMemoryRequestThrottle>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
@@ -113,12 +131,14 @@ builder.Services.AddScoped<IScimService, ScimService>();
 builder.Services.AddScoped<ITenantBrandingService, TenantBrandingService>();
 builder.Services.AddScoped<IClaimsMappingService, ClaimsMappingService>();
 builder.Services.AddScoped<INetworkPolicyService, NetworkPolicyService>();
+builder.Services.AddScoped<ISignInNetworkGate, SignInNetworkGate>(); // task 5570: tenant IP allowlist at sign-in and token issuance
 builder.Services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
 builder.Services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
 builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();
 builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
 builder.Services.AddScoped<IAM.API.Authorization.ISecretsAccessResolver, IAM.API.Authorization.SecretsAccessResolver>();
 builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
+builder.Services.AddScoped<IAccountGuessingGuard, AccountGuessingGuard>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
 builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();
@@ -165,6 +185,7 @@ builder.Services.AddScoped<IResourcePermissionService, ResourcePermissionService
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IAM.API.Auth.AccessTokenSessionValidator>();
 
 // Fido2 (WebAuthn) configuration
 builder.Services.AddFido2(options =>
@@ -185,6 +206,7 @@ builder.Services.AddHostedService<CertificateExpiryMonitorWorker>();
 builder.Services.AddHostedService<DeviceHeartbeatMonitorWorker>();
 builder.Services.AddHostedService<AuditLogCleanupWorker>();
 builder.Services.AddHostedService<SessionCleanupWorker>();
+builder.Services.AddHostedService<DataExportCleanupWorker>();
 builder.Services.AddHostedService<DirectorySyncWorker>();
 builder.Services.AddHostedService<AccessRequestExpiryWorker>();
 builder.Services.AddHostedService<PamDeescalationWorker>();
@@ -212,14 +234,18 @@ builder.Services.AddOpenIddict()
         options.SetAuthorizationEndpointUris("/connect/authorize")
                .SetTokenEndpointUris("/connect/token")
                .SetIntrospectionEndpointUris("/connect/introspect")
-               .SetRevocationEndpointUris("/connect/revoke");
+               .SetRevocationEndpointUris("/connect/revoke")
+               // Task 5804: RP-initiated logout. Advertised as end_session_endpoint in the discovery
+               // document; clients opt in with the end_session endpoint permission.
+               .SetEndSessionEndpointUris("/connect/logout");
 
         // Enable authorization code flow, refresh token, and client credentials flows.
         // PKCE is enforced per-client via Requirements.Features.ProofKeyForCodeExchange in the seeder —
         // not globally, since confidential clients (e.g. open-webui) don't require it.
         options.AllowAuthorizationCodeFlow()
                .AllowRefreshTokenFlow()
-               .AllowClientCredentialsFlow();
+               .AllowClientCredentialsFlow()
+               .AllowPasswordFlow();
 
         // Register scopes (permissions that clients can request)
         options.RegisterScopes(
@@ -285,6 +311,7 @@ builder.Services.AddOpenIddict()
                .EnableAuthorizationEndpointPassthrough()
                .EnableTokenEndpointPassthrough()
                .EnableUserInfoEndpointPassthrough()
+               .EnableEndSessionEndpointPassthrough()
                .EnableStatusCodePagesIntegration()
                .DisableTransportSecurityRequirement(); // Allow HTTP when behind IIS/ARR reverse proxy
 
@@ -347,6 +374,12 @@ builder.Services.AddAuthentication(options =>
         RoleClaimType = System.Security.Claims.ClaimTypes.Role,
         NameClaimType = System.Security.Claims.ClaimTypes.Name
     };
+
+    // Task 5628: reject access tokens whose session (refresh token) was revoked or whose user was deactivated.
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = IAM.API.Auth.AccessTokenSessionValidator.OnTokenValidatedAsync
+    };
 })
 .AddCookie("IAM.Session", options =>
 {
@@ -361,6 +394,8 @@ builder.Services.AddAuthentication(options =>
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
+    // Task 5568: the cookie dies with the sign-in (refresh token) it is bound to. Only requests that carry the cookie pay for it.
+    options.Events.OnValidatePrincipal = IAM.API.Auth.AccessTokenSessionValidator.OnValidateCookiePrincipalAsync;
 });
 
 // SuperAdmin inherits all admin roles (so role-guarded endpoints accept SuperAdmin)
@@ -428,6 +463,12 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Task 5576: fail closed when e-mail sending is disabled outside Development.
+MessagingStartupCheck.Validate(
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<EmailSettings>>().Value,
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmsSettings>>().Value,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("IAM.Startup"));
+
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
@@ -470,6 +511,11 @@ app.UseHazinaApiKeyAuth(); // API key auth + per-key rate limiting before JWT (s
 app.UseAuthentication();
 app.UseRateLimiting(); // Rate limiting after auth (so we can identify the caller)
 app.UseAuthorization();
+
+// Task 5800: the remote MCP endpoint (/mcp), always behind the MCP auth scheme. Mapped after
+// UseAuthentication/UseAuthorization, as the template requires. The Hazina X-Api-Key middleware
+// above skips /mcp (excluded in AddIamMcp), so the MCP key in that header is not rejected early.
+app.MapJengoMcp();
 
 app.MapControllers();
 

@@ -57,10 +57,12 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
         return (tenant.Id, slug);
     }
 
-    private HttpClient UserClient()
+    // Branding access control is covered by TenantBrandingAccessControlTests (task 4522); these tests are about what
+    // gets stored and served, so they act as a SuperAdmin, who may manage any tenant's branding.
+    private HttpClient AdminClient()
     {
         var client = _factory.CreateClient();
-        var token = TestAuthenticationHelper.GenerateJwtToken(Guid.NewGuid(), "u@branding.test", new[] { "User" }, null);
+        var token = TestAuthenticationHelper.GenerateJwtToken(Guid.NewGuid(), "u@branding.test", new[] { "SuperAdmin" }, null);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
     }
@@ -129,7 +131,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
     {
         var (tenantId, _) = await SeedTenantAsync();
 
-        var response = await UserClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(css: ExfiltrationCss));
+        var response = await AdminClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(css: ExfiltrationCss));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var json = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -150,7 +152,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
     {
         var (tenantId, _) = await SeedTenantAsync();
 
-        var response = await UserClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(css: css));
+        var response = await AdminClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(css: css));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(await RowAsync(tenantId));
@@ -162,7 +164,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
     public async Task MarkupInLoginTitleOrSubtitle_Gets400(string text)
     {
         var (tenantId, _) = await SeedTenantAsync();
-        var client = UserClient();
+        var client = AdminClient();
 
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/branding/{tenantId}", Body(title: text))).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync($"/api/branding/{tenantId}", Body(subtitle: text))).StatusCode);
@@ -177,7 +179,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
     {
         var (tenantId, _) = await SeedTenantAsync();
 
-        var response = await UserClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(primary: color, logo: logo));
+        var response = await AdminClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(primary: color, logo: logo));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -190,7 +192,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
         var (tenantId, _) = await SeedTenantAsync();
         var css = ".card{background-color:#fff;border-radius:8px} h1{color:#4F46E5;font-weight:700}";
 
-        var response = await UserClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(
+        var response = await AdminClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(
             css: css,
             header: "<p style=\"color:#333\">Acme</p><script>alert(1)</script><img src=\"https://acme.example/l.png\" onerror=\"alert(1)\">",
             footer: "<a href=\"javascript:alert(1)\">unsubscribe</a><iframe src=\"https://evil.example\"></iframe>",
@@ -219,7 +221,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
     {
         var (tenantId, _) = await SeedTenantAsync();
 
-        var response = await UserClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(domain: domain));
+        var response = await AdminClient().PutAsJsonAsync($"/api/branding/{tenantId}", Body(domain: domain));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(await RowAsync(tenantId));
@@ -236,7 +238,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
             })));
         var (tenantId, _) = await SeedTenantAsync();
         var client = host.CreateClient();
-        client.DefaultRequestHeaders.Authorization = UserClient().DefaultRequestHeaders.Authorization;
+        client.DefaultRequestHeaders.Authorization = AdminClient().DefaultRequestHeaders.Authorization;
 
         var configured = await client.PutAsJsonAsync($"/api/branding/{tenantId}", Body(domain: "iam.platform.example.com"));
         var issuer = await client.PutAsJsonAsync($"/api/branding/{tenantId}", Body(domain: "issuer.platform.example.com"));
@@ -251,7 +253,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
         var (first, _) = await SeedTenantAsync();
         var (second, _) = await SeedTenantAsync();
         var domain = UniqueDomain();
-        var client = UserClient();
+        var client = AdminClient();
 
         Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync($"/api/branding/{first}", Body(domain: domain))).StatusCode);
         var again = await client.PutAsJsonAsync($"/api/branding/{second}", Body(domain: domain.ToUpperInvariant()));
@@ -268,7 +270,7 @@ public class TenantBrandingSafetyTests : IClassFixture<IAMTestWebApplicationFact
         var (tenantId, _) = await SeedTenantAsync();
         var domain = UniqueDomain();
         var client = host.CreateClient();
-        client.DefaultRequestHeaders.Authorization = UserClient().DefaultRequestHeaders.Authorization;
+        client.DefaultRequestHeaders.Authorization = AdminClient().DefaultRequestHeaders.Authorization;
         Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync($"/api/branding/{tenantId}",
             Body(css: ".a{color:red}", title: "Acme Login", domain: domain))).StatusCode);
 

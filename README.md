@@ -258,6 +258,7 @@ vercel deploy
 - [**Why Passkeys?**](./WHY-PASSKEYS.md) - The end of passwords
 - [**Troubleshooting**](./TROUBLESHOOTING.md) - Fix auth issues at 2am
 - [**API Reference**](./docs/API-REFERENCE.md) - Complete API documentation
+- [**MCP Server**](./docs/mcp-server.md) - Agent-safe user onboarding at `/mcp`: 9 invitation/role tools, and why password- and token-capable tools are deliberately absent
 - [**Deployment Guide**](./docs/DEPLOYMENT.md) - Production deployment
 - [**Examples**](./examples/) - React, Vue, Next.js, Angular
 

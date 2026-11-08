@@ -81,8 +81,15 @@ public class SocialAuthService : ISocialAuthService
         return await _secretsVault.GetSecretValueAsync(secretId) ?? storedValue;
     }
 
-    public async Task<string> GetAuthorizationUrlAsync(Guid providerId, string redirectUri, string state)
+    public async Task<string> GetAuthorizationUrlAsync(
+        Guid providerId, string redirectUri, string state, string browserSecret,
+        SocialFlowPurpose purpose = SocialFlowPurpose.Login, Guid? userId = null)
     {
+        if (string.IsNullOrEmpty(state) || string.IsNullOrEmpty(browserSecret))
+            throw new InvalidOperationException("A state and a browser secret are required");
+        if (purpose == SocialFlowPurpose.Link && userId == null)
+            throw new InvalidOperationException("A link flow must be started by a signed-in user");
+
         var provider = await _context.IdentityProviders.FindAsync(providerId)
             ?? throw new InvalidOperationException("Identity provider not found");
 
@@ -91,9 +98,16 @@ public class SocialAuthService : ISocialAuthService
 
         ValidateRedirectUri(provider, redirectUri);
 
+        // ID-token providers get a nonce that must come back inside the signed token (task 5493).
+        var nonce = provider.Type == IdentityProviderType.Apple ? NewRandomToken() : null;
+
         // Store state server-side so the callback can validate it (replay + open-redirect protection).
+        // Only the hash of the browser secret is kept; the secret itself lives in the starting browser.
         var cacheKey = StateEntryKey(state);
-        _cache.Set(cacheKey, new SocialStateEntry(redirectUri, providerId), StateEntryTtl);
+        _cache.Set(cacheKey,
+            new SocialStateEntry(redirectUri, providerId, purpose, purpose == SocialFlowPurpose.Link ? userId : null,
+                HashSecret(browserSecret), nonce),
+            StateEntryTtl);
 
         var (authorizationEndpoint, scopes) = GetProviderEndpoints(provider.Type);
 
@@ -105,6 +119,8 @@ public class SocialAuthService : ISocialAuthService
             ["scope"] = scopes,
             ["state"] = state
         };
+        if (nonce != null)
+            queryParams["nonce"] = nonce;
 
         var queryString = string.Join("&", queryParams.Select(kv =>
             $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
@@ -112,11 +128,11 @@ public class SocialAuthService : ISocialAuthService
         return $"{authorizationEndpoint}?{queryString}";
     }
 
-    public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state)
+    public async Task<AuthResult> HandleCallbackAsync(Guid providerId, string code, string state, string? browserSecret, string? ipAddress = null, string? userAgent = null)
     {
         // Consume the state entry exactly once: prevents replays and validates the origin.
-        var cacheKey = StateEntryKey(state);
-        if (!_cache.TryGetValue(cacheKey, out SocialStateEntry? stateEntry) || stateEntry == null)
+        var stateEntry = ConsumeState(state);
+        if (stateEntry == null)
         {
             return new AuthResult
             {
@@ -124,7 +140,6 @@ public class SocialAuthService : ISocialAuthService
                 Error = "Invalid or expired state parameter"
             };
         }
-        _cache.Remove(cacheKey); // one-time use
 
         if (stateEntry.ProviderId != providerId)
         {
@@ -133,6 +148,17 @@ public class SocialAuthService : ISocialAuthService
                 Success = false,
                 Error = "State provider mismatch"
             };
+        }
+
+        // Task 5493: a state started for linking must never complete a sign-in.
+        if (stateEntry.Purpose != SocialFlowPurpose.Login)
+            return new AuthResult { Success = false, Error = "State was not issued for sign-in" };
+
+        // Task 5493: only the browser that started the flow holds the secret. Checked before the code is exchanged.
+        if (!BrowserSecretMatches(stateEntry, browserSecret))
+        {
+            _logger?.LogWarning("Social sign-in refused for provider {ProviderId}: browser secret missing or wrong", providerId);
+            return new AuthResult { Success = false, Error = "Sign-in was not started in this browser" };
         }
 
         var provider = await _context.IdentityProviders
@@ -160,7 +186,7 @@ public class SocialAuthService : ISocialAuthService
         }
 
         // Fetch user profile from provider
-        var externalUser = await GetExternalUserProfileAsync(provider, tokenResponse);
+        var externalUser = await GetExternalUserProfileAsync(provider, tokenResponse, stateEntry.Nonce);
         if (externalUser == null)
         {
             return new AuthResult
@@ -306,7 +332,7 @@ public class SocialAuthService : ISocialAuthService
         // magic-link and OTP login use, so an account enrolled in 2FA gets a challenge (RequiresTwoFactor,
         // no tokens) instead of a session. Applies to existing, linked and freshly auto-created accounts
         // alike. Token issuance lives in one place (AuthService) - nothing here mints tokens directly.
-        return await _authService.CompletePasswordlessLoginAsync(user);
+        return await _authService.CompletePasswordlessLoginAsync(user, ipAddress, userAgent);
     }
 
     /// <summary>
@@ -373,8 +399,18 @@ public class SocialAuthService : ISocialAuthService
         };
     }
 
-    public async Task<ExternalLogin> LinkAccountAsync(Guid userId, Guid providerId, string code)
+    public async Task<ExternalLogin> LinkAccountAsync(Guid userId, Guid providerId, string code, string state, string? browserSecret)
     {
+        // Task 5493: state, purpose, owner and browser secret are checked before the code is exchanged.
+        var stateEntry = ConsumeState(state)
+            ?? throw new InvalidOperationException("Invalid or expired state parameter");
+        if (stateEntry.ProviderId != providerId)
+            throw new InvalidOperationException("State provider mismatch");
+        if (stateEntry.Purpose != SocialFlowPurpose.Link || stateEntry.UserId != userId)
+            throw new InvalidOperationException("State was not issued for linking this account");
+        if (!BrowserSecretMatches(stateEntry, browserSecret))
+            throw new InvalidOperationException("Linking was not started in this browser");
+
         var provider = await _context.IdentityProviders.FindAsync(providerId)
             ?? throw new InvalidOperationException("Identity provider not found");
 
@@ -386,7 +422,7 @@ public class SocialAuthService : ISocialAuthService
             ?? throw new InvalidOperationException("Failed to exchange authorization code for tokens");
 
         // Fetch user profile
-        var externalUser = await GetExternalUserProfileAsync(provider, tokenResponse)
+        var externalUser = await GetExternalUserProfileAsync(provider, tokenResponse, stateEntry.Nonce)
             ?? throw new InvalidOperationException("Failed to retrieve user profile from provider");
 
         // Check if this external account is already linked to another user
@@ -784,12 +820,12 @@ public class SocialAuthService : ISocialAuthService
         };
     }
 
-    private async Task<ExternalUserProfile?> GetExternalUserProfileAsync(IdentityProvider provider, OAuthTokenResponse tokenResponse)
+    private async Task<ExternalUserProfile?> GetExternalUserProfileAsync(IdentityProvider provider, OAuthTokenResponse tokenResponse, string? expectedNonce)
     {
         // For Apple, validate and parse the ID token (signature-verified via JWKS).
         if (provider.Type == IdentityProviderType.Apple && !string.IsNullOrEmpty(tokenResponse.IdToken))
         {
-            return await ParseAppleIdTokenAsync(tokenResponse.IdToken);
+            return await ParseAppleIdTokenAsync(tokenResponse.IdToken, expectedNonce);
         }
 
         // For SAML, parse the assertion
@@ -985,7 +1021,7 @@ public class SocialAuthService : ISocialAuthService
         }
     }
 
-    private async Task<ExternalUserProfile?> ParseAppleIdTokenAsync(string idToken)
+    private async Task<ExternalUserProfile?> ParseAppleIdTokenAsync(string idToken, string? expectedNonce)
     {
         try
         {
@@ -1002,6 +1038,12 @@ public class SocialAuthService : ISocialAuthService
             };
 
             var principal = tokenHandler.ValidateToken(idToken, validationParams, out _);
+
+            // Task 5493: the nonce we sent must come back inside the signed token.
+            var tokenNonce = principal.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
+            if (string.IsNullOrEmpty(expectedNonce) || string.IsNullOrEmpty(tokenNonce) ||
+                !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(tokenNonce), Encoding.UTF8.GetBytes(expectedNonce)))
+                throw new UnauthorizedAccessException("Apple ID token nonce is missing or does not match.");
 
             // JwtSecurityTokenHandler maps sub/email to the long ClaimTypes names unless the process-wide inbound
             // map was cleared, so accept both spellings.
@@ -1064,6 +1106,30 @@ public class SocialAuthService : ISocialAuthService
 
     private static string StateEntryKey(string state) => $"SocialAuthState:{state}";
 
+    private static string NewRandomToken() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd("=".ToCharArray()).Replace("+", "-").Replace("/", "_");
+
+    private static byte[] HashSecret(string secret) => SHA256.HashData(Encoding.UTF8.GetBytes(secret));
+
+    /// <summary>Takes the state out of the cache (single use), whether or not the remaining checks pass.</summary>
+    private SocialStateEntry? ConsumeState(string? state)
+    {
+        if (string.IsNullOrEmpty(state))
+            return null;
+        var cacheKey = StateEntryKey(state);
+        if (!_cache.TryGetValue(cacheKey, out SocialStateEntry? entry) || entry == null)
+            return null;
+        _cache.Remove(cacheKey);
+        return entry;
+    }
+
+    private static bool BrowserSecretMatches(SocialStateEntry entry, string? browserSecret)
+    {
+        if (string.IsNullOrEmpty(browserSecret) || entry.BrowserSecretHash.Length == 0)
+            return false;
+        return CryptographicOperations.FixedTimeEquals(HashSecret(browserSecret), entry.BrowserSecretHash);
+    }
+
     private void ValidateRedirectUri(IdentityProvider provider, string redirectUri)
     {
         if (string.IsNullOrEmpty(redirectUri))
@@ -1103,7 +1169,7 @@ public class SocialAuthService : ISocialAuthService
 
 // Internal helper classes
 
-internal record SocialStateEntry(string RedirectUri, Guid ProviderId);
+internal record SocialStateEntry(string RedirectUri, Guid ProviderId, SocialFlowPurpose Purpose, Guid? UserId, byte[] BrowserSecretHash, string? Nonce);
 
 internal class OAuthTokenResponse
 {

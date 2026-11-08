@@ -74,9 +74,17 @@ public class UnifiedAuthorizationService : IUnifiedAuthorizationService
             if (_cache.TryGetValue(cacheKey, out AuthorizationDecision? cached) && cached != null)
             {
                 evaluationPath.Add("Cache hit - returning cached decision");
-                cached.EvaluationPath = evaluationPath;
-                cached.EvaluationTimeMs = stopwatch.ElapsedMilliseconds;
-                return cached;
+                // Return a copy: the cached instance is shared between callers and must not be mutated.
+                return new AuthorizationDecision
+                {
+                    Allowed = cached.Allowed,
+                    Reason = cached.Reason,
+                    MatchedPolicy = cached.MatchedPolicy,
+                    MatchedPermission = cached.MatchedPermission,
+                    PrincipalType = cached.PrincipalType,
+                    EvaluationPath = evaluationPath,
+                    EvaluationTimeMs = stopwatch.ElapsedMilliseconds
+                };
             }
 
             evaluationPath.Add("Cache miss - performing evaluation");
@@ -619,7 +627,26 @@ public class UnifiedAuthorizationService : IUnifiedAuthorizationService
     /// </summary>
     private static string BuildCacheKey(AuthorizationRequest request)
     {
-        return $"{CachePrefix}{request.PrincipalType}_{request.PrincipalId}_{request.TenantId}_{request.Resource}_{request.Action}";
+        return $"{CachePrefix}{request.PrincipalType}_{request.PrincipalId}_{request.TenantId}_{request.Resource}_{request.Action}_{ContextFingerprint(request.Context)}";
+    }
+
+    /// <summary>
+    /// Stable fingerprint of the request context: independent of key order, different for any changed
+    /// key or value. Decisions depend on the context (IP, MFA, device health...), so it is part of the cache key.
+    /// </summary>
+    internal static string ContextFingerprint(Dictionary<string, object>? context)
+    {
+        if (context == null || context.Count == 0) return "noctx";
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var kv in context.OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            var value = kv.Value is JsonElement je ? je.GetRawText() : JsonSerializer.Serialize(kv.Value);
+            sb.Append(kv.Key.Length).Append(':').Append(kv.Key)
+              .Append('=').Append(value.Length).Append(':').Append(value).Append(';');
+        }
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(hash);
     }
 
     /// <summary>

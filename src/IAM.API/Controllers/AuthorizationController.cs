@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Security.Claims;
 using IAM.Core.Services;
 using IAM.Core.Entities;
@@ -31,6 +31,7 @@ public class AuthorizationController : ControllerBase
     private readonly IOpenIddictAuthorizationManager _authorizationManager;
     private readonly IOpenIddictScopeManager _scopeManager;
     private readonly ILogger<AuthorizationController> _logger;
+    private readonly ISignInNetworkGate _networkGate;
     private readonly string _loginBasePath;
 
     public AuthorizationController(
@@ -39,13 +40,15 @@ public class AuthorizationController : ControllerBase
         IOpenIddictAuthorizationManager authorizationManager,
         IOpenIddictScopeManager scopeManager,
         ILogger<AuthorizationController> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ISignInNetworkGate networkGate)
     {
         _context = context;
         _applicationManager = applicationManager;
         _authorizationManager = authorizationManager;
         _scopeManager = scopeManager;
         _logger = logger;
+        _networkGate = networkGate;
 
         // ARR strips the /auth/ prefix before forwarding to Kestrel, so redirect to /login
         // must include /auth prefix so the browser lands on the IAM admin-UI login page.
@@ -113,10 +116,36 @@ public class AuthorizationController : ControllerBase
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
         }
 
+        // Task 5570: tenant IP allowlist. The client address is RemoteIpAddress after UseForwardedHeaders
+        // (trusted proxy only), never a header or request value. Same check as every other sign-in path.
+        if (!await _networkGate.IsAllowedAsync(user.Id, ClientIp(), UserAgentHeader(), cancellationToken: HttpContext.RequestAborted))
+        {
+            if (silent)
+                return SilentSignInDenied(Errors.AccessDenied, ISignInNetworkGate.RefusalMessage);
+
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = Errors.AccessDenied,
+                error_description = ISignInNetworkGate.RefusalMessage
+            });
+        }
+
         // Federated app-role gate — shared with the refresh_token grant in Exchange, see
         // EvaluateAppRoleGateAsync. Only the denial rendering differs: login shows an HTML
         // page, refresh returns an OAuth invalid_grant error, prompt=none returns access_denied.
-        var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
+        // Task 5627: the app may ask for a specific tenant with an optional "tenant" parameter.
+        if (!TryGetRequestedTenant(request, out var requestedTenantId))
+        {
+            return SilentSignInDenied(Errors.InvalidRequest, "The tenant parameter must be a tenant id (GUID).");
+        }
+
+        var gate = await EvaluateAppRoleGateAsync(user, request.ClientId, requestedTenantId);
+        if (!gate.Allowed && gate.TenantRefused)
+        {
+            // The app asked for a tenant in which the user holds no role for it: refuse instead of
+            // silently falling back to another tenant.
+            return SilentSignInDenied(Errors.AccessDenied, "The user has no role for this application in the requested tenant.");
+        }
         if (!gate.Allowed)
         {
             if (silent)
@@ -149,8 +178,15 @@ public class AuthorizationController : ControllerBase
                 .SetClaim(Claims.GivenName, user.FirstName)
                 .SetClaim(Claims.FamilyName, user.LastName);
 
+        // Task 5804: email_verified travels in the id_token as a real JSON boolean (OIDC Core 5.1) so a
+        // relying party can refuse to match or create accounts from an address IAM never verified. Added
+        // as a typed claim: SetClaim(string) would serialise it as the JSON string "true".
+        identity.AddClaim(new Claim(Claims.EmailVerified, user.EmailConfirmed ? "true" : "false", ClaimValueTypes.Boolean));
+
         // Add role claims
-        var roles = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray();
+        // Task 5627: only global roles plus the roles of the token's tenant (apps without a role
+        // catalog keep every role, as before).
+        var roles = RoleNamesForTenant(user.UserRoles.WhereActive(), tenantIdForToken, gate.Scoped);
         identity.SetClaims(Claims.Role, roles);
 
         // Add tenant claim (only set when the app-role gate above resolved one — see
@@ -190,6 +226,10 @@ public class AuthorizationController : ControllerBase
     /// the Forbid into a redirect to the already-validated redirect_uri carrying error, error_description
     /// and the request's state (same idiom as the Forbid calls in Exchange).
     /// </summary>
+    private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
+
+    private string UserAgentHeader() => Request.Headers.UserAgent.ToString();
+
     private IActionResult SilentSignInDenied(string error, string description) =>
         Forbid(
             authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
@@ -235,12 +275,33 @@ public class AuthorizationController : ControllerBase
                     }));
             }
 
+            // Task 5570: the code/refresh exchange applies the same tenant IP allowlist as sign-in, so an
+            // existing session cannot renew from a blocked address. On refresh the token's own tenant
+            // scope applies when it has one; otherwise every tenant the user holds a role in.
+            Guid? networkTenantId = request.IsRefreshTokenGrantType()
+                && Guid.TryParse(claimsPrincipal.GetClaim(TenantIdClaimType), out var scopedTenant)
+                ? scopedTenant
+                : null;
+            if (!await _networkGate.IsAllowedAsync(user.Id, ClientIp(), UserAgentHeader(), networkTenantId, HttpContext.RequestAborted))
+            {
+                return Forbid(
+                    authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                    properties: new AuthenticationProperties(new Dictionary<string, string?>
+                    {
+                        [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.AccessDenied,
+                        [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = ISignInNetworkGate.RefusalMessage
+                    }));
+            }
+
             // Task 4096: roles can be revoked while a refresh token is still valid. Do NOT copy the
             // role/tenant_id claims stored inside the refresh token into the new access token — re-run
             // the same app-role gate the login applies and rebuild both claims from the database.
             if (request.IsRefreshTokenGrantType())
             {
-                var gate = await EvaluateAppRoleGateAsync(user, request.ClientId);
+                // Task 5627: a refresh keeps the tenant the token was issued for - it can never switch tenants.
+                var storedTenantId = Guid.TryParse(claimsPrincipal.GetClaim(TenantIdClaimType), out var storedTenant)
+                    ? storedTenant : (Guid?)null;
+                var gate = await EvaluateAppRoleGateAsync(user, request.ClientId, storedTenantId);
                 if (!gate.Allowed)
                 {
                     _logger.LogWarning("Refused refresh_token for {Email}: no longer holds any {ClientId} role",
@@ -263,10 +324,15 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToImmutableArray());
                 if (!gate.Errored)
                 {
+                    identity.SetClaims(Claims.Role, RoleNamesForTenant(user.UserRoles.WhereActive(), gate.TenantId, gate.Scoped));
                     identity.SetClaim(TenantIdClaimType, gate.TenantId?.ToString());
+                }
+                else
+                {
+                    // Fail-open gate error: keep the stored tenant and still filter the roles to it.
+                    identity.SetClaims(Claims.Role, RoleNamesForTenant(user.UserRoles.WhereActive(), storedTenantId, storedTenantId.HasValue));
                 }
                 // On a fail-open gate error the tenant_id copied from the stored principal is
                 // kept as-is: stripping it would silently WIDEN the token (tenant-less can mean
@@ -287,7 +353,15 @@ public class AuthorizationController : ControllerBase
                     authenticationType: TokenValidationParameters.DefaultAuthenticationType,
                     nameType: Claims.Name,
                     roleType: Claims.Role);
-                identity.SetClaims(Claims.Role, user.UserRoles.WhereActive().Select(ur => ur.Role.Name).Distinct().ToImmutableArray());
+                // Task 5627: the code tenant_id decides which roles may be emitted. Without a tenant the
+                // token is limited to the roles the code was issued with (never widened from the database).
+                var codeTenantId = Guid.TryParse(identity.GetClaim(TenantIdClaimType), out var codeTenant)
+                    ? codeTenant : (Guid?)null;
+                var codeRoles = identity.GetClaims(Claims.Role).ToHashSet(StringComparer.Ordinal);
+                var dbRoles = RoleNamesForTenant(user.UserRoles.WhereActive(), codeTenantId, codeTenantId.HasValue);
+                identity.SetClaims(Claims.Role, codeTenantId.HasValue
+                    ? dbRoles
+                    : dbRoles.Where(codeRoles.Contains).ToImmutableArray());
                 identity.SetDestinations(GetDestinations);
                 claimsPrincipal = new ClaimsPrincipal(identity);
             }
@@ -329,6 +403,75 @@ public class AuthorizationController : ControllerBase
             // accepted at jengo_mcp once resource servers validate aud.
             claimsPrincipal.SetResources(await GetResourcesAsync(claimsPrincipal.GetScopes()));
             claimsPrincipal.SetDestinations(GetDestinations);
+        }
+        else if (request.IsPasswordGrantType())
+        {
+            var username = request.Username;
+            var password = request.Password;
+
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+                return BadRequest(new { error = Errors.InvalidRequest, error_description = "Username and password are required." });
+
+            var user = await _context.Users
+                .Include(u => u.UserRoles).ThenInclude(ur => ur.Role)
+                .FirstOrDefaultAsync(u => u.Email.ToLower() == username.ToLower() && u.IsActive);
+
+            if (user == null || (user.IsLockedOut && user.LockoutEnd > DateTime.UtcNow))
+                return Unauthorized(new { error = Errors.InvalidGrant, error_description = "Invalid credentials." });
+
+            if (!BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
+            {
+                user.FailedLoginAttempts++;
+                if (user.FailedLoginAttempts >= 5)
+                {
+                    user.IsLockedOut = true;
+                    user.LockoutEnd = DateTime.UtcNow.AddMinutes(15);
+                }
+                await _context.SaveChangesAsync();
+                return Unauthorized(new { error = Errors.InvalidGrant, error_description = "Invalid credentials." });
+            }
+
+            // Task 5570: password grant is a sign-in too; checked once the password is proven.
+            if (!await _networkGate.IsAllowedAsync(user.Id, ClientIp(), UserAgentHeader(), cancellationToken: HttpContext.RequestAborted))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error = Errors.AccessDenied,
+                    error_description = ISignInNetworkGate.RefusalMessage
+                });
+            }
+
+            user.FailedLoginAttempts = 0;
+            user.IsLockedOut = false;
+            user.LastLoginAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            var identity = new ClaimsIdentity(
+                authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                nameType: Claims.Name,
+                roleType: Claims.Role);
+
+            identity.SetClaim(Claims.Subject, user.Id.ToString())
+                    .SetClaim(Claims.Email, user.Email)
+                    .SetClaim(Claims.Name, $"{user.FirstName} {user.LastName}")
+                    .SetClaim(Claims.GivenName, user.FirstName)
+                    .SetClaim(Claims.FamilyName, user.LastName);
+
+            // Task 5627: same single-tenant rule as the interactive flow; the password grant has no app
+            // role catalog, so the tenant comes from the optional "tenant" parameter or the fixed default.
+            if (!TryGetRequestedTenant(request, out var pwRequestedTenant))
+                return BadRequest(new { error = Errors.InvalidRequest, error_description = "The tenant parameter must be a tenant id (GUID)." });
+            var pwAssignments = user.UserRoles.WhereActive().ToList();
+            var pwSelection = SelectTenant(pwAssignments, pwRequestedTenant);
+            if (pwSelection.Refused)
+                return BadRequest(new { error = Errors.InvalidGrant, error_description = "The user has no role in the requested tenant." });
+            identity.SetClaims(Claims.Role, RoleNamesForTenant(pwAssignments, pwSelection.TenantId, true));
+            if (pwSelection.TenantId.HasValue)
+                identity.SetClaim(TenantIdClaimType, pwSelection.TenantId.Value.ToString());
+            identity.SetScopes(request.GetScopes());
+            identity.SetDestinations(GetDestinations);
+
+            claimsPrincipal = new ClaimsPrincipal(identity);
         }
         else
         {
@@ -398,7 +541,16 @@ public class AuthorizationController : ControllerBase
         // Roles scope
         if (User.HasScope("roles"))
         {
-            claims[Claims.Role] = user.UserRoles.WhereActive().Select(ur => ur.Role.Name).ToArray();
+            // Task 5627: same scoping as the token: global roles plus the token tenant; a token with no
+            // tenant_id never gets more roles than it was issued with.
+            var tokenTenantId = Guid.TryParse(User.FindFirst(TenantIdClaimType)?.Value, out var tt) ? tt : (Guid?)null;
+            var userinfoRoles = RoleNamesForTenant(user.UserRoles.WhereActive(), tokenTenantId, tokenTenantId.HasValue);
+            if (!tokenTenantId.HasValue)
+            {
+                var issuedRoles = User.FindAll(Claims.Role).Select(c => c.Value).ToHashSet(StringComparer.Ordinal);
+                userinfoRoles = userinfoRoles.Where(issuedRoles.Contains).ToImmutableArray();
+            }
+            claims[Claims.Role] = userinfoRoles.ToArray();
         }
 
         // Custom tenants scope
@@ -422,19 +574,28 @@ public class AuthorizationController : ControllerBase
     }
 
     /// <summary>
-    /// OAuth2 Logout Endpoint - handles logout requests
+    /// OIDC RP-Initiated Logout / end_session endpoint (task 5804). OpenIddict has already validated the
+    /// request before this action runs: the client must hold the end_session endpoint permission and a
+    /// post_logout_redirect_uri is only accepted when it is registered on a client, so an unregistered
+    /// address is never redirected to. This action ends the IAM single sign-on session (the IAM.Session
+    /// cookie that /connect/authorize reads); the relying party's own session is its business.
+    ///
+    /// SignOut hands control back to OpenIddict, which redirects to the validated post_logout_redirect_uri
+    /// (echoing state) or, when none was sent, to the IAM login page.
     /// </summary>
     [HttpGet("logout")]
     [HttpPost("logout")]
+    [IgnoreAntiforgeryToken]
     public async Task<IActionResult> Logout()
     {
-        // Ask the OpenIddict server to sign out
-        await HttpContext.SignOutAsync(OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        _ = HttpContext.GetOpenIddictServerRequest() ??
+            throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
-        // TODO: Also sign out from the cookie authentication scheme if using cookies
-        // await HttpContext.SignOutAsync("Identity.Application");
+        await HttpContext.SignOutAsync("IAM.Session");
 
-        return Ok(new { message = "Logged out successfully" });
+        return SignOut(
+            authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+            properties: new AuthenticationProperties { RedirectUri = $"{_loginBasePath}/login" });
     }
 
     /// <summary>
@@ -525,7 +686,7 @@ public class AuthorizationController : ControllerBase
     /// Outcome of the federated app-role gate: whether the user may receive tokens for the app at all,
     /// and, when the app has a role catalog, which tenant the token is scoped to (null = unscoped).
     /// </summary>
-    private readonly record struct AppRoleGateResult(bool Allowed, Guid? TenantId, bool Errored = false);
+    private readonly record struct AppRoleGateResult(bool Allowed, Guid? TenantId, bool Errored = false, bool Scoped = false, bool TenantRefused = false);
 
     /// <summary>
     /// Federated app-role gate, shared by login (Authorize) and token refresh (Exchange) so the two
@@ -541,7 +702,7 @@ public class AuthorizationController : ControllerBase
     /// DeviceAuthenticationService) but for human logins.
     /// </summary>
     /// <param name="user">User with UserRoles + Role loaded.</param>
-    private async Task<AppRoleGateResult> EvaluateAppRoleGateAsync(User user, string? clientId)
+    private async Task<AppRoleGateResult> EvaluateAppRoleGateAsync(User user, string? clientId, Guid? requestedTenantId = null)
     {
         try
         {
@@ -565,7 +726,14 @@ public class AuthorizationController : ControllerBase
                 return new AppRoleGateResult(Allowed: false, TenantId: null);
             }
 
-            return new AppRoleGateResult(Allowed: true, TenantId: ResolveAppRoleTenantId(appRoleAssignments));
+            var selection = SelectTenant(appRoleAssignments, requestedTenantId);
+            if (selection.Refused)
+            {
+                _logger.LogWarning("App access denied: {Email} requested tenant {Tenant} but holds no {ClientId} role there",
+                    user.Email, requestedTenantId, clientIdLower);
+                return new AppRoleGateResult(Allowed: false, TenantId: null, TenantRefused: true);
+            }
+            return new AppRoleGateResult(Allowed: true, TenantId: selection.TenantId, Scoped: true);
         }
         catch (Exception ex)
         {
@@ -583,13 +751,52 @@ public class AuthorizationController : ControllerBase
     /// "one tenant" per the task's own scope, not multi-tenant token claims.
     /// Public + static so it's unit-testable without standing up the full OIDC pipeline.
     /// </summary>
-    public static Guid? ResolveAppRoleTenantId(IEnumerable<UserRole> appRoleAssignments)
+    public static Guid? ResolveAppRoleTenantId(IEnumerable<UserRole> appRoleAssignments) =>
+        SelectTenant(appRoleAssignments, null).TenantId;
+
+    /// <summary>Result of <see cref="SelectTenant"/>: the chosen tenant (null = global only) or a refusal.</summary>
+    public readonly record struct TenantSelection(Guid? TenantId, bool Refused);
+
+    /// <summary>
+    /// Task 5627: a token is scoped to exactly one tenant. The tenant is the one the app asked for
+    /// (must be a tenant the assignments are scoped to, otherwise refused), else a fixed rule: the
+    /// earliest assignment (GrantedAt), then the lowest tenant id. Global (TenantId null) assignments
+    /// never decide the tenant.
+    /// </summary>
+    public static TenantSelection SelectTenant(IEnumerable<UserRole> assignments, Guid? requestedTenantId)
     {
-        foreach (var assignment in appRoleAssignments)
+        var scoped = assignments.Where(a => a.TenantId.HasValue).ToList();
+        if (requestedTenantId.HasValue)
         {
-            if (assignment.TenantId.HasValue)
-                return assignment.TenantId;
+            return scoped.Any(a => a.TenantId == requestedTenantId)
+                ? new TenantSelection(requestedTenantId, false)
+                : new TenantSelection(null, true);
         }
-        return null;
+        var first = scoped.OrderBy(a => a.GrantedAt).ThenBy(a => a.TenantId!.Value).FirstOrDefault();
+        return new TenantSelection(first?.TenantId, false);
+    }
+
+    /// <summary>
+    /// Task 5627: role names a token for <paramref name="tenantId"/> may carry: global assignments plus
+    /// that tenant's. When <paramref name="scoped"/> is false (app without a role catalog) every role
+    /// name is returned, exactly as before.
+    /// </summary>
+    public static ImmutableArray<string> RoleNamesForTenant(IEnumerable<UserRole> activeAssignments, Guid? tenantId, bool scoped) =>
+        activeAssignments
+            .Where(ur => ur.Role != null && (!scoped || ur.TenantId == null || ur.TenantId == tenantId))
+            .Select(ur => ur.Role.Name)
+            .Distinct()
+            .ToImmutableArray();
+
+    private static bool TryGetRequestedTenant(OpenIddictRequest request, out Guid? tenantId)
+    {
+        tenantId = null;
+        var raw = request.GetParameter("tenant")?.ToString();
+        if (string.IsNullOrWhiteSpace(raw))
+            return true;
+        if (!Guid.TryParse(raw, out var parsed))
+            return false;
+        tenantId = parsed;
+        return true;
     }
 }

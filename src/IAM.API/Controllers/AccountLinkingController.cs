@@ -28,47 +28,6 @@ public class AccountLinkingController : ControllerBase
     // ─── Link / Unlink ────────────────────────────────────────
 
     /// <summary>
-    /// Link a new external provider to the current user's account.
-    /// POST /api/portal/link/{provider}
-    /// </summary>
-    [HttpPost("link/{provider}")]
-    public async Task<IActionResult> LinkProvider(
-        string provider,
-        [FromBody] LinkProviderRequest request,
-        CancellationToken ct)
-    {
-        var userId = GetUserId();
-        if (userId == null)
-            return Unauthorized(new { error = "Invalid user" });
-
-        try
-        {
-            var externalLogin = await _accountLinkingService.LinkExternalProviderAsync(
-                userId.Value,
-                provider,
-                request.ProviderUserId,
-                request.Email,
-                request.DisplayName,
-                ct);
-
-            return Ok(new
-            {
-                id = externalLogin.Id,
-                provider = externalLogin.Provider,
-                providerUserId = externalLogin.ProviderUserId,
-                email = externalLogin.Email,
-                displayName = externalLogin.DisplayName,
-                linkedAt = externalLogin.LinkedAt,
-                isPrimary = externalLogin.IsPrimary
-            });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
-
-    /// <summary>
     /// Unlink an external provider from the current user's account.
     /// DELETE /api/portal/link/{provider}
     /// </summary>
@@ -210,12 +169,6 @@ public class AccountLinkingController : ControllerBase
 }
 
 // ─── Request DTOs ─────────────────────────────────────────
-
-public record LinkProviderRequest(
-    string ProviderUserId,
-    string? Email,
-    string? DisplayName
-);
 
 public record MergeAccountsRequest(
     Guid SecondaryUserId

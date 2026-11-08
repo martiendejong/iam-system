@@ -13,6 +13,7 @@ vi.mock('../../services/api', () => ({
   api: {
     verifyMagicLink: vi.fn(),
     verifyLoginTwoFactor: vi.fn(),
+    verifyStepUp: vi.fn(),
     resendLoginTwoFactorCode: vi.fn(),
   },
 }));
@@ -203,6 +204,34 @@ describe('MagicLinkCallbackPage', () => {
 
       await waitFor(() => expect(mockedApi.resendLoginTwoFactorCode).toHaveBeenCalledWith('user-1', '/dashboard'));
       await waitFor(() => expect(screen.getByText('A new verification code has been sent to your email.')).toBeInTheDocument());
+    });
+  });
+
+  // Task 5630: adaptive MFA now also scores magic-link sign-ins.
+  describe('when adaptive MFA asks for a step-up', () => {
+    it('asks for the e-mailed code and completes sign-in by user id', async () => {
+      mockedApi.verifyMagicLink.mockResolvedValue({
+        requiresStepUp: true,
+        userId: 'user-1',
+        message: 'Additional verification required. Check your email for a code.',
+      });
+      mockedApi.verifyStepUp.mockResolvedValue({
+        accessToken: 'tok',
+        user: { id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' },
+      });
+
+      renderCallbackPage('?token=abc123');
+
+      await waitFor(() => expect(screen.getByText('Additional verification required. Check your email for a code.')).toBeInTheDocument());
+      expect(setCurrentUser).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Resend code' })).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Verification code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify and Sign In' }));
+
+      await waitFor(() => expect(mockedApi.verifyStepUp).toHaveBeenCalledWith('', '123456', false, 'user-1'));
+      expect(mockedApi.verifyLoginTwoFactor).not.toHaveBeenCalled();
+      await waitFor(() => expect(setCurrentUser).toHaveBeenCalledWith({ id: '1', email: 'a@b.com', firstName: 'A', lastName: 'B' }));
     });
   });
 });

@@ -5,9 +5,13 @@ namespace IAM.Core.Services;
 public interface IInvitationService
 {
     /// <summary>
-    /// Send a single invitation email to a user
+    /// Create an invitation and try to email it. The invitation is created even when the
+    /// email fails; <see cref="InvitationSendResult.EmailSent"/> tells the caller whether
+    /// the mail actually went out, so the admin can hand over the accept link manually
+    /// instead of assuming delivery (18-10 incident: silent mail failure cost a full
+    /// onboarding round).
     /// </summary>
-    Task<Invitation> SendInvitationAsync(
+    Task<InvitationSendResult> SendInvitationAsync(
         string email,
         Guid tenantId,
         Guid roleId,
@@ -58,6 +62,10 @@ public interface IInvitationService
     /// </summary>
     Task<Invitation?> GetInvitationByTokenAsync(string token, CancellationToken ct = default);
 }
+
+/// <summary>The created invitation plus whether its email actually went out.</summary>
+/// <param name="RawToken">The one-time token for the accept link. Only its hash is stored on the invitation, so this is the only chance to hand it over.</param>
+public record InvitationSendResult(Invitation Invitation, bool EmailSent, string RawToken);
 
 public class BulkInviteEntry
 {

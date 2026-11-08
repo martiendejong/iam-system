@@ -29,4 +29,11 @@ public interface IConditionEvaluator
     /// <param name="error">Error description if validation fails, null if valid</param>
     /// <returns>True if valid, false otherwise</returns>
     bool ValidateConditions(string conditionsJson, out string? error);
+
+    /// <summary>
+    /// Checks a condition list and optional context against the configured hard limits
+    /// (condition count, pattern length, value length, array size).
+    /// </summary>
+    /// <returns>True when within limits; otherwise false with a human-readable error.</returns>
+    bool CheckLimits(IReadOnlyList<PolicyCondition> conditions, ConditionContext? context, out string? error);
 }

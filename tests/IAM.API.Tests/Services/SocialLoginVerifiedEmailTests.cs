@@ -39,6 +39,9 @@ public class SocialLoginVerifiedEmailTests
     // One RSA key for every Apple test: the service caches Apple's JWKS in a static field.
     private static readonly RSA AppleKey = RSA.Create(2048);
 
+    private static string? NonceFrom(string authorizationUrl) =>
+        System.Web.HttpUtility.ParseQueryString(new Uri(authorizationUrl).Query)["nonce"];
+
     private sealed class Harness
     {
         public required DbContextOptions<IAMDbContext> Options { get; init; }
@@ -51,8 +54,8 @@ public class SocialLoginVerifiedEmailTests
 
         public async Task<AuthResult> CallbackAsync(string state = "state-1")
         {
-            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state);
-            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state);
+            Stub.Nonce = NonceFrom(await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state, "browser-secret"));
+            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state, "browser-secret");
         }
     }
 
@@ -303,7 +306,7 @@ public class SocialLoginVerifiedEmailTests
     [InlineData(null, false)]
     public async Task Apple_MatchesAnExistingAccountOnlyForAVerifiedEmailClaim(string? emailVerifiedClaim, bool expectLinked)
     {
-        var h = CreateHarness(IdentityProviderType.Apple, new ProviderStub { AppleIdToken = AppleToken(Email, emailVerifiedClaim) });
+        var h = CreateHarness(IdentityProviderType.Apple, new ProviderStub { AppleIdToken = n => AppleToken(Email, emailVerifiedClaim, n) });
         var victim = AddUser(h.Context);
 
         var result = await h.CallbackAsync();
@@ -318,6 +321,34 @@ public class SocialLoginVerifiedEmailTests
         {
             await AssertRefusedWithNothingWrittenAsync(h, result, victim, "not verified");
         }
+    }
+
+    // Task 5493: the nonce sent in the authorize URL must come back inside the signed id_token.
+    [Fact]
+    public async Task Apple_AuthorizeUrlCarriesANonce()
+    {
+        var h = CreateHarness(IdentityProviderType.Apple, new ProviderStub { AppleIdToken = n => AppleToken(Email, "true", n) });
+
+        var url = await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "s", "browser-secret");
+
+        Assert.False(string.IsNullOrEmpty(NonceFrom(url)));
+    }
+
+    [Theory]
+    [InlineData("wrong-nonce")]
+    [InlineData(null)]
+    public async Task Apple_IdTokenWithWrongOrMissingNonce_IsRefused(string? tokenNonce)
+    {
+        var h = CreateHarness(IdentityProviderType.Apple,
+            new ProviderStub { AppleIdToken = _ => AppleToken(Email, "true", tokenNonce) }, autoCreate: true);
+
+        var result = await h.CallbackAsync();
+
+        Assert.False(result.Success);
+        Assert.Null(result.AccessToken);
+        using var read = h.NewReadContext();
+        Assert.Empty(await read.ExternalLogins.ToListAsync());
+        Assert.Empty(await read.Users.ToListAsync());
     }
 
     // ----- auto-created users -------------------------------------------------------------------------
@@ -390,7 +421,8 @@ public class SocialLoginVerifiedEmailTests
         var h = CreateHarness(type, stub);
         var user = AddUser(h.Context);
 
-        var link = await h.Service.LinkAccountAsync(user.Id, h.Provider.Id, "auth-code");
+        h.Stub.Nonce = NonceFrom(await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "link-state", "browser-secret", SocialFlowPurpose.Link, user.Id));
+        var link = await h.Service.LinkAccountAsync(user.Id, h.Provider.Id, "auth-code", "link-state", "browser-secret");
 
         Assert.Equal(user.Id, link.UserId);
         Assert.Equal(type.ToString(), link.Provider);
@@ -521,7 +553,8 @@ public class SocialLoginVerifiedEmailTests
         var h = CreateHarness(type, type == IdentityProviderType.Microsoft ? new ProviderStub() : VerifiedStub(type));
         var user = AddUser(h.Context, emailConfirmed: false);
 
-        var link = await h.Service.LinkAccountAsync(user.Id, h.Provider.Id, "auth-code");
+        h.Stub.Nonce = NonceFrom(await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "link-state", "browser-secret", SocialFlowPurpose.Link, user.Id));
+        var link = await h.Service.LinkAccountAsync(user.Id, h.Provider.Id, "auth-code", "link-state", "browser-secret");
 
         Assert.Equal(user.Id, link.UserId);
         using var read = h.NewReadContext();
@@ -534,18 +567,20 @@ public class SocialLoginVerifiedEmailTests
     {
         IdentityProviderType.Google => new ProviderStub { GoogleEmailVerified = "true" },
         IdentityProviderType.GitHub => new ProviderStub { GitHubEmails = Emails(Email, primary: true, verified: true) },
-        IdentityProviderType.Apple => new ProviderStub { AppleIdToken = AppleToken(Email, "true") },
+        IdentityProviderType.Apple => new ProviderStub { AppleIdToken = n => AppleToken(Email, "true", n) },
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "no verified e-mail stub")
     };
 
     private static string Emails(string address, bool primary, bool verified) =>
         $$"""[{"email":"{{address}}","primary":{{primary.ToString().ToLowerInvariant()}},"verified":{{verified.ToString().ToLowerInvariant()}}}]""";
 
-    private static string AppleToken(string email, string? emailVerifiedClaim)
+    private static string AppleToken(string email, string? emailVerifiedClaim, string? nonce)
     {
         var claims = new List<Claim> { new("sub", ProviderUserId), new("email", email) };
         if (emailVerifiedClaim != null)
             claims.Add(new Claim("email_verified", emailVerifiedClaim));
+        if (nonce != null)
+            claims.Add(new Claim("nonce", nonce));
 
         var token = new JwtSecurityToken(
             issuer: "https://appleid.apple.com",
@@ -572,7 +607,10 @@ public class SocialLoginVerifiedEmailTests
         public string? GitHubProfileEmail { get; init; }
         public string GitHubEmails { get; init; } = "[]";
         public HttpStatusCode GitHubEmailsStatus { get; init; } = HttpStatusCode.OK;
-        public string? AppleIdToken { get; init; }
+        public Func<string?, string>? AppleIdToken { get; init; }
+
+        /// <summary>The nonce the service put in the authorize URL; the stub echoes it inside the Apple id_token.</summary>
+        public string? Nonce { get; set; }
     }
 
     private sealed class StubFactory(ProviderStub stub) : IHttpClientFactory
@@ -595,7 +633,7 @@ public class SocialLoginVerifiedEmailTests
             else if (url.Contains("/token", StringComparison.Ordinal) || url.Contains("access_token", StringComparison.Ordinal))
             {
                 json = stub.AppleIdToken != null
-                    ? $$"""{"access_token":"stub-access-token","token_type":"Bearer","id_token":"{{stub.AppleIdToken}}"}"""
+                    ? $$"""{"access_token":"stub-access-token","token_type":"Bearer","id_token":"{{stub.AppleIdToken(stub.Nonce)}}"}"""
                     : """{"access_token":"stub-access-token","token_type":"Bearer"}""";
             }
             else if (url.Contains("/user/emails", StringComparison.Ordinal))

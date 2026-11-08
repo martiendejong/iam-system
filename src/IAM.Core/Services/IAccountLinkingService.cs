@@ -8,17 +8,6 @@ namespace IAM.Core.Services;
 public interface IAccountLinkingService
 {
     /// <summary>
-    /// Link an external provider to an authenticated user by directly specifying the external identity details.
-    /// </summary>
-    Task<ExternalLogin> LinkExternalProviderAsync(
-        Guid userId,
-        string provider,
-        string providerUserId,
-        string? email,
-        string? displayName,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Unlink an external provider from a user. Prevents unlinking if it's the last authentication method
     /// (i.e., user has no password and this is the only external login).
     /// </summary>

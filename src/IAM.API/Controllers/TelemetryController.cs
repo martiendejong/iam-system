@@ -3,6 +3,7 @@ using System.Text;
 using IAM.API.Authorization;
 using IAM.API.Hubs;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -429,12 +430,12 @@ public class TelemetryController : ControllerBase
             {
                 csv.AppendLine(string.Join(",",
                     record.Id,
-                    EscapeCsvField(record.DeviceId),
-                    EscapeCsvField(record.MetricName),
+                    CsvCell.Escape(record.DeviceId),
+                    CsvCell.Escape(record.MetricName),
                     record.NumericValue?.ToString(CultureInfo.InvariantCulture) ?? "",
-                    EscapeCsvField(record.StringValue ?? ""),
-                    EscapeCsvField(record.Unit ?? ""),
-                    EscapeCsvField(record.DeviceType ?? ""),
+                    CsvCell.Escape(record.StringValue ?? ""),
+                    CsvCell.Escape(record.Unit ?? ""),
+                    CsvCell.Escape(record.DeviceType ?? ""),
                     record.TenantId?.ToString() ?? "",
                     record.Timestamp.ToString("O")
                 ));
@@ -463,15 +464,6 @@ public class TelemetryController : ControllerBase
             }),
             totalCount = result.TotalCount
         });
-    }
-
-    private static string EscapeCsvField(string field)
-    {
-        if (field.Contains(',') || field.Contains('"') || field.Contains('\n'))
-        {
-            return $"\"{field.Replace("\"", "\"\"")}\"";
-        }
-        return field;
     }
 }
 

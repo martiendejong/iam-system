@@ -45,6 +45,11 @@ export default function AcceptInvitePage() {
     e.preventDefault();
     setSubmitError('');
 
+    if (password && password.length < 8) {
+      setSubmitError('Password must be at least 8 characters');
+      return;
+    }
+
     if (password && password !== confirmPassword) {
       setSubmitError('Passwords do not match');
       return;
@@ -163,8 +168,9 @@ export default function AcceptInvitePage() {
                     />
                   </div>
                   <p className="text-xs text-gray-500">
-                    If you already have an account with this email, you can leave the password fields blank
-                    to join with your existing account.
+                    If you already have a confirmed account with this email, you can leave the password fields
+                    blank to join with it. If the email of that account was never confirmed, choose a new
+                    password: all old sign-in methods of the account are then removed.
                   </p>
                   <button
                     type="submit"

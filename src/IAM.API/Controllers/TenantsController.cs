@@ -79,6 +79,10 @@ public class TenantsController : ControllerBase
             .ThenBy(t => t.Name)
             .ToListAsync();
 
+        var (readable, deniedRead) = await ResolveSettingsReaderAsync(ct);
+        if (deniedRead != null)
+            return deniedRead;
+
         return Ok(tenants.Select(t => new
         {
             id = t.Id,
@@ -87,8 +91,8 @@ public class TenantsController : ControllerBase
             parentTenantId = ParentIfVisible(t.ParentTenantId, visible),
             parentTenantName = ParentIfVisible(t.ParentTenantId, visible) == null ? null : t.ParentTenant?.Name,
             childCount = t.ChildTenants.Count,
-            metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(t.Metadata ?? "{}"),
-            settings = JsonSerializer.Deserialize<Dictionary<string, object>>(t.Settings ?? "{}"),
+            metadata = readable(t.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(t.Metadata ?? "{}") : null,
+            settings = readable(t.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(t.Settings ?? "{}") : null,
             isActive = t.IsActive,
             createdAt = t.CreatedAt
         }));
@@ -120,10 +124,14 @@ public class TenantsController : ControllerBase
             return NotFound();
         }
 
-        return Ok(BuildTenantHierarchy(tenant, visible));
+        var (readable, deniedRead) = await ResolveSettingsReaderAsync(ct);
+        if (deniedRead != null)
+            return deniedRead;
+
+        return Ok(BuildTenantHierarchy(tenant, visible, readable));
     }
 
-    private object BuildTenantHierarchy(Tenant tenant, HashSet<Guid>? visible)
+    private object BuildTenantHierarchy(Tenant tenant, HashSet<Guid>? visible, Func<Guid, bool> readable)
     {
         return new
         {
@@ -131,11 +139,11 @@ public class TenantsController : ControllerBase
             name = tenant.Name,
             type = tenant.Type,
             parentTenantId = ParentIfVisible(tenant.ParentTenantId, visible),
-            metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}"),
-            settings = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}"),
+            metadata = readable(tenant.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}") : null,
+            settings = readable(tenant.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}") : null,
             isActive = tenant.IsActive,
             createdAt = tenant.CreatedAt,
-            children = tenant.ChildTenants.Select(c => BuildTenantHierarchy(c, visible))
+            children = tenant.ChildTenants.Select(c => BuildTenantHierarchy(c, visible, readable))
         };
     }
 
@@ -162,6 +170,10 @@ public class TenantsController : ControllerBase
             return NotFound();
         }
 
+        var (readable, deniedRead) = await ResolveSettingsReaderAsync(ct);
+        if (deniedRead != null)
+            return deniedRead;
+
         return Ok(new
         {
             id = tenant.Id,
@@ -170,8 +182,8 @@ public class TenantsController : ControllerBase
             parentTenantId = ParentIfVisible(tenant.ParentTenantId, visible),
             parentTenantName = ParentIfVisible(tenant.ParentTenantId, visible) == null ? null : tenant.ParentTenant?.Name,
             childCount = tenant.ChildTenants.Count,
-            metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}"),
-            settings = JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}"),
+            metadata = readable(tenant.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Metadata ?? "{}") : null,
+            settings = readable(tenant.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(tenant.Settings ?? "{}") : null,
             isActive = tenant.IsActive,
             createdAt = tenant.CreatedAt,
             updatedAt = tenant.UpdatedAt
@@ -376,13 +388,17 @@ public class TenantsController : ControllerBase
             return NotFound(new { error = "Building not found" });
         }
 
+        var (readable, deniedRead) = await ResolveSettingsReaderAsync(ct);
+        if (deniedRead != null)
+            return deniedRead;
+
         return Ok(new
         {
             building = new
             {
                 id = building.Id,
                 name = building.Name,
-                metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(building.Metadata ?? "{}"),
+                metadata = readable(building.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(building.Metadata ?? "{}") : null,
                 floors = building.ChildTenants
                     .Where(f => f.Type == "Floor")
                     .OrderBy(f => f.Name)
@@ -390,7 +406,7 @@ public class TenantsController : ControllerBase
                     {
                         id = floor.Id,
                         name = floor.Name,
-                        metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(floor.Metadata ?? "{}"),
+                        metadata = readable(floor.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(floor.Metadata ?? "{}") : null,
                         rooms = floor.ChildTenants
                             .Where(r => r.Type == "Room")
                             .OrderBy(r => r.Name)
@@ -398,7 +414,7 @@ public class TenantsController : ControllerBase
                             {
                                 id = room.Id,
                                 name = room.Name,
-                                metadata = JsonSerializer.Deserialize<Dictionary<string, object>>(room.Metadata ?? "{}"),
+                                metadata = readable(room.Id) ? JsonSerializer.Deserialize<Dictionary<string, object>>(room.Metadata ?? "{}") : null,
                                 deviceCount = room.ChildTenants.Count(d => d.Type == "Device")
                             })
                     })
@@ -456,6 +472,25 @@ public class TenantsController : ControllerBase
             return (null, Unauthorized());
 
         return (await TenantManagementAuthority.GetVisibleTenantIdsAsync(_context, userId, ct), null);
+    }
+
+    /// <summary>
+    /// Who may read a tenant's free-form Settings and Metadata (task 5575): a platform admin for every tenant,
+    /// otherwise only an owner/manager of the tenant or of a tenant above it. Plain members still see name, type and
+    /// place in the tree. One shared decision for list, get, hierarchy and building structure; reach matches the
+    /// update endpoint (<see cref="RequireTenantAuthorityAsync"/>).
+    /// </summary>
+    private async Task<(Func<Guid, bool> CanRead, IActionResult? Denied)> ResolveSettingsReaderAsync(CancellationToken ct)
+    {
+        if (IsPlatformAdminRole(User))
+            return (_ => true, null);
+
+        var subject = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(subject, out var userId))
+            return (_ => false, Unauthorized());
+
+        var readable = await TenantManagementAuthority.GetSettingsReadableTenantIdsAsync(_context, userId, ct);
+        return (readable.Contains, null);
     }
 
     /// <summary>A parent id the caller cannot see is not disclosed (null).</summary>
