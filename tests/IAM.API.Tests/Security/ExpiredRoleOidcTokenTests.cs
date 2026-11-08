@@ -355,7 +355,7 @@ public class ExpiredRoleOidcTokenTests
     }
 
     [Fact]
-    public async Task Refresh_ExpiredAppRoleDoesNotKeepItsTenant_TheTokenMovesToTheRoleThatStillRuns()
+    public async Task Refresh_ExpiredStoredTenantRole_GetsInvalidGrant()
     {
         using var factory = new ExpiredRoleFactory();
         await SeedAsync(factory,
@@ -364,10 +364,18 @@ public class ExpiredRoleOidcTokenTests
         var tokens = await LoginAndGetTokensAsync(NewClient(factory));
 
         await SetExpiryAsync(factory, AdminRoleId, TenantA, Past);
-        var refreshed = await RefreshOkAsync(NewClient(factory), tokens);
-
-        Assert.Equal(TenantB.ToString(), TenantIdIn(refreshed));
-        Assert.Equal(new[] { CustomerRoleName }, AccessTokenRoles(refreshed));
+        // Task 5627: refresh pins to stored tenant (TenantA). After TenantA role expires,
+        // the refresh session ends even though TenantB role is still valid.
+        var refreshResponse = await NewClient(factory).PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = tokens.GetProperty("refresh_token").GetString()!,
+            ["client_id"] = ClientId
+        }));
+        var body = await refreshResponse.Content.ReadAsStringAsync();
+        Assert.True(refreshResponse.StatusCode == HttpStatusCode.BadRequest || refreshResponse.StatusCode == HttpStatusCode.Forbidden,
+            $"expected invalid_grant after stored tenant role expired, got: {refreshResponse.StatusCode} {body}");
+        Assert.Contains(Errors.InvalidGrant, body);
     }
 
     [Fact]
