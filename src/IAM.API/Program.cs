@@ -37,11 +37,19 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
     options.KnownProxies.Add(IPAddress.Loopback);      // 127.0.0.1
     options.KnownProxies.Add(IPAddress.IPv6Loopback);  // ::1
-    // If there are known external proxy IPs, add them here from config:
+    // Individual proxy IPs (e.g. a specific Windows ARR host)
     var proxyIps = builder.Configuration.GetSection("ForwardedHeaders:TrustedProxies").Get<string[]>() ?? [];
     foreach (var ip in proxyIps)
         if (IPAddress.TryParse(ip, out var addr))
             options.KnownProxies.Add(addr);
+    // CIDR networks (e.g. "172.16.0.0/12" covers all Docker bridge networks)
+    var proxyNetworks = builder.Configuration.GetSection("ForwardedHeaders:TrustedNetworks").Get<string[]>() ?? [];
+    foreach (var cidr in proxyNetworks)
+    {
+        var slash = cidr.IndexOf('/');
+        if (slash > 0 && IPAddress.TryParse(cidr[..slash], out var netAddr) && int.TryParse(cidr[(slash + 1)..], out var prefix))
+            options.KnownIPNetworks.Add(new System.Net.IPNetwork(netAddr, prefix));
+    }
 });
 
 // Add services to the container
