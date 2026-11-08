@@ -27,7 +27,7 @@ public class PasswordlessAdaptiveMfaTests
             ["Jwt:AccessTokenExpirationMinutes"] = "5"
         }).Build();
         var auth = new AuthService(ctx, config, email, risk, otp, new ClaimsMappingService(ctx), NullLogger<AuthService>.Instance,
-            AuthServiceTestFactory.CreateLoginThrottle(), AuthServiceTestFactory.CreateChallengeService());
+            AuthServiceTestFactory.CreateLoginThrottle(), new SignInNetworkGate(ctx, NullLogger<SignInNetworkGate>.Instance), AuthServiceTestFactory.CreateChallengeService());
         return (auth, risk, email, ctx);
     }
 
