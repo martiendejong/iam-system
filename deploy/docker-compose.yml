@@ -47,6 +47,14 @@ services:
       OpenIddict__EncryptionCertificatePassword: ${OpenIddict__EncryptionCertificatePassword:-}
       Ca__CertificatePassword: ${Ca__CertificatePassword:-}
       SecretsVault__MasterKey: ${SecretsVault__MasterKey:-}
+      Clients__OpenWebUi__Secret: ${Clients__OpenWebUi__Secret:-}
+      JengoVpsMcp__ClientSecret: ${JengoVpsMcp__ClientSecret:-}
+      JengoAgiSvc__ClientSecret: ${JengoAgiSvc__ClientSecret:-}
+      Clients__SquidProxy__Secret: ${Clients__SquidProxy__Secret:-}
+      AdminSeed__Email: ${AdminSeed__Email:-}
+      AdminSeed__Password: ${AdminSeed__Password:-}
+      AdminSeed__FirstName: ${AdminSeed__FirstName:-Admin}
+      AdminSeed__LastName: ${AdminSeed__LastName:-User}
       Email__AllowDisabledSending: ${Email__AllowDisabledSending:-false}
     volumes:
       - /opt/iam/certs:/app/certs:ro
