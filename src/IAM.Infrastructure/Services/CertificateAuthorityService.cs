@@ -162,7 +162,7 @@ public class CertificateAuthorityService : ICertificateAuthorityService
         {
             DeviceId = deviceId,
             SerialNumber = FormatSerialNumber(serialBytes),
-            Thumbprint = signedCert.Thumbprint,
+            Thumbprint = CertificateThumbprint.Sha256(signedCert), // SHA-256, as DeviceAuthenticationService compares (task 5159)
             SubjectName = signedCert.Subject,
             IssuerName = signedCert.Issuer,
             CertificatePem = certPem,
@@ -243,9 +243,10 @@ public class CertificateAuthorityService : ICertificateAuthorityService
             using var caCert = await GetOrCreateCaCertificateAsync(ct);
             result.IsTrusted = ValidateCertificateChain(cert, caCert);
 
-            // Check revocation status in database
+            // Check revocation status in database (stored thumbprints are SHA-256, task 5159)
+            var sha256Thumbprint = CertificateThumbprint.Sha256(cert);
             var dbCert = await _context.DeviceCertificates
-                .FirstOrDefaultAsync(c => c.Thumbprint == cert.Thumbprint, ct);
+                .FirstOrDefaultAsync(c => c.Thumbprint == sha256Thumbprint, ct);
 
             if (dbCert != null)
             {
