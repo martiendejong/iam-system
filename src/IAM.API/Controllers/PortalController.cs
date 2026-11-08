@@ -108,8 +108,8 @@ public class PortalController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
             return BadRequest(new { error = "Current password and new password are required" });
 
-        if (request.NewPassword.Length < 8)
-            return BadRequest(new { error = "New password must be at least 8 characters" });
+        if (!IAM.Core.Security.PasswordPolicy.IsValid(request.NewPassword))
+            return BadRequest(new { error = IAM.Core.Security.PasswordPolicy.TooShortMessage });
 
         var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
         if (user == null)
@@ -137,10 +137,8 @@ public class PortalController : ControllerBase
 
         // The old password is gone, so every other session opened with it ends, as on admin change and reset.
         // The session making the change stays signed in when it can be identified (otherwise all end). The refresh
-        // token to keep comes from the signed token claim only; the sessions screen's X-Session-Id header names a
-        // UserSession, not a refresh token.
+        // token to keep comes from the signed token claim only, never from the X-Session-Id request header.
         await _context.RevokeRefreshTokensAsync(userId.Value, CurrentSession.RefreshTokenId(User), ct);
-        var currentSessionId = CurrentSession.Resolve(Request, User);
 
         // Log password change in audit log
         _context.AuditLogs.Add(new Core.Entities.AuditLog
@@ -153,13 +151,7 @@ public class PortalController : ControllerBase
             UserAgent = Request.Headers["User-Agent"].ToString()
         });
 
-        // Both session services save the context, so the new hash, the revoked refresh tokens and the audit row
-        // are committed together.
-        if (currentSessionId.HasValue)
-            await _sessionService.RevokeAllOtherSessionsAsync(userId.Value, currentSessionId.Value, ct);
-        else
-            await _sessionService.RevokeAllUserSessionsAsync(userId.Value, "password_change", ct);
-
+        // The revoked refresh tokens, the new hash and the audit row are committed together.
         await _context.SaveChangesAsync(ct);
 
         return Ok(new { message = "Password changed successfully" });

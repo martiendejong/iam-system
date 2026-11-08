@@ -82,7 +82,7 @@ public class DataRequestsController : ControllerBase
             requestedAt = r.RequestedAt,
             completedAt = r.CompletedAt,
             notes = r.Notes,
-            hasDownload = r.Type == DataRequestType.Export && r.DataUrl != null && r.ExpiresAt > DateTime.UtcNow
+            hasDownload = r.Type == DataRequestType.Export && r.HasData && r.ExpiresAt > DateTime.UtcNow
         });
 
         return Ok(response);
@@ -170,23 +170,20 @@ public class DataRequestsController : ControllerBase
         if (userId == null)
             return Unauthorized(new { error = "User ID not found in token" });
 
-        var requests = await _dataRequestService.GetRequestsAsync(userId.Value, ct);
-        var request = requests.FirstOrDefault(r => r.Id == id);
+        var request = await _dataRequestService.GetExportForDownloadAsync(userId.Value, id, ct);
 
         if (request == null)
             return NotFound(new { error = "Data request not found" });
 
-        if (request.UserId != userId.Value)
-            return Forbid();
-
         if (request.Type != DataRequestType.Export)
             return BadRequest(new { error = "This request is not an export request" });
 
+        // Expired or purged (ExpiresAt is set once the export was generated) -> "expired", not "not yet available"
+        if (request.ExpiresAt.HasValue && (request.ExpiresAt.Value < DateTime.UtcNow || request.DataUrl == null))
+            return BadRequest(new { error = "Export download link has expired" });
+
         if (request.DataUrl == null)
             return BadRequest(new { error = "Export data is not yet available" });
-
-        if (request.ExpiresAt.HasValue && request.ExpiresAt.Value < DateTime.UtcNow)
-            return BadRequest(new { error = "Export download link has expired" });
 
         // Decode the base64 data URL
         if (request.DataUrl.StartsWith("data:application/json;base64,"))

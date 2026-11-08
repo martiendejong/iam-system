@@ -22,6 +22,7 @@ internal static class AuthServiceTestFactory
         RecordingEmailService? emailService = null,
         ILoginThrottle? loginThrottle = null,
         IAccountGuessingGuard? accountGuard = null)
+        ITwoFactorChallengeService? challengeService = null)
     {
         emailService ??= new RecordingEmailService();
         var emailSettings = Options.Create(new EmailSettings { BaseUrl = "https://iam.example.com" });
@@ -32,7 +33,11 @@ internal static class AuthServiceTestFactory
         return new AuthService(
             context, configuration, emailService, riskAssessmentService, otpService, claimsMappingService,
             NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle(), accountGuard);
+            NullLogger<AuthService>.Instance, loginThrottle ?? CreateLoginThrottle(), challengeService ?? CreateChallengeService());
     }
+
+    public static TwoFactorChallengeService CreateChallengeService(TimeProvider? timeProvider = null) =>
+        new(new MemoryCache(new MemoryCacheOptions()), timeProvider);
 
     /// <summary>
     /// A real <see cref="LoginThrottle"/> on a private cache (so tests never share state), with the
@@ -72,6 +77,10 @@ internal sealed class RecordingEmailService : IEmailService
         SentMfaCodes.Add((email, code));
         return Task.CompletedTask;
     }
+    public int ResetMails { get; private set; }
+
+    public Task SendPasswordResetAsync(string email, string username, string resetToken, CancellationToken ct = default) { ResetMails++; return Task.CompletedTask; }
+    public Task SendMfaCodeAsync(string email, string username, string code, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task SendLoginTwoFactorCodeAsync(string email, string username, string code, string verifyUrl, CancellationToken ct = default)
     {
@@ -83,7 +92,12 @@ internal sealed class RecordingEmailService : IEmailService
     public Task SendDeviceProvisionedAsync(string email, string username, string deviceName, string deviceType, CancellationToken ct = default) => Task.CompletedTask;
     public Task SendCertificateExpiryWarningAsync(string email, string deviceName, DateTime expiryDate, int daysRemaining, CancellationToken ct = default) => Task.CompletedTask;
     public Task SendWelcomeEmailAsync(string email, string username, string tenantName, CancellationToken ct = default, Guid? tenantId = null) => Task.CompletedTask;
-    public Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null) => Task.FromResult(true);
+    public List<string> SentInvitationTokens { get; } = new();
+    public Task<bool> SendInvitationAsync(string email, string inviterName, string tenantName, string inviteToken, CancellationToken ct = default, Guid? tenantId = null)
+    {
+        SentInvitationTokens.Add(inviteToken);
+        return Task.FromResult(true);
+    }
     public Task<bool> SendRawEmailAsync(string email, string subject, string htmlBody, CancellationToken ct = default) => Task.FromResult(true);
     public Task<bool> ValidateEmailAsync(string email, CancellationToken ct = default) => Task.FromResult(true);
 }

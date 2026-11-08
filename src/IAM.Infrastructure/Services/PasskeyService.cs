@@ -15,15 +15,55 @@ public class PasskeyService : IPasskeyService
     private readonly IFido2 _fido2;
     private readonly IConfiguration _configuration;
 
-    // In-memory storage for challenges (production should use distributed cache)
-    private static readonly Dictionary<Guid, string> _registrationChallenges = new();
-    private static readonly Dictionary<string, (string Challenge, Guid UserId)> _authenticationChallenges = new();
+    private readonly IPasskeyChallengeStore _challenges;
 
-    public PasskeyService(IAMDbContext context, IFido2 fido2, IConfiguration configuration)
+    // Key for the decoy credential ids handed out for unknown / passkey-less accounts. Stable across restarts
+    // when configured; otherwise per-process random (still consistent for the life of the process).
+    private readonly byte[] _decoyKey;
+
+    public PasskeyService(IAMDbContext context, IFido2 fido2, IConfiguration configuration, IPasskeyChallengeStore challenges)
     {
         _context = context;
         _fido2 = fido2;
         _configuration = configuration;
+        _challenges = challenges;
+        var secret = configuration["Fido2:DecoySecret"] ?? configuration["Jwt:SecretKey"];
+        _decoyKey = string.IsNullOrEmpty(secret)
+            ? System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)
+            : System.Text.Encoding.UTF8.GetBytes(secret);
+    }
+
+    /// <summary>Reads the base64url challenge out of a WebAuthn clientDataJSON blob.</summary>
+    private static string? ExtractChallenge(byte[]? clientDataJson)
+    {
+        if (clientDataJson is null || clientDataJson.Length == 0)
+            return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(clientDataJson);
+            return doc.RootElement.TryGetProperty("challenge", out var c)
+                   && c.ValueKind == System.Text.Json.JsonValueKind.String
+                ? c.GetString()
+                : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private PublicKeyCredentialDescriptor DecoyDescriptor(string username)
+    {
+        var id = System.Security.Cryptography.HMACSHA256.HashData(
+            _decoyKey,
+            System.Text.Encoding.UTF8.GetBytes("passkey-decoy|" + username.Trim().ToLowerInvariant()));
+        return new PublicKeyCredentialDescriptor(id);
+    }
+
+    private static byte[] FromBase64Url(string value)
+    {
+        var s = value.Replace('-', '+').Replace('_', '/');
+        return Convert.FromBase64String(s.PadRight((s.Length + 3) / 4 * 4, '='));
     }
 
     public async Task<CredentialCreateOptions> BeginRegistrationAsync(
@@ -75,8 +115,7 @@ public class PasskeyService : IPasskeyService
             Extensions = extensions
         });
 
-        // Store challenge for verification
-        _registrationChallenges[userId] = Convert.ToBase64String(options.Challenge);
+        _challenges.Put(PasskeyChallengeKind.Registration, options.Challenge, userId);
 
         return options;
     }
@@ -89,9 +128,12 @@ public class PasskeyService : IPasskeyService
     {
         try
         {
-            // Get stored challenge
-            if (!_registrationChallenges.TryGetValue(userId, out var challengeBase64))
-                throw new InvalidOperationException("No registration challenge found for user");
+            // Consume the challenge first: single use, so a failed attempt burns it too.
+            var pending = _challenges.Take(
+                PasskeyChallengeKind.Registration,
+                ExtractChallenge(attestationResponse.Response.ClientDataJson) ?? "");
+            if (pending is null || pending.UserId != userId)
+                return false;
 
             // Verify attestation using callback pattern
             var success = await _fido2.MakeNewCredentialAsync(new MakeNewCredentialParams
@@ -99,7 +141,7 @@ public class PasskeyService : IPasskeyService
                 AttestationResponse = attestationResponse,
                 OriginalOptions = new CredentialCreateOptions
                 {
-                    Challenge = Convert.FromBase64String(challengeBase64),
+                    Challenge = pending.Challenge,
                     Rp = new PublicKeyCredentialRpEntity(
                         _configuration["Fido2:ServerDomain"] ?? "localhost",
                         _configuration["Fido2:ServerName"] ?? "IAM System",
@@ -160,9 +202,6 @@ public class PasskeyService : IPasskeyService
             _context.Credentials.Add(credential);
             await _context.SaveChangesAsync(cancellationToken);
 
-            // Clean up challenge
-            _registrationChallenges.Remove(userId);
-
             return true;
         }
         catch (Exception)
@@ -175,21 +214,21 @@ public class PasskeyService : IPasskeyService
         string username,
         CancellationToken cancellationToken = default)
     {
-        // Find user by email/username
+        // Same outcome for unknown users, users without passkeys and real passkey users: never throw,
+        // never differ in shape. Unknown / passkey-less accounts get an HMAC-derived decoy credential id.
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.Email == username, cancellationToken);
 
-        if (user == null)
-            throw new InvalidOperationException("User not found");
+        var credentials = user == null
+            ? new List<PublicKeyCredentialDescriptor>()
+            : await _context.Credentials
+                .Where(c => c.UserId == user.Id)
+                .Select(c => new PublicKeyCredentialDescriptor(c.CredentialId))
+                .ToListAsync(cancellationToken);
 
-        // Get user's credentials
-        var credentials = await _context.Credentials
-            .Where(c => c.UserId == user.Id)
-            .Select(c => new PublicKeyCredentialDescriptor(c.CredentialId))
-            .ToListAsync(cancellationToken);
-
-        if (!credentials.Any())
-            throw new InvalidOperationException("No credentials registered for this user");
+        Guid? challengeUserId = credentials.Count > 0 ? user!.Id : null;
+        if (credentials.Count == 0)
+            credentials.Add(DecoyDescriptor(username));
 
         // Create assertion options
         var extensions = new AuthenticationExtensionsClientInputs
@@ -204,8 +243,7 @@ public class PasskeyService : IPasskeyService
             Extensions = extensions
         });
 
-        // Store challenge for verification
-        _authenticationChallenges[username] = (Convert.ToBase64String(options.Challenge), user.Id);
+        _challenges.Put(PasskeyChallengeKind.Authentication, options.Challenge, challengeUserId);
 
         return options;
     }
@@ -216,31 +254,26 @@ public class PasskeyService : IPasskeyService
     {
         try
         {
-            // Find credential - load all and filter in memory (credential IDs are small, won't scale for many users)
-            // In production, consider adding a hash column to the database for efficient lookups
-            var allCredentials = await _context.Credentials
+            // Consume the challenge before anything else (single use, burned even if verification fails).
+            var pending = _challenges.Take(
+                PasskeyChallengeKind.Authentication,
+                ExtractChallenge(assertionResponse.Response.ClientDataJson) ?? "");
+            if (pending?.UserId is not Guid expectedUserId)
+                return null;
+
+            // One indexed lookup (unique index on CredentialId).
+            var credentialId = FromBase64Url(assertionResponse.Id);
+            var credential = await _context.Credentials
                 .Include(c => c.User)
-                .ToListAsync(cancellationToken);
+                .FirstOrDefaultAsync(c => c.CredentialId == credentialId, cancellationToken);
 
-            var credential = allCredentials
-                .FirstOrDefault(c => CompareByteArrays(c.CredentialId, Convert.FromBase64String(assertionResponse.Id)));
-
-            if (credential == null)
-                return null;
-
-            // Get stored challenge
-            if (!_authenticationChallenges.TryGetValue(credential.User!.Email, out var challengeData))
-                return null;
-
-            var (challengeBase64, expectedUserId) = challengeData;
-
-            if (credential.UserId != expectedUserId)
+            if (credential == null || credential.UserId != expectedUserId)
                 return null;
 
             // Verify assertion
             var options = new AssertionOptions
             {
-                Challenge = Convert.FromBase64String(challengeBase64),
+                Challenge = pending.Challenge,
                 RpId = _configuration["Fido2:ServerDomain"] ?? "localhost",
                 AllowCredentials = new List<PublicKeyCredentialDescriptor>
                 {
@@ -273,9 +306,6 @@ public class PasskeyService : IPasskeyService
             credential.SignCounter = success.SignCount;
             credential.LastUsedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync(cancellationToken);
-
-            // Clean up challenge
-            _authenticationChallenges.Remove(credential.User.Email);
 
             return credential.UserId;
         }
@@ -362,19 +392,5 @@ public class PasskeyService : IPasskeyService
         };
 
         return knownDevices.TryGetValue(aaguid, out var deviceType) ? deviceType : "unknown";
-    }
-
-    private static bool CompareByteArrays(byte[] a, byte[] b)
-    {
-        if (a == null || b == null || a.Length != b.Length)
-            return false;
-
-        for (int i = 0; i < a.Length; i++)
-        {
-            if (a[i] != b[i])
-                return false;
-        }
-
-        return true;
     }
 }

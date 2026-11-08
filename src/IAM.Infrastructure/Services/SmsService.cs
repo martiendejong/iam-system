@@ -26,9 +26,18 @@ public class SmsService : ISmsService
     {
         if (!_settings.EnableSending)
         {
+            if (!_settings.DisabledFallbackAllowed)
+            {
+                // Fail closed: do not pretend the SMS went out. The message (login code) is never logged.
+                _logger.LogError(
+                    "SMS sending is disabled outside Development; message not sent. To: {PhoneNumber}",
+                    phoneNumber);
+                return false;
+            }
+
             _logger.LogInformation(
-                "[SmsService DEV MODE] To: {PhoneNumber} | Message: {Message}",
-                phoneNumber, message);
+                "[SmsService DEV MODE] Sending disabled, message dropped. To: {PhoneNumber}",
+                phoneNumber);
             return true;
         }
 

@@ -95,6 +95,15 @@ public class EdgeGatewayService
                 _logger.LogError(ex,
                     "Unexpected error calling cloud IAM for device {DeviceId}, resource {Resource}, action {Action}",
                     deviceId, resource, action);
+
+                // The cloud answered with an error (or something unexpected): deny, never use cached claims.
+                return new EdgeAuthResult
+                {
+                    Allowed = false,
+                    FromCache = false,
+                    OfflineMode = false,
+                    Reason = "Denied: cloud IAM returned an error"
+                };
             }
         }
 
@@ -263,44 +272,51 @@ public class EdgeGatewayService
 
     /// <summary>
     /// Evaluate authorization locally using cached device claims.
-    /// Checks if any of the device's permissions match the requested resource and action.
-    /// Uses a simple prefix-based matching strategy consistent with the IAM's hierarchical resource model.
+    /// Uses the same whole-segment hierarchical rule as the cloud
+    /// (DeviceAuthenticationService.IsHierarchicalMatch).
     /// </summary>
-    private static bool EvaluateLocalAuthorization(DeviceClaimsData claims, string resource, string action)
+    internal static bool EvaluateLocalAuthorization(DeviceClaimsData claims, string resource, string action)
     {
-        // Build the expected permission pattern: "resource:action"
         var requiredPermission = $"{resource}:{action}";
 
         foreach (var permission in claims.Permissions)
         {
-            // Exact match
-            if (string.Equals(permission, requiredPermission, StringComparison.OrdinalIgnoreCase))
+            if (IsHierarchicalMatch(permission, requiredPermission))
                 return true;
-
-            // Wildcard match: "resource:*" allows any action on the resource
-            var wildcardPermission = $"{resource}:*";
-            if (string.Equals(permission, wildcardPermission, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // Hierarchical prefix match: a permission on a parent resource grants access to child resources
-            // e.g., "acme:headquarters:floor-3:*" grants access to "acme:headquarters:floor-3:hvac:unit-247:telemetry:write"
-            if (permission.EndsWith(":*", StringComparison.Ordinal))
-            {
-                var prefix = permission[..^2]; // Remove ":*"
-                if (requiredPermission.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
         }
 
         return false;
     }
 
     /// <summary>
+    /// Whole-segment matching, identical to the cloud rule: equality, "prefix:*" covers the
+    /// prefix itself and everything beneath it (prefix + ":"), and a plain permission covers
+    /// its sub-resources. "a:floor-1:*" never matches "a:floor-10:..." or "a:floor-1x:...".
+    /// </summary>
+    internal static bool IsHierarchicalMatch(string permission, string requested)
+    {
+        if (permission == requested) return true;
+
+        if (permission.EndsWith(":*", StringComparison.Ordinal))
+        {
+            var prefix = permission[..^2];
+            return requested.StartsWith(prefix + ":", StringComparison.Ordinal)
+                || requested == prefix;
+        }
+
+        return requested.StartsWith(permission + ":", StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Determine if an exception indicates a network/connectivity issue
     /// (as opposed to a server-side error that we should not silently swallow).
     /// </summary>
-    private static bool IsConnectivityException(Exception ex)
+    internal static bool IsConnectivityException(Exception ex)
     {
+        // An HTTP error status (EnsureSuccessStatusCode) means the cloud answered: not connectivity.
+        if (ex is HttpRequestException { StatusCode: not null })
+            return false;
+
         return ex is HttpRequestException
             || ex is TaskCanceledException
             || ex is OperationCanceledException

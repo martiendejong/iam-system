@@ -12,7 +12,8 @@ public class Invitation
     public Role Role { get; set; } = null!;
 
     /// <summary>
-    /// Unique token used for the invitation link
+    /// SHA-256 hex hash of the invitation token (see TokenHasher). The raw token only exists in the
+    /// e-mailed link; never expose this value as if it were the token.
     /// </summary>
     public string Token { get; set; } = string.Empty;
 

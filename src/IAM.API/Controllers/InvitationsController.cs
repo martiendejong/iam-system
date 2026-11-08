@@ -121,7 +121,7 @@ public class InvitationsController : ControllerBase
                 // Honest delivery status + a manual fallback: emailSent=false means the
                 // invitation exists but no mail went out, so show/hand over acceptUrl.
                 emailSent = result.EmailSent,
-                acceptUrl = AcceptUrl(invitation.Token)
+                acceptUrl = AcceptUrl(result.RawToken)
             });
         }
         catch (InvalidOperationException ex)

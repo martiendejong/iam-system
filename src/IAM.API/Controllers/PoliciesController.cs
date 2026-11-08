@@ -20,11 +20,15 @@ public class PoliciesController : ControllerBase
     private readonly IPolicyInheritanceEngine _policyEngine;
     private readonly ITenantAccessResolver _access;
 
-    public PoliciesController(IAMDbContext context, IPolicyInheritanceEngine policyEngine, ITenantAccessResolver access)
+    private readonly IAM.Core.Configuration.ConditionLimitsOptions _conditionLimits;
+
+    public PoliciesController(IAMDbContext context, IPolicyInheritanceEngine policyEngine, ITenantAccessResolver access,
+        Microsoft.Extensions.Options.IOptions<IAM.Core.Configuration.ConditionLimitsOptions>? conditionLimits = null)
     {
         _context = context;
         _policyEngine = policyEngine;
         _access = access;
+        _conditionLimits = conditionLimits?.Value ?? new IAM.Core.Configuration.ConditionLimitsOptions();
     }
 
     // Task 5149: the role attributes below are only a coarse gate. Every action is decided from the caller's
@@ -346,6 +350,10 @@ public class PoliciesController : ControllerBase
             return Unauthorized();
         }
 
+        var conditionError = _conditionLimits.CheckPolicyConditions(request.Conditions);
+        if (conditionError != null)
+            return BadRequest(new { error = conditionError });
+
         // Checked before any lookup, so it also hides whether the tenant exists.
         if (!await CanManageTenantAsync(creatorId, request.TenantId, ct))
             return Refused();
@@ -429,6 +437,10 @@ public class PoliciesController : ControllerBase
         {
             return Unauthorized();
         }
+
+        var conditionError = _conditionLimits.CheckPolicyConditions(request.Conditions);
+        if (conditionError != null)
+            return BadRequest(new { error = conditionError });
 
         // A caller who manages no tenant at all gets 403 for every id, before any lookup can reveal one.
         if (!await TenantManagementAuthority.ManagesAnyTenantAsync(_context, updaterId, User.IsInRole("SuperAdmin"), ct))

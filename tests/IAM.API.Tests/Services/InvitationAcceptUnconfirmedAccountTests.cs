@@ -32,6 +32,8 @@ public class InvitationAcceptUnconfirmedAccountTests
         public required Role Role { get; init; }
         public required User Sender { get; init; }
         public required Invitation Invitation { get; init; }
+        /// <summary>The token as e-mailed; the invitation row stores only its hash.</summary>
+        public required string RawToken { get; init; }
 
         public IAMDbContext NewContext() => new(Options);
     }
@@ -46,13 +48,14 @@ public class InvitationAcceptUnconfirmedAccountTests
         var tenant = new Tenant { Id = Guid.NewGuid(), Name = $"Tenant {Guid.NewGuid():N}", IsActive = true };
         var role = new Role { Id = Guid.NewGuid(), Name = "Resident", Permissions = "[\"Room.View\"]" };
         var sender = new User { Email = $"{Guid.NewGuid():N}@sender.test", PasswordHash = "not-used", EmailConfirmed = true, IsActive = true };
+        var rawToken = Guid.NewGuid().ToString("N");
         var invitation = new Invitation
         {
             Id = Guid.NewGuid(),
             Email = email,
             TenantId = tenant.Id,
             RoleId = role.Id,
-            Token = Guid.NewGuid().ToString("N"),
+            Token = TokenHasher.Sha256Hex(rawToken),
             Status = "Pending",
             InvitedByUserId = sender.Id,
             ExpiresAt = DateTime.UtcNow.AddDays(3)
@@ -60,7 +63,7 @@ public class InvitationAcceptUnconfirmedAccountTests
         context.AddRange(tenant, role, sender, invitation);
         context.SaveChanges();
 
-        return new Scene { Options = options, Tenant = tenant, Role = role, Sender = sender, Invitation = invitation };
+        return new Scene { Options = options, Tenant = tenant, Role = role, Sender = sender, Invitation = invitation, RawToken = rawToken };
     }
 
     private static InvitationService CreateService(IAMDbContext context, IApiKeyCache? apiKeyCache = null) =>
@@ -141,7 +144,7 @@ public class InvitationAcceptUnconfirmedAccountTests
     private static async Task<InvitationAcceptResult> AcceptAsync(Scene scene, string? password, string? first = "Real", string? last = "Owner")
     {
         using var context = scene.NewContext();
-        return await CreateService(context).AcceptInvitationAsync(scene.Invitation.Token, password, first, last);
+        return await CreateService(context).AcceptInvitationAsync(scene.RawToken, password, first, last);
     }
 
     private static async Task AssertAccountUntouchedAsync(Scene scene, User original)
@@ -221,7 +224,7 @@ public class InvitationAcceptUnconfirmedAccountTests
 
         using (var context = scene.NewContext())
         {
-            var result = await CreateService(context, cache).AcceptInvitationAsync(scene.Invitation.Token, NewPassword, "Real", "Owner");
+            var result = await CreateService(context, cache).AcceptInvitationAsync(scene.RawToken, NewPassword, "Real", "Owner");
             Assert.True(result.Success);
         }
 
@@ -239,7 +242,7 @@ public class InvitationAcceptUnconfirmedAccountTests
         var cache = new RecordingApiKeyCache();
 
         using var context = scene.NewContext();
-        Assert.True((await CreateService(context, cache).AcceptInvitationAsync(scene.Invitation.Token, null, null, null)).Success);
+        Assert.True((await CreateService(context, cache).AcceptInvitationAsync(scene.RawToken, null, null, null)).Success);
 
         Assert.Empty(cache.Invalidated);
     }
@@ -370,7 +373,7 @@ public class InvitationAcceptUnconfirmedAccountTests
         SeedAttackerAccount(scene);
 
         using var tracking = new SaveTrackingContext(scene.Options);
-        var result = await CreateService(tracking).AcceptInvitationAsync(scene.Invitation.Token, NewPassword, "Real", "Owner");
+        var result = await CreateService(tracking).AcceptInvitationAsync(scene.RawToken, NewPassword, "Real", "Owner");
 
         Assert.True(result.Success);
         Assert.Equal(1, tracking.SaveCount); // cleanup, role grant, invitation status and audit entry in one commit
@@ -385,7 +388,7 @@ public class InvitationAcceptUnconfirmedAccountTests
         using (var failing = new SaveTrackingContext(scene.Options) { FailOnSave = true })
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                CreateService(failing).AcceptInvitationAsync(scene.Invitation.Token, NewPassword, "Real", "Owner"));
+                CreateService(failing).AcceptInvitationAsync(scene.RawToken, NewPassword, "Real", "Owner"));
         }
 
         await AssertAccountUntouchedAsync(scene, attacker);

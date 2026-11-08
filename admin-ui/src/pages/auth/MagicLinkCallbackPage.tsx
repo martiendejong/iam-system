@@ -10,6 +10,8 @@ export default function MagicLinkCallbackPage() {
   const returnUrl = sanitizeReturnUrl(searchParams.get('returnUrl'));
   const [status, setStatus] = useState<'loading' | 'twoFactor' | 'success' | 'error'>('loading');
   const [twoFactorUserId, setTwoFactorUserId] = useState('');
+  // Adaptive MFA step-up (task 5630): the code is verified by user id and cannot be re-sent from here.
+  const [stepUp, setStepUp] = useState(false);
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [twoFactorMessage, setTwoFactorMessage] = useState('');
   const [twoFactorError, setTwoFactorError] = useState('');
@@ -27,6 +29,13 @@ export default function MagicLinkCallbackPage() {
         // The magic link only proves the user controls the mailbox. If the account
         // also has email 2FA enabled, that is a separate factor that still needs to
         // be verified before completing sign-in — mirrors the password + 2FA flow.
+        if (response.requiresStepUp && response.userId) {
+          setTwoFactorUserId(response.userId);
+          setStepUp(true);
+          setTwoFactorMessage(response.message || 'Additional verification required. Check your email for a code.');
+          setStatus('twoFactor');
+          return;
+        }
         if (response.requiresTwoFactor && response.userId) {
           setTwoFactorUserId(response.userId);
           setTwoFactorMessage(response.message || 'A verification code has been sent to your email.');
@@ -48,7 +57,9 @@ export default function MagicLinkCallbackPage() {
     setTwoFactorError('');
     setVerifying(true);
     try {
-      const response = await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode);
+      const response = stepUp
+        ? await api.verifyStepUp('', twoFactorCode, false, twoFactorUserId)
+        : await api.verifyLoginTwoFactor(twoFactorUserId, twoFactorCode);
       if (response.user) {
         setCurrentUser(response.user);
       }
@@ -121,14 +132,16 @@ export default function MagicLinkCallbackPage() {
                 {verifying ? 'Verifying...' : 'Verify and Sign In'}
               </button>
               <div className="flex items-center justify-between text-sm">
-                <button
-                  type="button"
-                  onClick={handleResendCode}
-                  disabled={verifying}
-                  className="text-indigo-600 hover:text-indigo-500"
-                >
-                  Resend code
-                </button>
+                {!stepUp ? (
+                  <button
+                    type="button"
+                    onClick={handleResendCode}
+                    disabled={verifying}
+                    className="text-indigo-600 hover:text-indigo-500"
+                  >
+                    Resend code
+                  </button>
+                ) : <span />}
                 <Link to="/login" className="text-indigo-600 hover:text-indigo-500">
                   Back to sign in
                 </Link>
