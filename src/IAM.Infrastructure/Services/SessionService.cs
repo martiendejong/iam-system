@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 using IAM.Core.Entities;
 using IAM.Core.Services;
@@ -20,71 +18,43 @@ public class SessionService : ISessionService
         _logger = logger;
     }
 
-    public async Task<UserSession> CreateSessionAsync(Guid userId, string? ipAddress, string? userAgent, TimeSpan duration, CancellationToken ct = default)
-    {
-        var rawToken = GenerateSessionToken();
-        var tokenHash = HashToken(rawToken);
-
-        var session = new UserSession
-        {
-            Id = Guid.NewGuid(),
-            UserId = userId,
-            SessionToken = tokenHash,
-            IpAddress = ipAddress,
-            UserAgent = userAgent,
-            DeviceInfo = ParseDeviceInfo(userAgent),
-            CreatedAt = DateTime.UtcNow,
-            LastActivityAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.Add(duration)
-        };
-
-        _context.UserSessions.Add(session);
-        await _context.SaveChangesAsync(ct);
-
-        _logger.LogInformation("Session created for user {UserId} from {IpAddress} ({DeviceInfo})",
-            userId, ipAddress, session.DeviceInfo);
-
-        // Return the raw token on the entity so the caller can transmit it.
-        // The persisted row stores the hash only.
-        session.SessionToken = rawToken;
-        return session;
-    }
+    // Task 5568: a session is a real sign-in, i.e. an unrevoked, unexpired refresh token. The session id IS the
+    // refresh token id (the signed refresh_token_id claim). The UserSessions table is never written by sign-in,
+    // so nothing here reads or writes it except the legacy cleanup below.
 
     public async Task<List<UserSession>> GetActiveSessionsAsync(Guid userId, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
-        return await _context.UserSessions
-            .Where(s => s.UserId == userId && !s.IsRevoked && s.ExpiresAt > now)
-            .OrderByDescending(s => s.LastActivityAt)
+        var tokens = await _context.RefreshTokens.AsNoTracking()
+            .Where(rt => rt.UserId == userId && rt.RevokedAt == null && rt.ExpiresAt > now)
+            .OrderByDescending(rt => rt.CreatedAt)
             .ToListAsync(ct);
+
+        // A rotation stamps the successor's CreatedAt, so CreatedAt is the last time this sign-in was used.
+        return tokens.Select(rt => new UserSession
+        {
+            Id = rt.Id,
+            UserId = rt.UserId,
+            IpAddress = rt.IpAddress,
+            UserAgent = rt.UserAgent,
+            DeviceInfo = ParseDeviceInfo(rt.UserAgent),
+            CreatedAt = rt.CreatedAt,
+            LastActivityAt = rt.CreatedAt,
+            ExpiresAt = rt.ExpiresAt
+        }).ToList();
     }
 
     public async Task<bool> RevokeSessionAsync(Guid sessionId, Guid userId, string reason = "user_action", CancellationToken ct = default)
     {
-        var session = await _context.UserSessions
-            .FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId && !s.IsRevoked, ct);
-
-        // Task 5628: the refresh token with the same id is the session that access tokens are bound to.
         var refreshToken = await _context.RefreshTokens
             .FirstOrDefaultAsync(rt => rt.Id == sessionId && rt.UserId == userId && rt.RevokedAt == null, ct);
 
-        if (session == null && refreshToken == null)
+        if (refreshToken == null)
         {
             return false;
         }
 
-        if (session != null)
-        {
-            session.IsRevoked = true;
-            session.RevokedAt = DateTime.UtcNow;
-            session.RevokedReason = reason;
-        }
-
-        if (refreshToken != null)
-        {
-            refreshToken.RevokedAt = DateTime.UtcNow;
-        }
-
+        refreshToken.RevokedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
 
         _logger.LogInformation("Session {SessionId} revoked for user {UserId}, reason: {Reason}",
@@ -95,79 +65,31 @@ public class SessionService : ISessionService
 
     public async Task<int> RevokeAllOtherSessionsAsync(Guid userId, Guid currentSessionId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
-        var sessions = await _context.UserSessions
-            .Where(s => s.UserId == userId && s.Id != currentSessionId && !s.IsRevoked && s.ExpiresAt > now)
-            .ToListAsync(ct);
-
-        foreach (var session in sessions)
-        {
-            session.IsRevoked = true;
-            session.RevokedAt = DateTime.UtcNow;
-            session.RevokedReason = "user_action";
-        }
-
+        var count = await _context.RevokeRefreshTokensAsync(userId, currentSessionId, ct);
         await _context.SaveChangesAsync(ct);
 
         _logger.LogInformation("Revoked {Count} other sessions for user {UserId} (kept {CurrentSessionId})",
-            sessions.Count, userId, currentSessionId);
+            count, userId, currentSessionId);
 
-        return sessions.Count;
+        return count;
     }
 
     public async Task<int> RevokeAllUserSessionsAsync(Guid userId, string reason = "admin_action", CancellationToken ct = default)
     {
-        var sessions = await _context.UserSessions
-            .Where(s => s.UserId == userId && !s.IsRevoked)
-            .ToListAsync(ct);
-
-        foreach (var session in sessions)
-        {
-            session.IsRevoked = true;
-            session.RevokedAt = DateTime.UtcNow;
-            session.RevokedReason = reason;
-        }
-
-        // Task 5628: end the refresh tokens (the real sessions behind access tokens) too.
-        var revokedTokens = await _context.RevokeRefreshTokensAsync(userId, ct);
-
+        var count = await _context.RevokeRefreshTokensAsync(userId, ct);
         await _context.SaveChangesAsync(ct);
 
         _logger.LogInformation("Revoked all {Count} sessions for user {UserId}, reason: {Reason}",
-            sessions.Count, userId, reason);
+            count, userId, reason);
 
-        return sessions.Count + revokedTokens;
-    }
-
-    public async Task<bool> ValidateSessionAsync(string sessionToken, CancellationToken ct = default)
-    {
-        var tokenHash = HashToken(sessionToken);
-        var now = DateTime.UtcNow;
-
-        var session = await _context.UserSessions
-            .FirstOrDefaultAsync(s => s.SessionToken == tokenHash && !s.IsRevoked && s.ExpiresAt > now, ct);
-
-        return session != null;
-    }
-
-    public async Task UpdateActivityAsync(string sessionToken, CancellationToken ct = default)
-    {
-        var tokenHash = HashToken(sessionToken);
-
-        var session = await _context.UserSessions
-            .FirstOrDefaultAsync(s => s.SessionToken == tokenHash && !s.IsRevoked, ct);
-
-        if (session != null)
-        {
-            session.LastActivityAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync(ct);
-        }
+        return count;
     }
 
     public async Task<int> CleanupExpiredSessionsAsync(CancellationToken ct = default)
     {
         var cutoff = DateTime.UtcNow;
 
+        // Legacy: UserSessions is unused (no sign-in writes it); this only clears rows left over from before task 5568.
         // Clean up sessions that are expired or were revoked more than 30 days ago
         var expiredSessions = await _context.UserSessions
             .Where(s => s.ExpiresAt < cutoff || (s.IsRevoked && s.RevokedAt < cutoff.AddDays(-30)))
@@ -189,9 +111,7 @@ public class SessionService : ISessionService
         var now = DateTime.UtcNow;
         var todayStart = now.Date;
 
-        // Base query: active sessions (optionally filtered by tenant through user roles)
-        IQueryable<UserSession> baseQuery = _context.UserSessions
-            .Where(s => !s.IsRevoked && s.ExpiresAt > now);
+        IQueryable<RefreshToken> all = _context.RefreshTokens.AsNoTracking();
 
         if (tenantId.HasValue)
         {
@@ -201,51 +121,24 @@ public class SessionService : ISessionService
                 .Select(ur => ur.UserId)
                 .Distinct();
 
-            baseQuery = baseQuery.Where(s => tenantUserIds.Contains(s.UserId));
+            all = all.Where(rt => tenantUserIds.Contains(rt.UserId));
         }
 
-        var activeSessions = await baseQuery.ToListAsync(ct);
+        var active = await all.Where(rt => rt.RevokedAt == null && rt.ExpiresAt > now).ToListAsync(ct);
 
-        var stats = new SessionStatistics
+        return new SessionStatistics
         {
-            TotalActiveSessions = activeSessions.Count,
-            UniqueUsers = activeSessions.Select(s => s.UserId).Distinct().Count(),
-            SessionsByDevice = activeSessions
-                .GroupBy(s => s.DeviceInfo ?? "Unknown")
+            TotalActiveSessions = active.Count,
+            UniqueUsers = active.Select(rt => rt.UserId).Distinct().Count(),
+            SessionsByDevice = active
+                .GroupBy(rt => ParseDeviceInfo(rt.UserAgent) ?? "Unknown")
                 .ToDictionary(g => g.Key, g => g.Count()),
-            SessionsCreatedToday = await _context.UserSessions
-                .Where(s => s.CreatedAt >= todayStart)
-                .CountAsync(ct),
-            SessionsRevokedToday = await _context.UserSessions
-                .Where(s => s.IsRevoked && s.RevokedAt >= todayStart)
-                .CountAsync(ct)
+            SessionsCreatedToday = await all.CountAsync(rt => rt.CreatedAt >= todayStart, ct),
+            SessionsRevokedToday = await all.CountAsync(rt => rt.RevokedAt >= todayStart, ct)
         };
-
-        return stats;
     }
 
     // --- Private helpers ---
-
-    /// <summary>
-    /// Generate a cryptographically random 32-byte token encoded as Base64.
-    /// </summary>
-    private static string GenerateSessionToken()
-    {
-        var randomBytes = new byte[32];
-        using var rng = RandomNumberGenerator.Create();
-        rng.GetBytes(randomBytes);
-        return Convert.ToBase64String(randomBytes);
-    }
-
-    /// <summary>
-    /// SHA256 hash of the raw token for secure storage/lookup.
-    /// </summary>
-    private static string HashToken(string token)
-    {
-        using var sha256 = SHA256.Create();
-        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
-        return Convert.ToBase64String(hashBytes);
-    }
 
     /// <summary>
     /// Parse a User-Agent string into a human-readable device description.

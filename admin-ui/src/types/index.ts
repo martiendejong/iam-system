@@ -111,6 +111,8 @@ export interface LoginResponse {
   /** True when adaptive risk-based MFA requires an extra emailed-code step before tokens are issued */
   requiresStepUp?: boolean;
   requiresTwoFactor?: boolean;
+  /** Single-use token for the 2FA verify/resend steps (task 5566); kept by the api client. */
+  challengeToken?: string;
   userId?: string;
   message?: string;
 }

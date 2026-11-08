@@ -2,6 +2,11 @@ using System.ComponentModel.DataAnnotations;
 
 namespace IAM.Core.Entities;
 
+/// <summary>
+/// UNUSED TABLE (task 5568): sign-in never writes this table. A "session" is a refresh token
+/// (<see cref="RefreshToken"/>); the sessions list and every revoke route work on those. This class stays only as the
+/// shape the sessions list returns (Id = refresh token id) and for rows left in the table; do not add writers.
+/// </summary>
 public class UserSession
 {
     public Guid Id { get; set; } = Guid.NewGuid();

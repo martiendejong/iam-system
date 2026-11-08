@@ -2,8 +2,10 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using IAM.Core.Configuration;
 using IAM.Core.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace IAM.Infrastructure.Services;
 
@@ -80,10 +82,97 @@ public class ConditionEvaluator : IConditionEvaluator
         ["action.scope"] = "Scope of the action (e.g., 'own', 'team', 'all')"
     };
 
-    public ConditionEvaluator(ILogger<ConditionEvaluator> logger)
+    private readonly ConditionLimitsOptions _limits;
+
+    public ConditionEvaluator(ILogger<ConditionEvaluator> logger, IOptions<ConditionLimitsOptions>? limits = null)
     {
         _logger = logger;
+        _limits = limits?.Value ?? new ConditionLimitsOptions();
     }
+
+    /// <inheritdoc />
+    public bool CheckLimits(IReadOnlyList<PolicyCondition> conditions, ConditionContext? context, out string? error)
+    {
+        error = null;
+
+        if (conditions.Count > _limits.MaxConditions)
+        {
+            error = $"Too many conditions: {conditions.Count} (maximum {_limits.MaxConditions})";
+            return false;
+        }
+
+        for (var i = 0; i < conditions.Count; i++)
+        {
+            var c = conditions[i];
+            if (c == null)
+            {
+                error = $"Condition [{i}] is null";
+                return false;
+            }
+
+            if ((c.Field?.Length ?? 0) > _limits.MaxValueLength)
+            {
+                error = $"Condition [{i}]: field is longer than {_limits.MaxValueLength} characters";
+                return false;
+            }
+
+            var isRegex = string.Equals(c.Operator, "matches", StringComparison.OrdinalIgnoreCase);
+            var raw = c.Value;
+            if (raw is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.Array && je.GetArrayLength() > _limits.MaxArrayItems)
+                {
+                    error = $"Condition [{i}]: array value has more than {_limits.MaxArrayItems} items";
+                    return false;
+                }
+            }
+            else if (raw is System.Collections.ICollection coll && coll.Count > _limits.MaxArrayItems)
+            {
+                error = $"Condition [{i}]: array value has more than {_limits.MaxArrayItems} items";
+                return false;
+            }
+
+            string text = raw switch
+            {
+                null => "",
+                JsonElement e => e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : e.GetRawText(),
+                _ => raw.ToString() ?? ""
+            };
+            var max = isRegex ? _limits.MaxPatternLength : _limits.MaxValueLength;
+            if (text.Length > max)
+            {
+                error = isRegex
+                    ? $"Condition [{i}]: regex pattern is longer than {_limits.MaxPatternLength} characters"
+                    : $"Condition [{i}]: value is longer than {_limits.MaxValueLength} characters";
+                return false;
+            }
+        }
+
+        if (context != null)
+        {
+            foreach (var dict in new[] { context.UserAttributes, context.ResourceAttributes, context.EnvironmentAttributes, context.ActionAttributes })
+            {
+                if (dict == null) continue;
+                foreach (var (key, value) in dict)
+                {
+                    if (key.Length > _limits.MaxValueLength || (value is string str && str.Length > _limits.MaxValueLength))
+                    {
+                        error = $"Context attribute '{(key.Length > 64 ? key[..64] + "..." : key)}' exceeds the maximum length of {_limits.MaxValueLength} characters";
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a linear-time (non-backtracking) regex. Lookarounds and backreferences are not
+    /// supported by this engine and surface as NotSupportedException / RegexParseException.
+    /// </summary>
+    private Regex BuildRegex(string pattern) =>
+        new(pattern, RegexOptions.IgnoreCase | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(_limits.RegexTimeoutMs));
 
     /// <inheritdoc />
     public ConditionEvaluationResult Evaluate(string conditionsJson, ConditionContext context)
@@ -116,6 +205,14 @@ public class ConditionEvaluator : IConditionEvaluator
     public ConditionEvaluationResult Evaluate(List<PolicyCondition> conditions, ConditionContext context)
     {
         var result = new ConditionEvaluationResult();
+
+        if (!CheckLimits(conditions, context, out var limitError))
+        {
+            _logger.LogWarning("Condition limits exceeded: {Error}", limitError);
+            result.Satisfied = false;
+            result.Error = limitError;
+            return result;
+        }
 
         if (conditions.Count == 0)
         {
@@ -168,6 +265,12 @@ public class ConditionEvaluator : IConditionEvaluator
         if (conditions == null)
         {
             error = "Conditions must be a JSON array";
+            return false;
+        }
+
+        if (!CheckLimits(conditions, null, out var limitError))
+        {
+            error = limitError;
             return false;
         }
 
@@ -239,11 +342,11 @@ public class ConditionEvaluator : IConditionEvaluator
             {
                 try
                 {
-                    _ = new Regex(condition.Value?.ToString() ?? "");
+                    _ = BuildRegex(condition.Value?.ToString() ?? "");
                 }
-                catch (RegexParseException ex)
+                catch (Exception ex) when (ex is RegexParseException or NotSupportedException or ArgumentException)
                 {
-                    error = $"Condition [{i}]: Invalid regex pattern: {ex.Message}";
+                    error = $"Condition [{i}]: Invalid or unsupported regex pattern (lookarounds and backreferences are not allowed): {ex.Message}";
                     return false;
                 }
             }
@@ -393,17 +496,20 @@ public class ConditionEvaluator : IConditionEvaluator
 
         try
         {
-            // Timeout to prevent ReDoS
-            return Regex.IsMatch(fieldStr, pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+            if (pattern.Length > _limits.MaxPatternLength || fieldStr.Length > _limits.MaxValueLength)
+                return false;
+
+            // Linear-time matching plus a time budget prevents ReDoS
+            return BuildRegex(pattern).IsMatch(fieldStr);
         }
         catch (RegexMatchTimeoutException)
         {
             _logger.LogWarning("Regex match timed out for pattern: {Pattern}", pattern);
             return false;
         }
-        catch (RegexParseException ex)
+        catch (Exception ex) when (ex is RegexParseException or NotSupportedException or ArgumentException)
         {
-            _logger.LogWarning(ex, "Invalid regex pattern: {Pattern}", pattern);
+            _logger.LogWarning(ex, "Invalid or unsupported regex pattern: {Pattern}", pattern);
             return false;
         }
     }

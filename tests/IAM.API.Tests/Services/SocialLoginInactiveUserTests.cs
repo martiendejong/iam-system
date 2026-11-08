@@ -45,8 +45,8 @@ public class SocialLoginInactiveUserTests
 
         public async Task<AuthResult> CallbackAsync(string state = "state-1")
         {
-            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state);
-            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state);
+            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state, "browser-secret");
+            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state, "browser-secret");
         }
     }
 
@@ -290,11 +290,11 @@ public class SocialLoginInactiveUserTests
         var h = CreateHarness(IdentityProviderType.Google);
         var user = AddUser(h.Context, isActive: false);
         AddLink(h.Context, user, IdentityProviderType.Google);
-        await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "ctl-inactive");
+        await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "ctl-inactive", "browser-secret");
         var controller = CreateController(h.Service);
 
         var response = await controller.HandleCallback(
-            h.Provider.Id, new SocialCallbackRequest("auth-code", "ctl-inactive"));
+            h.Provider.Id, new SocialCallbackRequest("auth-code", "ctl-inactive", "browser-secret"));
 
         var bad = Assert.IsType<BadRequestObjectResult>(response);
         Assert.Equal(400, bad.StatusCode);
@@ -309,11 +309,11 @@ public class SocialLoginInactiveUserTests
         var h = CreateHarness(IdentityProviderType.Google);
         var user = AddUser(h.Context, isActive: true);
         AddLink(h.Context, user, IdentityProviderType.Google);
-        await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "ctl-active");
+        await h.Service.GetAuthorizationUrlAsync(h.Provider.Id, RedirectUri, "ctl-active", "browser-secret");
         var controller = CreateController(h.Service);
 
         var response = await controller.HandleCallback(
-            h.Provider.Id, new SocialCallbackRequest("auth-code", "ctl-active"));
+            h.Provider.Id, new SocialCallbackRequest("auth-code", "ctl-active", "browser-secret"));
 
         Assert.IsType<OkObjectResult>(response);
         Assert.Contains("refreshToken=", controller.Response.Headers.SetCookie.ToString());

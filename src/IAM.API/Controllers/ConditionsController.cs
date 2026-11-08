@@ -15,6 +15,9 @@ namespace IAM.API.Controllers;
 [Authorize]
 public class ConditionsController : ControllerBase
 {
+    /// <summary>Roles that may manage policies and therefore test condition evaluation.</summary>
+    private const string PolicyAdminRoles = "SuperAdmin,BuildingOwner,BuildingManager";
+
     private readonly IConditionEvaluator _conditionEvaluator;
     private readonly ILogger<ConditionsController> _logger;
 
@@ -31,8 +34,11 @@ public class ConditionsController : ControllerBase
     /// Use this to test whether a set of conditions would be satisfied for a given request context.
     /// </summary>
     [HttpPost("evaluate")]
+    [Authorize(Roles = PolicyAdminRoles)]
+    [RequestSizeLimit(256 * 1024)]
     [ProducesResponseType(typeof(ConditionEvaluationResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public ActionResult<ConditionEvaluationResult> Evaluate([FromBody] EvaluateConditionsRequest request)
     {
         if (request.Conditions == null || request.Conditions.Count == 0)
@@ -50,6 +56,16 @@ public class ConditionsController : ControllerBase
             });
         }
 
+        if (!_conditionEvaluator.CheckLimits(request.Conditions, request.Context, out var limitError))
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Condition limits exceeded",
+                Detail = limitError,
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
         _logger.LogDebug("Evaluating {Count} conditions", request.Conditions.Count);
 
         var result = _conditionEvaluator.Evaluate(request.Conditions, request.Context);
@@ -61,6 +77,7 @@ public class ConditionsController : ControllerBase
     /// Checks that all fields, operators, and values are well-formed without executing evaluation.
     /// </summary>
     [HttpPost("validate")]
+    [RequestSizeLimit(256 * 1024)]
     [ProducesResponseType(typeof(ValidateConditionsResponse), StatusCodes.Status200OK)]
     public ActionResult<ValidateConditionsResponse> Validate([FromBody] ValidateConditionsRequest request)
     {

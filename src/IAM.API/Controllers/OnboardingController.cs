@@ -1,10 +1,13 @@
 using System.Security.Claims;
+using System.Collections.Concurrent;
+using IAM.Core.Configuration;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace IAM.API.Controllers;
 
@@ -44,15 +47,40 @@ public class OnboardingController : ControllerBase
     private readonly IAMDbContext _context;
     private readonly IInvitationService _invitationService;
     private readonly ILogger<OnboardingController> _logger;
+    private readonly OnboardingOptions _options;
+
+    // Serializes onboarding per user so two parallel calls cannot both pass the
+    // "already owns an organization" check. Process-local: IAM runs as a single instance.
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> UserLocks = new();
 
     public OnboardingController(
         IAMDbContext context,
         IInvitationService invitationService,
-        ILogger<OnboardingController> logger)
+        ILogger<OnboardingController> logger,
+        IOptions<OnboardingOptions> options)
     {
         _context = context;
         _invitationService = invitationService;
         _logger = logger;
+        _options = options.Value;
+    }
+
+    /// <summary>
+    /// Returns an error message when the name is empty, too long or contains control characters,
+    /// line breaks or markup characters (the name ends up in invitation e-mail subjects).
+    /// </summary>
+    internal static string? ValidateOrganizationName(string? name, int maxLength)
+    {
+        var trimmed = name?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return "Organization name is required";
+        if (trimmed.Length > maxLength) return $"Organization name must be at most {maxLength} characters";
+        foreach (var c in trimmed)
+        {
+            if (char.IsControl(c) || c == '<' || c == '>' || c == '&' || c == '"' || c == '`'
+                || c == (char)0x2028 || c == (char)0x2029)
+                return "Organization name contains characters that are not allowed";
+        }
+        return null;
     }
 
     /// <summary>
@@ -86,11 +114,33 @@ public class OnboardingController : ControllerBase
         var userId = GetCurrentUserId();
         if (userId == null) return Unauthorized();
 
-        if (string.IsNullOrWhiteSpace(request.Name))
-            return BadRequest(new { error = "Organization name is required" });
+        var nameError = ValidateOrganizationName(request?.Name, _options.MaxOrganizationNameLength);
+        if (nameError != null)
+            return BadRequest(new { error = nameError });
 
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId.Value);
+        var userLock = UserLocks.GetOrAdd(userId.Value, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync();
+        try
+        {
+            return await CreateOrganizationLocked(userId.Value, request!);
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
+
+    private async Task<IActionResult> CreateOrganizationLocked(Guid currentUserId, CreateOrganizationRequest request)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == currentUserId);
         if (user == null) return Unauthorized();
+
+        var alreadyOwns = await _context.UserRoles
+            .AnyAsync(ur => ur.UserId == user.Id
+                && ur.Role.Name == OrganizationOwnerRoleName
+                && ur.Tenant != null && ur.Tenant.Type == "Organization");
+        if (alreadyOwns)
+            return Conflict(new { error = "You already own an organization. Onboarding creates at most one organization per user." });
 
         var tenant = new Tenant
         {
@@ -128,7 +178,18 @@ public class OnboardingController : ControllerBase
 
         object? invitation = null;
         var inviteEmail = request.InviteEmail?.Trim();
+        string? inviteSkippedReason = null;
         if (!string.IsNullOrWhiteSpace(inviteEmail))
+        {
+            inviteSkippedReason = await CheckInviteLimitsAsync(user.Id, inviteEmail);
+        }
+
+        if (inviteSkippedReason != null)
+        {
+            _logger.LogWarning("Organization {TenantId} created but teammate invite to {Email} skipped: {Reason}", tenant.Id, inviteEmail, inviteSkippedReason);
+            invitation = new { error = inviteSkippedReason, emailSent = false };
+        }
+        else if (!string.IsNullOrWhiteSpace(inviteEmail))
         {
             try
             {
@@ -161,6 +222,30 @@ public class OnboardingController : ControllerBase
             role = ownerRole.Name,
             invitation
         });
+    }
+
+    /// <summary>
+    /// Server-side invitation limits, checked before any e-mail is sent. Returns a message when a
+    /// limit is hit, otherwise null. Counts existing Invitation rows (no extra infrastructure).
+    /// </summary>
+    private async Task<string?> CheckInviteLimitsAsync(Guid userId, string email)
+    {
+        var now = DateTime.UtcNow;
+
+        var userSince = now.AddMinutes(-_options.UserWindowMinutes);
+        var sentByUser = await _context.Invitations
+            .CountAsync(i => i.InvitedByUserId == userId && i.CreatedAt >= userSince);
+        if (sentByUser >= _options.MaxInvitesPerUserPerWindow)
+            return $"Invitation limit reached: at most {_options.MaxInvitesPerUserPerWindow} invitations per {_options.UserWindowMinutes} minutes. Try again later.";
+
+        var normalized = email.ToLowerInvariant();
+        var recipientSince = now.AddMinutes(-_options.RecipientWindowMinutes);
+        var sentToRecipient = await _context.Invitations
+            .CountAsync(i => i.Email.ToLower() == normalized && i.CreatedAt >= recipientSince);
+        if (sentToRecipient >= _options.MaxInvitesPerRecipientPerWindow)
+            return "This address was invited recently. Try again later.";
+
+        return null;
     }
 
     private Guid? GetCurrentUserId()

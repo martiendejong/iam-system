@@ -70,6 +70,8 @@ public class IAMDbContext : DbContext
     public DbSet<PamPolicy> PamPolicies => Set<PamPolicy>();
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
     public DbSet<SecurityAlert> SecurityAlerts => Set<SecurityAlert>();
+    public DbSet<LoginFailureSignal> LoginFailureSignals => Set<LoginFailureSignal>();
+    public DbSet<AccountGuessingAlertMark> AccountGuessingAlertMarks => Set<AccountGuessingAlertMark>();
     public DbSet<SiemIntegration> SiemIntegrations => Set<SiemIntegration>();
     public DbSet<BulkOperation> BulkOperations => Set<BulkOperation>();
     public DbSet<SecretEntry> SecretEntries => Set<SecretEntry>();
@@ -1564,6 +1566,25 @@ public class IAMDbContext : DbContext
         });
 
         // SecurityAlert configuration (fired alert instances)
+        // Task 5852: per-account failure signals (keyed hashes only) and the once-per-window alert marks
+        modelBuilder.Entity<LoginFailureSignal>(entity =>
+        {
+            entity.ToTable("LoginFailureSignals");
+            entity.HasKey(e => new { e.AccountKey, e.SourceKey });
+            entity.HasIndex(e => new { e.AccountKey, e.LastFailureAt });
+            entity.HasIndex(e => e.LastFailureAt);
+            entity.Property(e => e.AccountKey).HasMaxLength(64);
+            entity.Property(e => e.SourceKey).HasMaxLength(64);
+        });
+
+        modelBuilder.Entity<AccountGuessingAlertMark>(entity =>
+        {
+            entity.ToTable("AccountGuessingAlertMarks");
+            entity.HasKey(e => e.AccountKey);
+            entity.HasIndex(e => e.AlertedAt);
+            entity.Property(e => e.AccountKey).HasMaxLength(64);
+        });
+
         modelBuilder.Entity<SecurityAlert>(entity =>
         {
             entity.ToTable("SecurityAlerts");

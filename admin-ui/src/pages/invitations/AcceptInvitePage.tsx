@@ -45,6 +45,11 @@ export default function AcceptInvitePage() {
     e.preventDefault();
     setSubmitError('');
 
+    if (password && password.length < 8) {
+      setSubmitError('Password must be at least 8 characters');
+      return;
+    }
+
     if (password && password !== confirmPassword) {
       setSubmitError('Passwords do not match');
       return;

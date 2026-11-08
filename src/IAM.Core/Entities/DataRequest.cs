@@ -53,6 +53,10 @@ public class DataRequest
     /// When the export download link expires
     /// </summary>
     public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>Set only by list projections that skip loading DataUrl; true when stored export text exists.</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool HasData { get; set; }
 }
 
 public enum DataRequestType

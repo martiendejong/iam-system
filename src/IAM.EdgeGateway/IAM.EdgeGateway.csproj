@@ -10,4 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\IAM.SDK.DotNet\IAM.SDK.DotNet.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="IAM.EdgeGateway.Tests" />
+  </ItemGroup>
 </Project>
