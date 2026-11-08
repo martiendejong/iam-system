@@ -173,6 +173,30 @@ public class AuthorityDecisionEngineTests
     }
 
     [Fact]
+    public void Actor_holding_stage_is_never_excluded_by_humanAvailability_unavailable()
+    {
+        // Bug: when humanAvailability=unavailable ALL users (including the actor) were excluded from eligible
+        // holders, turning ALLOW into ESCALATE/CONTINUITY. The actor is making the request and is by
+        // definition present, so the unavailability flag must only exclude other users.
+        var r = AuthorityDecisionEngine.Resolve(Facts(PgTenant, ProsperGenicsChain(), actor: PgLead,
+            ctx: c => c.HumanAvailability = HumanAvailability.Unavailable));
+        Assert.Equal(AuthorityDecisionState.Allow, r.State);
+        Assert.Contains(r.Authorities, h => h.UserId == PgLead);
+    }
+
+    [Fact]
+    public void HumanAvailability_unavailable_still_excludes_other_holders()
+    {
+        // The flag should propagate to non-actor holders: a requester who is NOT in stage 1 should still
+        // escalate when the lead is marked unavailable via humanAvailability.
+        var r = AuthorityDecisionEngine.Resolve(Facts(PgTenant, ProsperGenicsChain(),
+            ctx: c => c.HumanAvailability = HumanAvailability.Unavailable));
+        // Requester != PgLead, so PgLead is excluded; stage 1 becomes unstaffed -> escalate to PgDirector.
+        Assert.Equal(AuthorityDecisionState.Escalate, r.State);
+        Assert.Equal(PgDirector, Assert.Single(r.Authorities).UserId);
+    }
+
+    [Fact]
     public void Sod_conflict_excludes_an_approver_and_pushes_to_next_stage()
     {
         var r = AuthorityDecisionEngine.Resolve(Facts(PgTenant, ProsperGenicsChain(),

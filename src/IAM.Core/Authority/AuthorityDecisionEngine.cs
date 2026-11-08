@@ -149,7 +149,7 @@ public static class AuthorityDecisionEngine
                         res.Reasons.Add(new("SOD_APPROVER_EXCLUDED", $"User {uid} excluded by SoD constraint '{sod}'."));
                         continue;
                     }
-                    if (allUnavailableByCaller || (f.Availability.TryGetValue(uid, out var avail) && !avail))
+                    if (uid != actor && (allUnavailableByCaller || (f.Availability.TryGetValue(uid, out var avail) && !avail)))
                     {
                         res.Reasons.Add(new("HOLDER_UNAVAILABLE", $"User {uid} is unavailable."));
                         continue;
@@ -218,6 +218,7 @@ public static class AuthorityDecisionEngine
         else
         {
             res.State = AuthorityDecisionState.Escalate;
+            res.Authorities = res.Stage.Holders.ToList();
         }
         return res;
     }
