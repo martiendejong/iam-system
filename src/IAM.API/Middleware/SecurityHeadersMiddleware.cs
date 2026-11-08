@@ -22,10 +22,18 @@ public class SecurityHeadersMiddleware
         _denyFraming = origins.Length == 0;
         var frameAncestors = _denyFraming ? "'none'" : string.Join(' ', origins);
 
+        // Security:AllowedScriptHashes: sha256/sha384/sha512 hashes for inline scripts that must be allowed
+        // (e.g. OpenIddict form_post auto-submit). Values must be bare hashes without quotes; this method adds them.
+        var scriptHashes = (configuration.GetSection("Security:AllowedScriptHashes").Get<string[]>() ?? [])
+            .Where(h => !string.IsNullOrWhiteSpace(h))
+            .Select(h => $"'{h.Trim()}'")
+            .ToArray();
+        var scriptSrc = scriptHashes.Length > 0 ? $"'self' {string.Join(' ', scriptHashes)}" : "'self'";
+
         // style 'unsafe-inline': tenant CSS in LoginPage and React style attributes. No script unsafe-inline/eval.
         // img data:/https: for tenant logos. connect 'self' covers API + SignalR. form-action deliberately omitted (form_post).
         _csp = "default-src 'self'; " +
-               "script-src 'self'; " +
+               $"script-src {scriptSrc}; " +
                "style-src 'self' 'unsafe-inline'; " +
                "img-src 'self' data: https:; " +
                "font-src 'self' data:; " +
