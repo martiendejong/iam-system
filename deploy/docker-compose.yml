@@ -33,7 +33,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: ${APP_ENV:-Development}
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=${DB_NAME:-iam_db};Username=${DB_USER:-iam};Password=${DB_PASSWORD};Pool Size=20"
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=${DB_NAME:-iam_db};Username=${DB_USER:-iam};Password=${DB_PASSWORD}"
       Jwt__Issuer: ${JWT_ISSUER:?JWT_ISSUER is required}
       Jwt__SecretKey: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       Redis__ConnectionString: redis:6379
@@ -41,6 +41,13 @@ services:
       ForwardedHeaders__TrustedNetworks__0: "172.16.0.0/12"
       Fido2__ServerDomain: ${FIDO2_DOMAIN:-localhost}
       Fido2__Origins__0: ${FIDO2_ORIGIN:-https://localhost}
+      OpenIddict__SigningCertificatePath: ${OpenIddict__SigningCertificatePath:-}
+      OpenIddict__SigningCertificatePassword: ${OpenIddict__SigningCertificatePassword:-}
+      OpenIddict__EncryptionCertificatePath: ${OpenIddict__EncryptionCertificatePath:-}
+      OpenIddict__EncryptionCertificatePassword: ${OpenIddict__EncryptionCertificatePassword:-}
+      Ca__CertificatePassword: ${Ca__CertificatePassword:-}
+      SecretsVault__MasterKey: ${SecretsVault__MasterKey:-}
+      Email__AllowDisabledSending: ${Email__AllowDisabledSending:-false}
     volumes:
       - /opt/iam/certs:/app/certs:ro
     depends_on:
