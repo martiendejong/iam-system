@@ -1,0 +1,16 @@
+**/.git
+**/.vs
+**/bin
+**/obj
+**/node_modules
+admin-ui/dist
+publish_out
+**/*.user
+**/*.suo
+**/appsettings.Development.json
+**/appsettings.Production.json
+deploy/
+tests/
+docs/
+*.md
+!README.md

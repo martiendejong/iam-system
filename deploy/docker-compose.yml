@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-iam}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:-iam_db}
+    volumes:
+      - /opt/iam/data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-iam}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iam_net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iam_net
+
+  api:
+    image: iam-system:latest
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${APP_ENV:-Development}
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=${DB_NAME:-iam_db};Username=${DB_USER:-iam};Password=${DB_PASSWORD};Pool Size=20"
+      Jwt__Issuer: ${JWT_ISSUER:?JWT_ISSUER is required}
+      Jwt__SecretKey: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      Redis__ConnectionString: redis:6379
+      # Trust all Docker bridge networks (172.16-31.x.x) so Caddy's X-Forwarded-For reaches the rate limiter
+      ForwardedHeaders__TrustedNetworks__0: "172.16.0.0/12"
+      Fido2__ServerDomain: ${FIDO2_DOMAIN:-localhost}
+      Fido2__Origins__0: ${FIDO2_ORIGIN:-https://localhost}
+    volumes:
+      - /opt/iam/certs:/app/certs:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      iam_net:
+      proxy_net:
+        aliases:
+          - iam-test-api
+
+networks:
+  iam_net:
+    internal: true
+  proxy_net:
+    external: true
+    name: proxy_net
