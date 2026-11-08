@@ -58,6 +58,11 @@ public class MagicLinkController : ControllerBase
 
         if (!loginResult.Success)
         {
+            if (loginResult.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = loginResult.Error });
+            }
+
             return BadRequest(new { error = loginResult.Error });
         }
 

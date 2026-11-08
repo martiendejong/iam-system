@@ -164,6 +164,11 @@ public class PasskeyController : ControllerBase
 
             if (!loginResult.Success)
             {
+                if (loginResult.NetworkBlocked)
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = loginResult.Error });
+                }
+
                 return Unauthorized(new { error = loginResult.Error });
             }
 

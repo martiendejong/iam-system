@@ -71,6 +71,11 @@ public class OtpController : ControllerBase
 
         if (!loginResult.Success)
         {
+            if (loginResult.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = loginResult.Error });
+            }
+
             return BadRequest(new { error = loginResult.Error });
         }
 
@@ -166,6 +171,11 @@ public class OtpController : ControllerBase
 
         if (!loginResult.Success)
         {
+            if (loginResult.NetworkBlocked)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = loginResult.Error });
+            }
+
             return BadRequest(new { error = loginResult.Error });
         }
 

@@ -127,6 +127,7 @@ builder.Services.AddScoped<IScimService, ScimService>();
 builder.Services.AddScoped<ITenantBrandingService, TenantBrandingService>();
 builder.Services.AddScoped<IClaimsMappingService, ClaimsMappingService>();
 builder.Services.AddScoped<INetworkPolicyService, NetworkPolicyService>();
+builder.Services.AddScoped<ISignInNetworkGate, SignInNetworkGate>(); // task 5570: tenant IP allowlist at sign-in and token issuance
 builder.Services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
 builder.Services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
 builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();

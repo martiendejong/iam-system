@@ -39,6 +39,7 @@ public class AuthService : IAuthService
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
     private readonly ILoginThrottle _loginThrottle;
+    private readonly ISignInNetworkGate _networkGate;
     private readonly IAccountGuessingGuard? _accountGuard;
     private readonly ITwoFactorChallengeService _twoFactorChallenge;
 
@@ -51,6 +52,7 @@ public class AuthService : IAuthService
         IClaimsMappingService claimsMappingService,
         ILogger<AuthService> logger,
         ILoginThrottle loginThrottle,
+        ISignInNetworkGate networkGate,
         ITwoFactorChallengeService twoFactorChallenge,
         IAccountGuessingGuard? accountGuard = null)
     {
@@ -62,6 +64,7 @@ public class AuthService : IAuthService
         _claimsMappingService = claimsMappingService;
         _logger = logger;
         _loginThrottle = loginThrottle;
+        _networkGate = networkGate;
         _accountGuard = accountGuard;
         _twoFactorChallenge = twoFactorChallenge;
     }
@@ -219,6 +222,13 @@ public class AuthService : IAuthService
         }
 
         _loginThrottle.RecordSuccess(email, ipAddress);
+
+        // Task 5570: tenant IP allowlist. Only reached with the right password, so it says nothing
+        // about unknown accounts, and it runs before any second-factor code is sent.
+        if (user.IsActive && !await _networkGate.IsAllowedAsync(user.Id, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
 
         // The persistent lock now only comes from the 2FA step (task 4523). It is reported only to a
         // caller who has proven the password, and without a timestamp.
@@ -400,6 +410,13 @@ public class AuthService : IAuthService
             return InvalidRefreshToken();
         }
 
+        // Task 5570: an existing session cannot renew from a blocked address. Checked before the
+        // token is rotated, so the refresh cookie stays valid for a listed address.
+        if (!await _networkGate.IsAllowedAsync(storedToken.UserId, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
+
         // ANOMALY DETECTION: Check if device fingerprint changed
         var ipChanged = !string.IsNullOrEmpty(storedToken.IpAddress) &&
                         !string.IsNullOrEmpty(ipAddress) &&
@@ -578,6 +595,13 @@ public class AuthService : IAuthService
             };
         }
 
+        // Task 5570: every method that ends in token issuance (OTP, magic link, passkey, social,
+        // 2FA and step-up completion) passes through here.
+        if (!await _networkGate.IsAllowedAsync(user.Id, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
+
         // Update last login
         user.LastLoginAt = DateTime.UtcNow;
         LoginLockout.Reset(user);
@@ -663,6 +687,12 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
+        // Task 5570: refuse before a second-factor code is e-mailed to a blocked address.
+        if (user.IsActive && !await _networkGate.IsAllowedAsync(user.Id, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
+
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
             await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
@@ -911,6 +941,13 @@ public class AuthService : IAuthService
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
+
+    private static AuthResult NetworkBlockedResult() => new()
+    {
+        Success = false,
+        NetworkBlocked = true,
+        Error = ISignInNetworkGate.RefusalMessage
+    };
 
     private string GenerateRefreshToken()
     {
