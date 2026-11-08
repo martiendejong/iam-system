@@ -19,6 +19,7 @@ public class MqttSuperuserTests
         public void RecordSuccess(string deviceId) { }
         public bool TryUseNonce(string deviceId, string nonce) => true;
     }
+
     private sealed class NoOpVerifier : IDeviceGatewayVerifier
     {
         public bool IsTrusted(string? presentedKey) => false;
