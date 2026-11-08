@@ -12,7 +12,7 @@ namespace IAM.API.Tests.Services;
 /// <summary>Task 5483: only the exact "*" permission makes a device an MQTT broker superuser.</summary>
 public class MqttSuperuserTests
 {
-    private sealed class AlwaysOpenGuard : IDeviceLoginGuard
+    private sealed class NoOpGuard : IDeviceLoginGuard
     {
         public bool IsLockedOut(string deviceId) => false;
         public void RecordFailure(string deviceId) { }
@@ -20,7 +20,7 @@ public class MqttSuperuserTests
         public bool TryUseNonce(string deviceId, string nonce) => true;
     }
 
-    private sealed class UntrustedGatewayVerifier : IDeviceGatewayVerifier
+    private sealed class NoOpVerifier : IDeviceGatewayVerifier
     {
         public bool IsTrusted(string? presentedKey) => false;
     }
@@ -30,7 +30,7 @@ public class MqttSuperuserTests
         var options = new DbContextOptionsBuilder<IAMDbContext>()
             .UseInMemoryDatabase($"mqtt-su-{Guid.NewGuid():N}").Options;
         var db = new IAMDbContext(options);
-        var auth = new DeviceAuthenticationService(db, new ConfigurationBuilder().Build(), new AlwaysOpenGuard(), new UntrustedGatewayVerifier());
+        var auth = new DeviceAuthenticationService(db, new ConfigurationBuilder().Build(), new NoOpGuard(), new NoOpVerifier());
         return (new MqttAuthService(db, auth, NullLogger<MqttAuthService>.Instance), db);
     }
 

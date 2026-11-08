@@ -93,8 +93,12 @@ def main():
 
     stamp = date.today().strftime("%Y%m%d")
     print("== backup stopped binaries ==")
-    run(ssh, 'powershell -NoProfile -Command "Compress-Archive -Force '
-             f"-Path {REMOTE_DIR}/* -DestinationPath C:/Services/IAM-backup-{stamp}.zip\"",
+    # Exclude *.bak* to avoid archiving leftover plaintext-secret copies (task 5801).
+    run(ssh,
+        'powershell -NoProfile -Command "'
+        f"$items = Get-ChildItem -Path {REMOTE_DIR} -Exclude '*.bak*';"
+        " Compress-Archive -Force"
+        f" -Path $items.FullName -DestinationPath C:/Services/IAM-backup-{stamp}.zip\"",
         timeout=600)
 
     print("== upload ==")
