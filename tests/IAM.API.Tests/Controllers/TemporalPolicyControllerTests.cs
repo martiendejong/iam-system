@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using IAM.API.Tests.Infrastructure;
 using IAM.Core.Entities;
+using IAM.Infrastructure.Data;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace IAM.API.Tests.Controllers;
@@ -24,6 +26,24 @@ public class TemporalPolicyControllerTests : IClassFixture<IAMTestWebApplication
         _factory = factory;
         _client = factory.CreateClient();
         _client.AddAuthorizationHeader(TestAuthenticationHelper.GenerateAdminToken());
+        SeedAdminAsTenantOwner();
+    }
+
+    // Task 5850: granting and revoking need an owner/manager row in the tenant (the admin token alone has none).
+    private void SeedAdminAsTenantOwner()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+        var adminId = Guid.Parse("99999999-9999-9999-9999-999999999999");
+        var ownerRole = db.Roles.FirstOrDefault(r => r.Name == "BuildingOwner");
+        if (ownerRole == null)
+        {
+            ownerRole = new Role { Id = Guid.NewGuid(), Name = "BuildingOwner", TenantId = null, CreatedAt = DateTime.UtcNow };
+            db.Roles.Add(ownerRole);
+        }
+        if (!db.UserRoles.Any(ur => ur.UserId == adminId && ur.RoleId == ownerRole.Id && ur.TenantId == _testTenantId))
+            db.UserRoles.Add(new UserRole { Id = Guid.NewGuid(), UserId = adminId, RoleId = ownerRole.Id, TenantId = _testTenantId, GrantedAt = DateTime.UtcNow });
+        db.SaveChanges();
     }
 
     [Fact]
@@ -51,7 +71,7 @@ public class TemporalPolicyControllerTests : IClassFixture<IAMTestWebApplication
         Assert.Equal("Temporary access for incident response", grant.Justification);
     }
 
-    [Fact(Skip = "Pre-existing bug unrelated to Building Management/Spatial Hierarchy: the controller doesn't validate StartTime < EndTime and throws (500) instead of returning 400. Predates this PR; out of scope here, needs its own fix in the Temporal Access Policies feature.")]
+    [Fact]
     public async Task GrantTemporaryAccess_InvalidTimeRange_ReturnsBadRequest()
     {
         // Arrange - End time before start time

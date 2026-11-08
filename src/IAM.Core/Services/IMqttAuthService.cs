@@ -11,7 +11,14 @@ public interface IMqttAuthService
     /// Authenticate an MQTT client by clientId and optional credentials.
     /// ClientId maps to deviceId in the IAM system.
     /// </summary>
-    Task<MqttAuthResult> AuthenticateClientAsync(string clientId, string? username, string? password, CancellationToken ct = default);
+    Task<MqttAuthResult> AuthenticateClientAsync(string clientId, string? username, string? password, CancellationToken ct = default)
+        => AuthenticateClientAsync(clientId, username, password, null, ct);
+
+    /// <summary>
+    /// Same, with the client certificate fingerprint the broker verified during the TLS handshake.
+    /// Certificate devices are only allowed when it matches an active certificate of that device.
+    /// </summary>
+    Task<MqttAuthResult> AuthenticateClientAsync(string clientId, string? username, string? password, string? certFingerprint, CancellationToken ct = default);
 
     /// <summary>
     /// Check if a client has superuser (wildcard) privileges.

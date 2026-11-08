@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.API.Authorization;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -12,13 +13,16 @@ namespace IAM.API.Controllers;
 public class AccessRequestsController : ControllerBase
 {
     private readonly IAccessRequestService _accessRequestService;
+    private readonly ITenantAccessResolver _tenantAccess;
     private readonly ILogger<AccessRequestsController> _logger;
 
     public AccessRequestsController(
         IAccessRequestService accessRequestService,
+        ITenantAccessResolver tenantAccess,
         ILogger<AccessRequestsController> logger)
     {
         _accessRequestService = accessRequestService;
+        _tenantAccess = tenantAccess;
         _logger = logger;
     }
 
@@ -90,8 +94,9 @@ public class AccessRequestsController : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetRequest(Guid id, CancellationToken ct)
     {
+        // Task 5631: requester, assigned approver or tenant admin only; everyone else gets the same 404 as an unknown id.
         var request = await _accessRequestService.GetRequestAsync(id, ct);
-        if (request == null)
+        if (request == null || !await CanViewAsync(request, ct))
             return NotFound(new { error = "Access request not found" });
 
         return Ok(MapDetailedRequestToResponse(request));
@@ -161,6 +166,20 @@ public class AccessRequestsController : ControllerBase
     }
 
     // ─── Helpers ─────────────────────────────────────────────
+
+    private async Task<bool> CanViewAsync(AccessRequest request, CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId != null && await _accessRequestService.IsRequesterOrApproverAsync(request, userId.Value, ct))
+            return true;
+
+        var access = await _tenantAccess.ResolveAsync(User, ct);
+        if (access.IsRefused)
+            return false;
+
+        // A request without a tenant is only visible to platform-wide administrators.
+        return request.TenantId is { } tenantId ? access.CanManage(tenantId) : access.AllTenants;
+    }
 
     private Guid? GetUserId()
     {

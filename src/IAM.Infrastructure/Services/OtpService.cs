@@ -22,14 +22,19 @@ public class OtpService : IOtpService
     private const int MaxAttemptsPerCode = 5;
     private const int MaxSmsPerPhonePerHour = 10;
     private const int MaxEmailPerAddressPerHour = 10;
+    private const int MaxRequestsPerIpPerHour = 30;
+    private static readonly TimeSpan ThrottleWindow = TimeSpan.FromHours(1);
+    private readonly IRequestThrottle _throttle;
 
     public OtpService(
         IAMDbContext context,
         IEmailService emailService,
         ISmsService smsService,
         IOptions<EmailSettings> emailSettings,
-        ILogger<OtpService> logger)
+        ILogger<OtpService> logger,
+        IRequestThrottle? throttle = null)
     {
+        _throttle = throttle ?? new InMemoryRequestThrottle();
         _context = context;
         _emailService = emailService;
         _smsService = smsService;
@@ -37,17 +42,15 @@ public class OtpService : IOtpService
         _logger = logger;
     }
 
-    public async Task<bool> SendEmailOtpAsync(string email, OtpPurpose purpose)
+    public async Task<bool> SendEmailOtpAsync(string email, OtpPurpose purpose, string? ipAddress = null)
     {
-        // Rate limit: max per email per hour
-        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-        var recentCount = await _context.OtpCodes
-            .CountAsync(c => c.Email == email && c.CreatedAt >= oneHourAgo);
-
-        if (recentCount >= MaxEmailPerAddressPerHour)
+        // Rate limit per address and per source IP. Counted for every request, whether or not an
+        // account exists, and an over-limit request is silently dropped (still returns true) so the
+        // response never reveals whether the address has an account.
+        if (!WithinLimits("otp-email", email.Trim().ToLowerInvariant(), MaxEmailPerAddressPerHour, ipAddress))
         {
-            _logger.LogWarning("Rate limit exceeded for email OTP requests: {Email}", email);
-            return false;
+            _logger.LogWarning("Rate limit exceeded for email OTP requests; send skipped");
+            return true;
         }
 
         // Find user by email (optional for OTP - some flows don't require existing user)
@@ -91,17 +94,12 @@ public class OtpService : IOtpService
         return true;
     }
 
-    public async Task<bool> SendSmsOtpAsync(string phoneNumber, OtpPurpose purpose)
+    public async Task<bool> SendSmsOtpAsync(string phoneNumber, OtpPurpose purpose, string? ipAddress = null)
     {
-        // Rate limit: max per phone per hour
-        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-        var recentCount = await _context.OtpCodes
-            .CountAsync(c => c.PhoneNumber == phoneNumber && c.CreatedAt >= oneHourAgo);
-
-        if (recentCount >= MaxSmsPerPhonePerHour)
+        if (!WithinLimits("otp-sms", phoneNumber.Trim(), MaxSmsPerPhonePerHour, ipAddress))
         {
-            _logger.LogWarning("Rate limit exceeded for SMS OTP requests: {PhoneNumber}", phoneNumber);
-            return false;
+            _logger.LogWarning("Rate limit exceeded for SMS OTP requests; send skipped");
+            return true;
         }
 
         // Find user by phone number
@@ -143,6 +141,15 @@ public class OtpService : IOtpService
         return true;
     }
 
+    private bool WithinLimits(string channel, string subject, int perSubjectLimit, string? ipAddress)
+    {
+        // Evaluate both so each counter records the request regardless of the other's outcome.
+        var subjectOk = _throttle.TryAcquire($"{channel}:addr:{subject}", perSubjectLimit, ThrottleWindow);
+        var ipOk = string.IsNullOrEmpty(ipAddress)
+            || _throttle.TryAcquire($"{channel}:ip:{ipAddress}", MaxRequestsPerIpPerHour, ThrottleWindow);
+        return subjectOk && ipOk;
+    }
+
     public async Task<bool> ValidateOtpAsync(string? email, string? phoneNumber, string code, OtpPurpose purpose)
     {
         if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(phoneNumber))
@@ -175,31 +182,68 @@ public class OtpService : IOtpService
             return false;
         }
 
-        // Check max attempts
-        if (otpCode.Attempts >= otpCode.MaxAttempts)
+        var otpId = otpCode.Id;
+
+        if (!_context.Database.IsRelational())
         {
-            _logger.LogWarning("OTP validation failed: max attempts exceeded");
+            // Non-relational providers (EF InMemory, unit tests only) cannot run ExecuteUpdateAsync.
+            // Production always uses Postgres and takes the atomic path below.
+            return await ValidateNonAtomicAsync(otpCode, codeHash, email ?? phoneNumber, purpose);
+        }
+
+        // Count this guess atomically: the WHERE clause is the limit, so parallel guesses can never
+        // push Attempts past MaxAttempts. 0 rows updated = limit reached or code used/expired meanwhile.
+        var now = DateTime.UtcNow;
+        var counted = await _context.OtpCodes
+            .Where(c => c.Id == otpId && c.UsedAt == null && c.ExpiresAt > now && c.Attempts < c.MaxAttempts)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.Attempts, c => c.Attempts + 1));
+
+        if (counted == 0)
+        {
+            _logger.LogWarning("OTP validation failed: max attempts exceeded or code no longer valid");
             return false;
         }
 
-        // Increment attempts
-        otpCode.Attempts++;
-
-        // Verify hash
         if (otpCode.Code != codeHash)
         {
-            await _context.SaveChangesAsync();
-            _logger.LogDebug("OTP validation failed: code mismatch (attempt {Attempt}/{Max})",
-                otpCode.Attempts, otpCode.MaxAttempts);
+            _logger.LogDebug("OTP validation failed: code mismatch");
             return false;
         }
 
-        // Mark as used
-        otpCode.UsedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
+        // Consume the code exactly once: only the request that flips UsedAt from NULL wins.
+        var consumed = await _context.OtpCodes
+            .Where(c => c.Id == otpId && c.UsedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, DateTime.UtcNow));
+
+        if (consumed == 0)
+        {
+            _logger.LogWarning("OTP validation failed: code already used by a concurrent request");
+            return false;
+        }
 
         _logger.LogInformation("OTP validated successfully for {Target} purpose {Purpose}",
             email ?? phoneNumber, purpose);
+        return true;
+    }
+
+    private async Task<bool> ValidateNonAtomicAsync(OtpCode otpCode, string codeHash, string? target, OtpPurpose purpose)
+    {
+        if (otpCode.Attempts >= otpCode.MaxAttempts)
+        {
+            return false;
+        }
+
+        otpCode.Attempts++;
+
+        if (otpCode.Code != codeHash)
+        {
+            await _context.SaveChangesAsync();
+            return false;
+        }
+
+        otpCode.UsedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        _logger.LogInformation("OTP validated successfully for {Target} purpose {Purpose}", target, purpose);
         return true;
     }
 

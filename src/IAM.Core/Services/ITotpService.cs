@@ -10,7 +10,11 @@ public interface ITotpService
     Task<bool> ValidateTotpLoginAsync(Guid userId, string code, CancellationToken ct = default);
     Task<List<string>> GenerateRecoveryCodesAsync(Guid userId, int count = 8, CancellationToken ct = default);
     Task<bool> UseRecoveryCodeAsync(Guid userId, string code, CancellationToken ct = default);
+    /// <summary>Login second factor: lockout check, then TOTP, then recovery code. Failures count against the shared login lockout (task 4523).</summary>
+    Task<TotpLoginResult> VerifyLoginCodeAsync(Guid userId, string code, CancellationToken ct = default);
 }
+
+public enum TotpLoginResult { Success, Invalid, LockedOut }
 
 public class TotpSetupResult
 {

@@ -94,10 +94,12 @@ public class IAMTestWebApplicationFactory : WebApplicationFactory<Program>
                             System.Console.WriteLine($"JWT Auth Failed: {context.Exception.Message}");
                             return Task.CompletedTask;
                         },
+                        // Task 5628: keep the production session check active in every integration test;
+                        // this Events object replaces the one from Program.cs.
                         OnTokenValidated = context =>
                         {
                             System.Console.WriteLine($"JWT Token Validated: {context.Principal?.Identity?.Name}");
-                            return Task.CompletedTask;
+                            return IAM.API.Auth.AccessTokenSessionValidator.OnTokenValidatedAsync(context);
                         },
                         OnChallenge = context =>
                         {

@@ -36,4 +36,14 @@ public interface IDataRequestService
     /// Get all pending data requests awaiting admin processing.
     /// </summary>
     Task<List<DataRequest>> GetPendingRequestsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Get one export owned by the user, including its stored DataUrl. Only the download endpoint should use this.
+    /// </summary>
+    Task<DataRequest?> GetExportForDownloadAsync(Guid userId, Guid requestId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Clear stored export text (DataUrl) for every export whose ExpiresAt has passed. Returns the number purged.
+    /// </summary>
+    Task<int> PurgeExpiredExportsAsync(CancellationToken ct = default);
 }

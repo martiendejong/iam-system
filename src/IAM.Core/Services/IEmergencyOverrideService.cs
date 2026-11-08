@@ -3,6 +3,15 @@ using IAM.Core.Entities;
 namespace IAM.Core.Services;
 
 /// <summary>
+/// Whether the caller of the current request may manage a tenant (task 5632). Implemented in the API layer on top of
+/// the one tenant authorizer, so the emergency override service can enforce the rule itself.
+/// </summary>
+public interface IEmergencyOverrideCallerAccess
+{
+    Task<bool> CanManageTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Service for emergency override (break-glass) access management
 /// </summary>
 public interface IEmergencyOverrideService

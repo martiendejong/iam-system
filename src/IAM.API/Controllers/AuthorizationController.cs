@@ -31,6 +31,7 @@ public class AuthorizationController : ControllerBase
     private readonly IOpenIddictAuthorizationManager _authorizationManager;
     private readonly IOpenIddictScopeManager _scopeManager;
     private readonly ILogger<AuthorizationController> _logger;
+    private readonly ISignInNetworkGate _networkGate;
     private readonly string _loginBasePath;
 
     public AuthorizationController(
@@ -39,13 +40,15 @@ public class AuthorizationController : ControllerBase
         IOpenIddictAuthorizationManager authorizationManager,
         IOpenIddictScopeManager scopeManager,
         ILogger<AuthorizationController> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ISignInNetworkGate networkGate)
     {
         _context = context;
         _applicationManager = applicationManager;
         _authorizationManager = authorizationManager;
         _scopeManager = scopeManager;
         _logger = logger;
+        _networkGate = networkGate;
 
         // ARR strips the /auth/ prefix before forwarding to Kestrel, so redirect to /login
         // must include /auth prefix so the browser lands on the IAM admin-UI login page.
@@ -111,6 +114,20 @@ public class AuthorizationController : ControllerBase
                 return SilentSignInDenied(Errors.LoginRequired, "The IAM session belongs to an account that is no longer active.");
 
             return BadRequest(new { error = "invalid_request", error_description = "User not found or inactive" });
+        }
+
+        // Task 5570: tenant IP allowlist. The client address is RemoteIpAddress after UseForwardedHeaders
+        // (trusted proxy only), never a header or request value. Same check as every other sign-in path.
+        if (!await _networkGate.IsAllowedAsync(user.Id, ClientIp(), UserAgentHeader(), cancellationToken: HttpContext.RequestAborted))
+        {
+            if (silent)
+                return SilentSignInDenied(Errors.AccessDenied, ISignInNetworkGate.RefusalMessage);
+
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = Errors.AccessDenied,
+                error_description = ISignInNetworkGate.RefusalMessage
+            });
         }
 
         // Federated app-role gate — shared with the refresh_token grant in Exchange, see
@@ -209,6 +226,10 @@ public class AuthorizationController : ControllerBase
     /// the Forbid into a redirect to the already-validated redirect_uri carrying error, error_description
     /// and the request's state (same idiom as the Forbid calls in Exchange).
     /// </summary>
+    private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
+
+    private string UserAgentHeader() => Request.Headers.UserAgent.ToString();
+
     private IActionResult SilentSignInDenied(string error, string description) =>
         Forbid(
             authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
@@ -251,6 +272,24 @@ public class AuthorizationController : ControllerBase
                         [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.InvalidGrant,
                         [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] =
                             "The user account is no longer active."
+                    }));
+            }
+
+            // Task 5570: the code/refresh exchange applies the same tenant IP allowlist as sign-in, so an
+            // existing session cannot renew from a blocked address. On refresh the token's own tenant
+            // scope applies when it has one; otherwise every tenant the user holds a role in.
+            Guid? networkTenantId = request.IsRefreshTokenGrantType()
+                && Guid.TryParse(claimsPrincipal.GetClaim(TenantIdClaimType), out var scopedTenant)
+                ? scopedTenant
+                : null;
+            if (!await _networkGate.IsAllowedAsync(user.Id, ClientIp(), UserAgentHeader(), networkTenantId, HttpContext.RequestAborted))
+            {
+                return Forbid(
+                    authenticationSchemes: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme,
+                    properties: new AuthenticationProperties(new Dictionary<string, string?>
+                    {
+                        [OpenIddictServerAspNetCoreConstants.Properties.Error] = Errors.AccessDenied,
+                        [OpenIddictServerAspNetCoreConstants.Properties.ErrorDescription] = ISignInNetworkGate.RefusalMessage
                     }));
             }
 
@@ -390,6 +429,16 @@ public class AuthorizationController : ControllerBase
                 }
                 await _context.SaveChangesAsync();
                 return Unauthorized(new { error = Errors.InvalidGrant, error_description = "Invalid credentials." });
+            }
+
+            // Task 5570: password grant is a sign-in too; checked once the password is proven.
+            if (!await _networkGate.IsAllowedAsync(user.Id, ClientIp(), UserAgentHeader(), cancellationToken: HttpContext.RequestAborted))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error = Errors.AccessDenied,
+                    error_description = ISignInNetworkGate.RefusalMessage
+                });
             }
 
             user.FailedLoginAttempts = 0;

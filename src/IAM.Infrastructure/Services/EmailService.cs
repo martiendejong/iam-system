@@ -246,9 +246,19 @@ public partial class EmailService : IEmailService
     {
         if (!_settings.EnableSending)
         {
+            if (!_settings.DisabledFallbackAllowed)
+            {
+                // Fail closed: do not pretend the mail went out. The body is never logged.
+                _logger.LogError(
+                    "Email sending is disabled outside Development; message not sent. To: {To} | Subject: {Subject}",
+                    toEmail, subject);
+                return false;
+            }
+
+            // Never log the body: it carries reset/verification links, magic links and codes.
             _logger.LogInformation(
-                "[EmailService DEV MODE] To: {To} | Subject: {Subject}\n{Body}",
-                toEmail, subject, StripHtmlForLog(htmlBody));
+                "[EmailService DEV MODE] Sending disabled, message dropped. To: {To} | Subject: {Subject}",
+                toEmail, subject);
             return true;
         }
 
@@ -441,23 +451,6 @@ public partial class EmailService : IEmailService
     {
         return System.Net.WebUtility.HtmlEncode(input);
     }
-
-    private static string StripHtmlForLog(string html)
-    {
-        // Simple HTML stripping for dev-mode console output
-        var text = StripTagsRegex().Replace(html, "");
-        // Collapse whitespace
-        text = CollapseWhitespaceRegex().Replace(text, " ").Trim();
-        // Decode common entities
-        text = System.Net.WebUtility.HtmlDecode(text);
-        return text;
-    }
-
-    [GeneratedRegex(@"<[^>]+>")]
-    private static partial Regex StripTagsRegex();
-
-    [GeneratedRegex(@"\s+")]
-    private static partial Regex CollapseWhitespaceRegex();
 
     [GeneratedRegex(@"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")]
     private static partial Regex EmailFormatRegex();

@@ -90,8 +90,8 @@ public class PasskeySocialTwoFactorLoginTests
 
         public async Task<AuthResult> CallbackAsync(string state = "state-1")
         {
-            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state);
-            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state);
+            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state, "browser-secret");
+            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state, "browser-secret");
         }
     }
 
@@ -207,7 +207,7 @@ public class PasskeySocialTwoFactorLoginTests
         Assert.True(challenge.RequiresTwoFactor);
         var code = h.Email.SentTwoFactorCodes[0].Code;
 
-        var verified = await h.AuthService.VerifyLoginTwoFactorAsync(user.Id, code);
+        var verified = await h.AuthService.VerifyLoginTwoFactorAsync(user.Id, challenge.TwoFactorChallengeToken, code);
 
         Assert.True(verified.Success);
         Assert.False(verified.RequiresTwoFactor);
@@ -225,9 +225,9 @@ public class PasskeySocialTwoFactorLoginTests
         var h = CreateSocialHarness();
         var user = AddUser(h.Context, TwoFactorMethod.Email);
         AddGoogleLink(h.Context, user);
-        await h.CallbackAsync();
+        var challenge = await h.CallbackAsync();
 
-        var verified = await h.AuthService.VerifyLoginTwoFactorAsync(user.Id, "000000");
+        var verified = await h.AuthService.VerifyLoginTwoFactorAsync(user.Id, challenge.TwoFactorChallengeToken, "000000");
 
         Assert.False(verified.Success);
         Assert.Null(verified.AccessToken);
@@ -424,10 +424,10 @@ public class PasskeySocialTwoFactorLoginTests
     {
         Guid userId = default;
         var h = CreatePasskeyHarness(c => userId = AddUser(c, TwoFactorMethod.Email).Id);
-        OkBody(await CompletePasskeyAsync(h.Controller));
+        var passkeyBody = OkBody(await CompletePasskeyAsync(h.Controller));
         var code = h.Email.SentTwoFactorCodes[0].Code;
 
-        var verified = await h.AuthService.VerifyLoginTwoFactorAsync(userId, code);
+        var verified = await h.AuthService.VerifyLoginTwoFactorAsync(userId, passkeyBody.GetProperty("challengeToken").GetString(), code);
 
         Assert.True(verified.Success);
         Assert.False(string.IsNullOrEmpty(verified.AccessToken));

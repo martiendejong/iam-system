@@ -1,11 +1,14 @@
+-- Usage: psql -v iam_password="$IAM_POSTGRES_PASSWORD" -f setup-database.sql
+-- The password is supplied by the caller and is never stored in this file.
+\if :{?iam_password}
+\else
+  \echo 'Set the iam_password psql variable (psql -v iam_password=...)'
+  \quit
+\endif
+
 -- Create user if not exists
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_user WHERE usename = 'iamuser') THEN
-        CREATE USER iamuser WITH PASSWORD 'iampassword';
-    END IF;
-END
-$$;
+SELECT format('CREATE USER iamuser WITH PASSWORD %L', :'iam_password')
+WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_user WHERE usename = 'iamuser')\gexec
 
 -- Create database if not exists
 SELECT 'CREATE DATABASE iamdb OWNER iamuser'
