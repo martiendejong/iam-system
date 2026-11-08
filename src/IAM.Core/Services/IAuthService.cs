@@ -30,8 +30,11 @@ public interface IAuthService
     /// (see AuthResult.RequiresStepUp), by validating the emailed OTP and issuing tokens.
     /// </summary>
     Task<AuthResult> VerifyStepUpAsync(string email, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
-    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
-    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null);
+
+    /// <summary>Same as VerifyStepUpAsync for clients that only know the user id (magic-link, passkey, social).</summary>
+    Task<AuthResult> VerifyStepUpByUserIdAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
+    Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false);
+    Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? challengeToken, string? returnUrl = null);
 
     /// <summary>
     /// Completes a login for a user who has already proven an alternate primary factor
@@ -49,6 +52,9 @@ public class AuthResult
     public bool Success { get; set; }
     public string? AccessToken { get; set; }
     public string? RefreshToken { get; set; }
+
+    /// <summary>Task 5568: id of the refresh token issued with this result: the session id, and the IAM.Session cookie binding.</summary>
+    public Guid? RefreshTokenId { get; set; }
     public User? User { get; set; }
     public string? Error { get; set; }
     public Dictionary<string, string[]>? ValidationErrors { get; set; }
@@ -67,6 +73,9 @@ public class AuthResult
     /// </summary>
     public bool RequiresStepUp { get; set; }
     public bool RequiresTwoFactor { get; set; }
+
+    /// <summary>Task 5566: single-use token the 2FA verify and resend steps require; set whenever <see cref="RequiresTwoFactor"/> is.</summary>
+    public string? TwoFactorChallengeToken { get; set; }
 
     /// <summary>
     /// Access token lifetime (minutes) actually used to issue <see cref="AccessToken"/>,

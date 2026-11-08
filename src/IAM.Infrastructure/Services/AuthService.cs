@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using IAM.Core;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,7 @@ public class AuthService : IAuthService
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
     private readonly ILoginThrottle _loginThrottle;
+    private readonly ITwoFactorChallengeService _twoFactorChallenge;
 
     public AuthService(
         IAMDbContext context,
@@ -47,7 +49,8 @@ public class AuthService : IAuthService
         IOtpService otpService,
         IClaimsMappingService claimsMappingService,
         ILogger<AuthService> logger,
-        ILoginThrottle loginThrottle)
+        ILoginThrottle loginThrottle,
+        ITwoFactorChallengeService twoFactorChallenge)
     {
         _context = context;
         _configuration = configuration;
@@ -57,6 +60,7 @@ public class AuthService : IAuthService
         _claimsMappingService = claimsMappingService;
         _logger = logger;
         _loginThrottle = loginThrottle;
+        _twoFactorChallenge = twoFactorChallenge;
     }
 
     /// <summary>
@@ -111,12 +115,12 @@ public class AuthService : IAuthService
             };
         }
 
-        if (password.Length < 8)
+        if (!PasswordPolicy.IsValid(password))
         {
             return new AuthResult
             {
                 Success = false,
-                Error = "Password must be at least 8 characters"
+                Error = PasswordPolicy.TooShortMessage
             };
         }
 
@@ -244,6 +248,7 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
+                TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
                 User = user
             };
         }
@@ -251,30 +256,10 @@ public class AuthService : IAuthService
         user.LastLoginAt = DateTime.UtcNow;
 
         // Adaptive MFA: assess login risk before issuing any tokens
-        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
-            user.Id, ipAddress ?? "unknown", userAgent);
-
-        if (riskScore.Action == RiskAction.Block)
+        var riskResult = await ApplyRiskGateAsync(user, ipAddress, userAgent);
+        if (riskResult != null)
         {
-            await _context.SaveChangesAsync();
-            return new AuthResult
-            {
-                Success = false,
-                Error = "Login blocked due to unusual account activity. Please contact support."
-            };
-        }
-
-        if (riskScore.Action == RiskAction.StepUp)
-        {
-            await _context.SaveChangesAsync();
-            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
-
-            return new AuthResult
-            {
-                Success = true,
-                RequiresStepUp = true,
-                User = user
-            };
+            return riskResult;
         }
 
         // Resolve this organization's configured token lifetime (falls back to today's
@@ -316,6 +301,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            RefreshTokenId = refreshTokenId,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
@@ -444,6 +430,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = newRefreshToken,  // Return NEW refresh token (single-use rotation)
+            RefreshTokenId = newRefreshTokenId,
             User = storedToken.User,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
@@ -494,6 +481,18 @@ public class AuthService : IAuthService
         if (user == null)
         {
             // Don't reveal if email exists
+            return true;
+        }
+
+        // A still-valid reset token means a mail went out within the last hour (the token lives one
+        // hour). Send nothing and leave the token untouched, so repeat requests can neither
+        // mail-bomb the address nor invalidate the link the user is about to click (task 5633).
+        // The caller still gets the same answer, so account existence stays hidden.
+        if (user.PasswordResetToken != null
+            && user.PasswordResetTokenExpiry.HasValue
+            && user.PasswordResetTokenExpiry.Value > DateTime.UtcNow)
+        {
+            _logger.LogInformation("Password reset requested for user {UserId} while a reset token is still valid; no new mail sent", user.Id);
             return true;
         }
 
@@ -586,10 +585,46 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            RefreshTokenId = refreshTokenId,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
         };
+    }
+
+    /// <summary>
+    /// Adaptive-MFA gate shared by password and passwordless login. Returns null when the login may
+    /// proceed (Allow), a failed result for Block, or a RequiresStepUp result (code e-mailed) for StepUp.
+    /// </summary>
+    private async Task<AuthResult?> ApplyRiskGateAsync(User user, string? ipAddress, string? userAgent)
+    {
+        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
+            user.Id, ipAddress ?? "unknown", userAgent);
+
+        if (riskScore.Action == RiskAction.Block)
+        {
+            await _context.SaveChangesAsync();
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Login blocked due to unusual account activity. Please contact support."
+            };
+        }
+
+        if (riskScore.Action == RiskAction.StepUp)
+        {
+            await _context.SaveChangesAsync();
+            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresStepUp = true,
+                User = user
+            };
+        }
+
+        return null;
     }
 
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
@@ -602,8 +637,25 @@ public class AuthService : IAuthService
             {
                 Success = true,
                 RequiresTwoFactor = true,
+                TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
                 User = user
             };
+        }
+
+        if (!user.IsActive)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Account is inactive"
+            };
+        }
+
+        // Adaptive MFA: same Allow / Step-up / Block outcomes as password login.
+        var riskResult = await ApplyRiskGateAsync(user, ipAddress, userAgent);
+        if (riskResult != null)
+        {
+            return riskResult;
         }
 
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
@@ -639,8 +691,39 @@ public class AuthService : IAuthService
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
-    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
+    public async Task<AuthResult> VerifyStepUpByUserIdAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
     {
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        // Ends in LoginBypassPasswordAsync (not the gate), so a verified code is never scored again.
+        return await VerifyStepUpAsync(user.Email, code, ipAddress, userAgent, rememberMe);
+    }
+
+    public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
+    {
+        // Task 5566: no valid challenge token for this user = same answer as a wrong code, and no side effects
+        // (no failure counted, nothing mailed, no login).
+        if (!_twoFactorChallenge.IsValid(challengeToken, userId))
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
         var user = await _context.Users
             .Include(u => u.UserRoles)
                 .ThenInclude(ur => ur.Role)
@@ -688,11 +771,27 @@ public class AuthService : IAuthService
             };
         }
 
+        // Single use: the token dies with the successful verify (a concurrent second verify loses here).
+        if (!_twoFactorChallenge.TryConsume(challengeToken, userId))
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
     }
 
-    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? returnUrl = null)
+    public async Task<bool> ResendLoginTwoFactorCodeAsync(Guid userId, string? challengeToken, string? returnUrl = null)
     {
+        // Task 5566: without a valid token this is indistinguishable from "2FA not enabled": no mail is sent.
+        if (!_twoFactorChallenge.IsValid(challengeToken, userId))
+        {
+            return true;
+        }
+
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
 
         if (user == null || !user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
@@ -706,6 +805,12 @@ public class AuthService : IAuthService
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)
     {
+        // Refused before the token lookup, so a too-short password never consumes the reset token.
+        if (string.IsNullOrEmpty(token) || !PasswordPolicy.IsValid(newPassword))
+        {
+            return false;
+        }
+
         var tokenHash = HashVerificationToken(token);
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.PasswordResetToken == tokenHash

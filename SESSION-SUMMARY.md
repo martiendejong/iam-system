@@ -129,7 +129,7 @@ Host: localhost
 Port: 5432
 Database: iamdb
 User: iamuser
-Password: iampassword (dev only)
+Password: set via IAM_POSTGRES_PASSWORD in the git-ignored .env (see .env.example)
 Version: PostgreSQL 18
 ```
 

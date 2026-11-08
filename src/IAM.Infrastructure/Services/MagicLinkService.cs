@@ -19,13 +19,18 @@ public class MagicLinkService : IMagicLinkService
     private const int TokenLength = 64;
     private const int ExpiryMinutes = 15;
     private const int MaxRequestsPerHour = 5;
+    private const int MaxRequestsPerIpPerHour = 30;
+    private static readonly TimeSpan ThrottleWindow = TimeSpan.FromHours(1);
+    private readonly IRequestThrottle _throttle;
 
     public MagicLinkService(
         IAMDbContext context,
         IEmailService emailService,
         IOptions<EmailSettings> emailSettings,
-        ILogger<MagicLinkService> logger)
+        ILogger<MagicLinkService> logger,
+        IRequestThrottle? throttle = null)
     {
+        _throttle = throttle ?? new InMemoryRequestThrottle();
         _context = context;
         _emailService = emailService;
         _emailSettings = emailSettings.Value;
@@ -34,6 +39,18 @@ public class MagicLinkService : IMagicLinkService
 
     public async Task<bool> SendMagicLinkAsync(string email, MagicLinkPurpose purpose, string? ipAddress = null, string? returnUrl = null)
     {
+        // Rate limit per address and per source IP, counted for every request whether or not an
+        // account exists. Over the limit the request is silently dropped and still returns true,
+        // so the response never reveals whether the address has an account.
+        var addressOk = _throttle.TryAcquire($"magic:addr:{email.Trim().ToLowerInvariant()}", MaxRequestsPerHour, ThrottleWindow);
+        var ipOk = string.IsNullOrEmpty(ipAddress)
+            || _throttle.TryAcquire($"magic:ip:{ipAddress}", MaxRequestsPerIpPerHour, ThrottleWindow);
+        if (!addressOk || !ipOk)
+        {
+            _logger.LogWarning("Rate limit exceeded for magic link requests; send skipped");
+            return true;
+        }
+
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
         if (user == null)
         {
@@ -48,22 +65,11 @@ public class MagicLinkService : IMagicLinkService
             return true;
         }
 
-        // Rate limit: max 5 per email per hour
-        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-        var recentCount = await _context.MagicLinkTokens
-            .CountAsync(t => t.UserId == user.Id && t.CreatedAt >= oneHourAgo);
-
-        if (recentCount >= MaxRequestsPerHour)
-        {
-            _logger.LogWarning("Rate limit exceeded for magic link requests: {Email}", email);
-            return false;
-        }
-
         // Generate cryptographically random token
         var token = GenerateSecureToken();
 
         // Store only the SHA-256 hash; send the plaintext token in the email
-        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLower();
+        var tokenHash = TokenHasher.Sha256Hex(token);
 
         var magicLinkToken = new MagicLinkToken
         {
@@ -95,7 +101,7 @@ public class MagicLinkService : IMagicLinkService
     public async Task<User?> ValidateMagicLinkAsync(string token)
     {
         // Hash the submitted plaintext token before looking it up in the database
-        var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLower();
+        var tokenHash = TokenHasher.Sha256Hex(token);
 
         var magicLinkToken = await _context.MagicLinkTokens
             .Include(t => t.User)

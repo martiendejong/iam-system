@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Hazina.Security.ApiKeys;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -35,11 +36,19 @@ public class InvitationService : IInvitationService
         _emailBaseUrl = configuration.GetValue<string>("Email:BaseUrl");
     }
 
-    private static string RenderTemplate(string template, Dictionary<string, string> placeholders)
+    /// <summary>
+    /// Fills {{placeholders}} in a custom template. Task 4716: tenant-controlled values (names, email) must not
+    /// inject markup, so in HTML mode every value is HTML-encoded and {{Token}} is URL-escaped for use in an href.
+    /// Subject lines are plain text: values are inserted as-is minus line breaks (no header injection).
+    /// </summary>
+    internal static string RenderTemplate(string template, Dictionary<string, string> placeholders, bool html)
     {
         foreach (var (key, value) in placeholders)
         {
-            template = template.Replace(key, value);
+            string safe = html
+                ? (key == "{{Token}}" ? Uri.EscapeDataString(value) : System.Net.WebUtility.HtmlEncode(value))
+                : value.Replace("\r", " ").Replace("\n", " ");
+            template = template.Replace(key, safe);
         }
         return template;
     }
@@ -114,7 +123,7 @@ public class InvitationService : IInvitationService
             Email = email,
             TenantId = tenantId,
             RoleId = roleId,
-            Token = token,
+            Token = TokenHasher.Sha256Hex(token), // only the hash is stored; the raw token goes out by e-mail
             Status = "Pending",
             InvitedByUserId = invitedByUserId,
             ExpiresAt = DateTime.UtcNow.AddDays(expiryDays ?? _defaultExpiryDays)
@@ -149,8 +158,8 @@ public class InvitationService : IInvitationService
 
             emailSent = await _emailService.SendRawEmailAsync(
                 email,
-                RenderTemplate(customTemplate.Subject, placeholders),
-                RenderTemplate(customTemplate.BodyHtml, placeholders),
+                RenderTemplate(customTemplate.Subject, placeholders, html: false),
+                RenderTemplate(customTemplate.BodyHtml, placeholders, html: true),
                 ct);
         }
         else
@@ -171,7 +180,7 @@ public class InvitationService : IInvitationService
                 email, tenant.Name);
         }
 
-        return new InvitationSendResult(invitation, emailSent);
+        return new InvitationSendResult(invitation, emailSent, token);
     }
 
     public async Task<BulkInviteResult> SendBulkInvitationsAsync(
@@ -326,10 +335,11 @@ public class InvitationService : IInvitationService
         string? lastName,
         CancellationToken ct = default)
     {
+        var tokenHash = TokenHasher.Sha256Hex(token);
         var invitation = await _context.Set<Invitation>()
             .Include(i => i.Tenant)
             .Include(i => i.Role)
-            .FirstOrDefaultAsync(i => i.Token == token, ct);
+            .FirstOrDefaultAsync(i => i.Token == tokenHash, ct);
 
         if (invitation == null)
         {
@@ -394,6 +404,11 @@ public class InvitationService : IInvitationService
                     };
                 }
 
+                if (!PasswordPolicy.IsValid(password))
+                {
+                    return new InvitationAcceptResult { Success = false, Error = PasswordPolicy.TooShortMessage };
+                }
+
                 // Only stages changes; they are saved together with the role grant below.
                 accountReset = await ResetUnconfirmedAccountAsync(existingUser, password, firstName, lastName, ct);
             }
@@ -404,6 +419,11 @@ public class InvitationService : IInvitationService
             if (string.IsNullOrWhiteSpace(password))
             {
                 return new InvitationAcceptResult { Success = false, Error = "Password is required for new accounts" };
+            }
+
+            if (!PasswordPolicy.IsValid(password))
+            {
+                return new InvitationAcceptResult { Success = false, Error = PasswordPolicy.TooShortMessage };
             }
 
             user = new User
@@ -623,11 +643,12 @@ public class InvitationService : IInvitationService
 
     public async Task<Invitation?> GetInvitationByTokenAsync(string token, CancellationToken ct = default)
     {
+        var tokenHash = TokenHasher.Sha256Hex(token);
         return await _context.Set<Invitation>()
             .Include(i => i.Tenant)
             .Include(i => i.Role)
             .Include(i => i.InvitedByUser)
-            .FirstOrDefaultAsync(i => i.Token == token, ct);
+            .FirstOrDefaultAsync(i => i.Token == tokenHash, ct);
     }
 
     private static string GenerateSecureToken()

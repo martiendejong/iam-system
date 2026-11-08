@@ -61,24 +61,33 @@ builder.Services.AddDbContext<IAMDbContext>(options =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 // Per-IP + typed-email progressive delay for password sign-ins (task 5166). Singleton: the state lives in IMemoryCache.
 builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
+builder.Services.AddSingleton<ITwoFactorChallengeService, TwoFactorChallengeService>();
 builder.Services.AddScoped<IPolicyInheritanceEngine, PolicyInheritanceEngine>();
 builder.Services.AddScoped<ITemporalPolicyEngine, TemporalPolicyEngine>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.Authorization.AuditAccessResolver>();
 builder.Services.AddScoped<IAM.API.Authorization.ITelemetryAccessAuthorizer, IAM.API.Authorization.TelemetryAccessAuthorizer>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
+<<<<<<< HEAD
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAM.Core.Services.IEmergencyOverrideCallerAccess, IAM.API.Authorization.EmergencyOverrideCallerAccess>();
+=======
+builder.Services.Configure<IAM.Core.Configuration.PolicyTestingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.PolicyTestingOptions.SectionName));
+>>>>>>> origin/develop
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
+builder.Services.AddSingleton<IPasskeyChallengeStore, PasskeyChallengeStore>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.PostConfigure<EmailSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
+builder.Services.Configure<IAM.Core.Configuration.OnboardingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.OnboardingOptions.SectionName));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<ITotpService, TotpService>();
 builder.Services.AddScoped<IGroupService, GroupService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
+builder.Services.Configure<IAM.Core.Configuration.ConditionLimitsOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.ConditionLimitsOptions.SectionName));
 builder.Services.AddSingleton<IConditionEvaluator, ConditionEvaluator>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddIamApiKeyAuth(builder.Configuration, builder.Environment); // shared Hazina.Security.ApiKeys middleware + policies
@@ -105,8 +114,10 @@ builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationSer
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
 builder.Services.AddScoped<ISocialAuthService, SocialAuthService>();
 builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"));
+builder.Services.PostConfigure<SmsSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
+builder.Services.AddSingleton<IRequestThrottle, InMemoryRequestThrottle>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
@@ -171,6 +182,7 @@ builder.Services.AddScoped<IResourcePermissionService, ResourcePermissionService
 
 // Memory cache for policy evaluation
 builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IAM.API.Auth.AccessTokenSessionValidator>();
 
 // Fido2 (WebAuthn) configuration
 builder.Services.AddFido2(options =>
@@ -191,6 +203,7 @@ builder.Services.AddHostedService<CertificateExpiryMonitorWorker>();
 builder.Services.AddHostedService<DeviceHeartbeatMonitorWorker>();
 builder.Services.AddHostedService<AuditLogCleanupWorker>();
 builder.Services.AddHostedService<SessionCleanupWorker>();
+builder.Services.AddHostedService<DataExportCleanupWorker>();
 builder.Services.AddHostedService<DirectorySyncWorker>();
 builder.Services.AddHostedService<AccessRequestExpiryWorker>();
 builder.Services.AddHostedService<PamDeescalationWorker>();
@@ -358,6 +371,12 @@ builder.Services.AddAuthentication(options =>
         RoleClaimType = System.Security.Claims.ClaimTypes.Role,
         NameClaimType = System.Security.Claims.ClaimTypes.Name
     };
+
+    // Task 5628: reject access tokens whose session (refresh token) was revoked or whose user was deactivated.
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = IAM.API.Auth.AccessTokenSessionValidator.OnTokenValidatedAsync
+    };
 })
 .AddCookie("IAM.Session", options =>
 {
@@ -372,6 +391,8 @@ builder.Services.AddAuthentication(options =>
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
+    // Task 5568: the cookie dies with the sign-in (refresh token) it is bound to. Only requests that carry the cookie pay for it.
+    options.Events.OnValidatePrincipal = IAM.API.Auth.AccessTokenSessionValidator.OnValidateCookiePrincipalAsync;
 });
 
 // SuperAdmin inherits all admin roles (so role-guarded endpoints accept SuperAdmin)
@@ -438,6 +459,12 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Task 5576: fail closed when e-mail sending is disabled outside Development.
+MessagingStartupCheck.Validate(
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<EmailSettings>>().Value,
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmsSettings>>().Value,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("IAM.Startup"));
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())

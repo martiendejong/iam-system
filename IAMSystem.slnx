@@ -7,5 +7,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/IAM.API.Tests/IAM.API.Tests.csproj" />
     <Project Path="tests/IAM.Core.Tests/IAM.Core.Tests.csproj" />
+    <Project Path="tests/IAM.EdgeGateway.Tests/IAM.EdgeGateway.Tests.csproj" />
   </Folder>
 </Solution>
