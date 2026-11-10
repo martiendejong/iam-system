@@ -13,6 +13,9 @@ ARG HAZINA_REF=develop
 RUN git clone --depth=1 --branch ${HAZINA_REF} https://github.com/martiendejong/Hazina.git /hazina
 ENV HAZINA_ROOT=/hazina/
 
+ARG VITE_BASE_PATH=/
+ENV VITE_BASE_PATH=${VITE_BASE_PATH}
+
 WORKDIR /repo
 
 # Restore first (layer cache: only invalidated when .csproj / nuget / Directory.Build.props change)
