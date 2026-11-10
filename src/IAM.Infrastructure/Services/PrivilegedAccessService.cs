@@ -36,15 +36,19 @@ public class PrivilegedAccessService : IPrivilegedAccessService
         string? ipAddress = null,
         CancellationToken cancellationToken = default)
     {
-        // Look up PAM policy for this role/tenant
-        var policy = await GetPolicyForRoleAsync(roleId, tenantId, cancellationToken);
+        // Audit correlation id exists before the session does so refusals can be logged against it
+        var correlationId = $"pam-{Guid.NewGuid():N}";
+
+        // Deny by default: an active policy and an eligible caller are both required
+        var policy = await RequirePolicyAndEligibilityAsync(
+            userId, roleId, tenantId, breakGlass: false, correlationId, cancellationToken);
 
         // Validate justification requirement
-        if (policy?.RequireJustification == true && string.IsNullOrWhiteSpace(justification))
+        if (policy.RequireJustification && string.IsNullOrWhiteSpace(justification))
             throw new ArgumentException("Justification is required for this privileged role");
 
         // Determine session duration
-        var maxDuration = policy?.MaxDurationMinutes ?? 480;
+        var maxDuration = policy.MaxDurationMinutes;
         var requestedDuration = durationMinutes ?? maxDuration;
         if (requestedDuration > maxDuration)
             throw new ArgumentException($"Requested duration ({requestedDuration}min) exceeds maximum allowed ({maxDuration}min)");
@@ -57,11 +61,8 @@ public class PrivilegedAccessService : IPrivilegedAccessService
         if (hasActive)
             throw new InvalidOperationException("User already has an active privileged session for this role");
 
-        // Generate audit correlation ID for session recording
-        var correlationId = $"pam-{Guid.NewGuid():N}";
-
         // Determine initial status based on policy
-        var requiresApproval = policy?.RequireApproval ?? false;
+        var requiresApproval = policy.RequireApproval;
 
         var session = new PrivilegedSession
         {
@@ -72,7 +73,7 @@ public class PrivilegedAccessService : IPrivilegedAccessService
             ExpiresAt = DateTime.UtcNow.AddMinutes(requestedDuration),
             IpAddress = ipAddress,
             AuditCorrelationId = correlationId,
-            PamPolicyId = policy?.Id,
+            PamPolicyId = policy.Id,
             Status = requiresApproval ? PrivilegedSessionStatus.Pending : PrivilegedSessionStatus.Active,
             CheckedOutAt = requiresApproval ? null : DateTime.UtcNow,
             GrantedAt = DateTime.UtcNow
@@ -130,8 +131,14 @@ public class PrivilegedAccessService : IPrivilegedAccessService
         if (session.Status != PrivilegedSessionStatus.Pending)
             throw new InvalidOperationException($"Session is not pending approval (current status: {session.Status})");
 
+        if (session.IsBreakGlass)
+            throw new InvalidOperationException(
+                "Break-glass requests are activated by confirmation from every named approver, not by approval");
+
         if (session.UserId == approverUserId)
             throw new InvalidOperationException("Cannot approve your own privileged access request");
+
+        await RequireApproverRightsAsync(session, approverUserId, "approve", cancellationToken);
 
         session.Status = PrivilegedSessionStatus.Active;
         session.ApprovedByUserId = approverUserId;
@@ -163,6 +170,11 @@ public class PrivilegedAccessService : IPrivilegedAccessService
         if (session.Status != PrivilegedSessionStatus.Pending)
             throw new InvalidOperationException($"Session is not pending approval (current status: {session.Status})");
 
+        if (session.IsBreakGlass)
+            throw new InvalidOperationException("Break-glass requests cannot be denied through the approval endpoint");
+
+        await RequireApproverRightsAsync(session, approverUserId, "deny", cancellationToken);
+
         session.Status = PrivilegedSessionStatus.Denied;
         session.ApprovedByUserId = approverUserId;
         session.UpdatedAt = DateTime.UtcNow;
@@ -191,14 +203,14 @@ public class PrivilegedAccessService : IPrivilegedAccessService
         if (string.IsNullOrWhiteSpace(justification))
             throw new ArgumentException("Justification is required for break-glass access");
 
-        // Look up PAM policy
-        var policy = await GetPolicyForRoleAsync(roleId, tenantId, cancellationToken);
+        var correlationId = $"pam-bg-{Guid.NewGuid():N}";
 
-        if (policy != null && !policy.BreakGlassEnabled)
-            throw new InvalidOperationException("Break-glass access is not enabled for this role");
+        // Deny by default: an active policy with break-glass enabled and an eligible caller are required
+        var policy = await RequirePolicyAndEligibilityAsync(
+            userId, roleId, tenantId, breakGlass: true, correlationId, cancellationToken);
 
         // Validate 4-eyes principle: require minimum approvers
-        var requiredApprovers = policy?.BreakGlassApproversRequired ?? 2;
+        var requiredApprovers = Math.Max(2, policy.BreakGlassApproversRequired);
         if (approverUserIds.Count < requiredApprovers)
             throw new ArgumentException(
                 $"Break-glass requires at least {requiredApprovers} approvers (provided: {approverUserIds.Count})");
@@ -219,13 +231,13 @@ public class PrivilegedAccessService : IPrivilegedAccessService
             throw new ArgumentException("One or more approver users not found or inactive");
 
         // Determine duration (shorter default for break-glass: 60 min)
-        var maxDuration = policy?.MaxDurationMinutes ?? 60;
+        var maxDuration = policy.MaxDurationMinutes;
         var requestedDuration = durationMinutes ?? Math.Min(60, maxDuration);
         if (requestedDuration > maxDuration)
             requestedDuration = maxDuration;
 
-        var correlationId = $"pam-bg-{Guid.NewGuid():N}";
-
+        // The request is only pending: the named approvers have not been asked yet. ExpiresAt is the deadline
+        // for the confirmations; once the last approver confirms the full duration restarts (ConfirmBreakGlassAsync).
         var session = new PrivilegedSession
         {
             UserId = userId,
@@ -235,23 +247,190 @@ public class PrivilegedAccessService : IPrivilegedAccessService
             ExpiresAt = DateTime.UtcNow.AddMinutes(requestedDuration),
             IpAddress = ipAddress,
             AuditCorrelationId = correlationId,
-            PamPolicyId = policy?.Id,
-            Status = PrivilegedSessionStatus.Active,
-            CheckedOutAt = DateTime.UtcNow,
+            PamPolicyId = policy.Id,
+            Status = PrivilegedSessionStatus.Pending,
             GrantedAt = DateTime.UtcNow,
             IsBreakGlass = true,
-            BreakGlassApprovers = JsonSerializer.Serialize(approverUserIds)
+            BreakGlassApprovers = JsonSerializer.Serialize(approverUserIds),
+            BreakGlassConfirmations = "[]"
         };
 
         _context.PrivilegedSessions.Add(session);
         await _context.SaveChangesAsync(cancellationToken);
 
         _logger.LogCritical(
-            "PAM BREAK-GLASS: User:{UserId} Role:{RoleId} Tenant:{TenantId} Duration:{Duration}min Approvers:{Approvers} Correlation:{CorrelationId} Justification:{Justification}",
+            "PAM BREAK-GLASS REQUESTED (pending confirmation): User:{UserId} Role:{RoleId} Tenant:{TenantId} Duration:{Duration}min Approvers:{Approvers} Correlation:{CorrelationId} Justification:{Justification}",
             userId, roleId, tenantId, requestedDuration,
             string.Join(",", approverUserIds), correlationId, justification);
 
         return session;
+    }
+
+    public async Task<PrivilegedSession> ConfirmBreakGlassAsync(
+        Guid sessionId,
+        Guid approverUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await _context.PrivilegedSessions
+            .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken);
+
+        if (session == null || !session.IsBreakGlass)
+            throw new ArgumentException($"Break-glass session {sessionId} not found");
+
+        var correlationId = session.AuditCorrelationId;
+
+        if (session.Status != PrivilegedSessionStatus.Pending)
+            throw RefuseConfirmation(correlationId, sessionId, approverUserId,
+                $"session is not pending confirmation (current status: {session.Status})");
+
+        if (session.ExpiresAt <= DateTime.UtcNow)
+        {
+            session.Expire();
+            await _context.SaveChangesAsync(cancellationToken);
+            throw RefuseConfirmation(correlationId, sessionId, approverUserId, "the break-glass request has expired");
+        }
+
+        var named = ReadIds(session.BreakGlassApprovers);
+        var confirmed = ReadIds(session.BreakGlassConfirmations);
+
+        if (approverUserId == session.UserId)
+            throw RefuseConfirmation(correlationId, sessionId, approverUserId, "requester cannot confirm their own break-glass request");
+
+        if (!named.Contains(approverUserId))
+            throw RefuseConfirmation(correlationId, sessionId, approverUserId, "caller is not a named approver of this request");
+
+        if (confirmed.Contains(approverUserId))
+            throw RefuseConfirmation(correlationId, sessionId, approverUserId, "approver has already confirmed this request");
+
+        var approver = await _context.Users.FirstOrDefaultAsync(u => u.Id == approverUserId, cancellationToken);
+        if (approver == null || !approver.IsActive)
+            throw RefuseConfirmation(correlationId, sessionId, approverUserId, "approver account is not active");
+
+        await RequireApproverRightsAsync(session, approverUserId, "confirm", cancellationToken);
+
+        confirmed.Add(approverUserId);
+        session.BreakGlassConfirmations = JsonSerializer.Serialize(confirmed);
+        session.UpdatedAt = DateTime.UtcNow;
+
+        if (named.All(confirmed.Contains))
+        {
+            var now = DateTime.UtcNow;
+            var duration = session.ExpiresAt - session.GrantedAt;
+            session.Status = PrivilegedSessionStatus.Active;
+            session.CheckedOutAt = now;
+            session.ApprovedByUserId = approverUserId;
+            session.ExpiresAt = now.Add(duration);
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+
+        _logger.LogCritical(
+            "PAM BREAK-GLASS CONFIRMED: Session:{SessionId} Approver:{ApproverId} Confirmed:{Confirmed}/{Required} Status:{Status} Correlation:{CorrelationId}",
+            sessionId, approverUserId, confirmed.Count, named.Count, session.Status, correlationId);
+
+        return session;
+    }
+
+    // --- Deny-by-default helpers (task 5629) ---
+
+    private static readonly string[] AdminApproverRoleNames = { "SecurityAdmin", "SystemAdmin", "SuperAdmin" };
+
+    private static List<Guid> ReadIds(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new List<Guid>();
+        try { return JsonSerializer.Deserialize<List<Guid>>(json) ?? new List<Guid>(); }
+        catch (JsonException) { return new List<Guid>(); }
+    }
+
+    private UnauthorizedAccessException Refuse(
+        string correlationId, string operation, Guid userId, Guid roleId, Guid tenantId, string reason)
+    {
+        _logger.LogWarning(
+            "PAM REFUSED: Operation:{Operation} User:{UserId} Role:{RoleId} Tenant:{TenantId} Reason:{Reason} Correlation:{CorrelationId}",
+            operation, userId, roleId, tenantId, reason, correlationId);
+        return new UnauthorizedAccessException($"Privileged access refused: {reason}");
+    }
+
+    private InvalidOperationException RefuseConfirmation(
+        string? correlationId, Guid sessionId, Guid approverUserId, string reason)
+    {
+        _logger.LogWarning(
+            "PAM BREAK-GLASS CONFIRMATION REFUSED: Session:{SessionId} Approver:{ApproverId} Reason:{Reason} Correlation:{CorrelationId}",
+            sessionId, approverUserId, reason, correlationId);
+        return new InvalidOperationException($"Break-glass confirmation refused: {reason}");
+    }
+
+    /// <summary>
+    /// Returns the active policy for the role and tenant, or throws when there is none, when the policy does not
+    /// allow the operation, or when the caller does not hold the policy eligible role in that tenant.
+    /// </summary>
+    private async Task<PamPolicy> RequirePolicyAndEligibilityAsync(
+        Guid userId, Guid roleId, Guid tenantId, bool breakGlass, string correlationId,
+        CancellationToken cancellationToken)
+    {
+        var operation = breakGlass ? "break-glass" : "checkout";
+
+        var policy = await GetPolicyForRoleAsync(roleId, tenantId, cancellationToken);
+        if (policy == null)
+            throw Refuse(correlationId, operation, userId, roleId, tenantId, "no active PAM policy for this role and tenant");
+
+        if (breakGlass && !policy.BreakGlassEnabled)
+            throw Refuse(correlationId, operation, userId, roleId, tenantId, "break-glass is not enabled for this role");
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
+        if (user == null || !user.IsActive)
+            throw Refuse(correlationId, operation, userId, roleId, tenantId, "caller account is not active");
+
+        if (policy.EligibleRoleId == null)
+            throw Refuse(correlationId, operation, userId, roleId, tenantId, "policy defines no eligible role, so nobody is eligible");
+
+        var now = DateTime.UtcNow;
+        var eligible = await _context.UserRoles.AnyAsync(ur =>
+            ur.UserId == userId &&
+            ur.RoleId == policy.EligibleRoleId &&
+            ur.TenantId == tenantId &&
+            (ur.ExpiresAt == null || ur.ExpiresAt > now),
+            cancellationToken);
+
+        if (!eligible)
+            throw Refuse(correlationId, operation, userId, roleId, tenantId, "caller is not eligible for this role in this tenant");
+
+        return policy;
+    }
+
+    /// <summary>
+    /// The approver must hold SecurityAdmin/SystemAdmin (platform-wide or in the session tenant) or the policy
+    /// ApproverRoleId in the session tenant. A tenant admin of another tenant has no say.
+    /// </summary>
+    private async Task RequireApproverRightsAsync(
+        PrivilegedSession session, Guid approverUserId, string action, CancellationToken cancellationToken)
+    {
+        Guid? approverRoleId = null;
+        if (session.PamPolicyId != null)
+        {
+            approverRoleId = await _context.PamPolicies
+                .Where(p => p.Id == session.PamPolicyId)
+                .Select(p => p.ApproverRoleId)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        var now = DateTime.UtcNow;
+        var sessionTenantId = session.TenantId;
+        var hasRights = await _context.UserRoles
+            .Where(ur => ur.UserId == approverUserId && (ur.ExpiresAt == null || ur.ExpiresAt > now))
+            .AnyAsync(ur =>
+                ((ur.TenantId == null || ur.TenantId == sessionTenantId) && AdminApproverRoleNames.Contains(ur.Role.Name)) ||
+                (approverRoleId != null && ur.RoleId == approverRoleId && ur.TenantId == sessionTenantId),
+                cancellationToken);
+
+        if (!hasRights)
+        {
+            _logger.LogWarning(
+                "PAM REFUSED: Operation:{Operation} Session:{SessionId} Approver:{ApproverId} Tenant:{TenantId} Reason:{Reason} Correlation:{CorrelationId}",
+                action, session.Id, approverUserId, session.TenantId, "caller lacks approver rights in this tenant",
+                session.AuditCorrelationId);
+            throw new UnauthorizedAccessException("Privileged access refused: caller lacks approver rights in this tenant");
+        }
     }
 
     // ─── Session Queries ─────────────────────────────────────
@@ -461,6 +640,7 @@ public class PrivilegedAccessService : IPrivilegedAccessService
         existing.RequireJustification = policy.RequireJustification;
         existing.RequireApproval = policy.RequireApproval;
         existing.ApproverRoleId = policy.ApproverRoleId;
+        existing.EligibleRoleId = policy.EligibleRoleId;
         existing.BreakGlassEnabled = policy.BreakGlassEnabled;
         existing.BreakGlassApproversRequired = policy.BreakGlassApproversRequired;
         existing.IsActive = policy.IsActive;

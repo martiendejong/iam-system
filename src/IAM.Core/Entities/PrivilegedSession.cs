@@ -67,9 +67,15 @@ public class PrivilegedSession
     public bool IsBreakGlass { get; set; }
 
     /// <summary>
-    /// For break-glass: JSON array of approver user IDs who confirmed
+    /// For break-glass: JSON array of the approver user IDs named in the request. Each of them must confirm
+    /// before the session becomes active (task 5629).
     /// </summary>
     public string? BreakGlassApprovers { get; set; }
+
+    /// <summary>
+    /// For break-glass: JSON array of the named approvers who have confirmed so far.
+    /// </summary>
+    public string? BreakGlassConfirmations { get; set; }
 
     /// <summary>
     /// IP address of the requester

@@ -50,6 +50,10 @@ public class PamController : ControllerBase
 
             return Ok(session);
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
@@ -105,6 +109,10 @@ public class PamController : ControllerBase
             var session = await _pamService.ApproveSessionAsync(id, userId, cancellationToken);
             return Ok(session);
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
         catch (ArgumentException ex)
         {
             return NotFound(new { error = ex.Message });
@@ -132,6 +140,10 @@ public class PamController : ControllerBase
         {
             var session = await _pamService.DenySessionAsync(id, userId, cancellationToken);
             return Ok(session);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (ArgumentException ex)
         {
@@ -173,9 +185,44 @@ public class PamController : ControllerBase
 
             return Ok(session);
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// A named approver confirms a pending break-glass request
+    /// </summary>
+    [HttpPost("break-glass/{id}/confirm")]
+    public async Task<ActionResult<PrivilegedSession>> ConfirmBreakGlass(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var userIdClaim = User.FindFirst("sub")?.Value;
+        if (!Guid.TryParse(userIdClaim, out var userId))
+            return Unauthorized("User ID not found in token");
+
+        try
+        {
+            var session = await _pamService.ConfirmBreakGlassAsync(id, userId, cancellationToken);
+            return Ok(session);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
+        {
+            return NotFound(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -268,6 +315,7 @@ public class PamController : ControllerBase
                 RequireJustification = request.RequireJustification,
                 RequireApproval = request.RequireApproval,
                 ApproverRoleId = request.ApproverRoleId,
+                EligibleRoleId = request.EligibleRoleId,
                 BreakGlassEnabled = request.BreakGlassEnabled,
                 BreakGlassApproversRequired = request.BreakGlassApproversRequired,
                 IsActive = request.IsActive
@@ -305,6 +353,7 @@ public class PamController : ControllerBase
                 RequireJustification = request.RequireJustification,
                 RequireApproval = request.RequireApproval,
                 ApproverRoleId = request.ApproverRoleId,
+                EligibleRoleId = request.EligibleRoleId,
                 BreakGlassEnabled = request.BreakGlassEnabled,
                 BreakGlassApproversRequired = request.BreakGlassApproversRequired,
                 IsActive = request.IsActive
@@ -367,6 +416,7 @@ public class PamPolicyRequest
     public bool RequireJustification { get; set; } = true;
     public bool RequireApproval { get; set; } = true;
     public Guid? ApproverRoleId { get; set; }
+    public Guid? EligibleRoleId { get; set; }
     public bool BreakGlassEnabled { get; set; } = false;
     public int BreakGlassApproversRequired { get; set; } = 2;
     public bool IsActive { get; set; } = true;

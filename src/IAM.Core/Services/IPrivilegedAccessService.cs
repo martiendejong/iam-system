@@ -62,6 +62,15 @@ public interface IPrivilegedAccessService
         string? ipAddress = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// A named approver confirms a pending break-glass request. The session becomes active only after every
+    /// named approver has confirmed.
+    /// </summary>
+    Task<PrivilegedSession> ConfirmBreakGlassAsync(
+        Guid sessionId,
+        Guid approverUserId,
+        CancellationToken cancellationToken = default);
+
     // ─── Session Queries ─────────────────────────────────────
 
     /// <summary>
