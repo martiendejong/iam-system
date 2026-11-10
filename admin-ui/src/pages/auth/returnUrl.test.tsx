@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { sanitizeReturnUrl } from './returnUrl';
+import { describe, it, expect, vi } from 'vitest';
+import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
 
 describe('sanitizeReturnUrl', () => {
   it('falls back to /dashboard when returnUrl is absent', () => {
@@ -34,5 +34,30 @@ describe('sanitizeReturnUrl', () => {
 
   it('rejects a bare protocol string like javascript: (does not start with /)', () => {
     expect(sanitizeReturnUrl('javascript:alert(1)')).toBe('/dashboard');
+  });
+});
+
+describe('navigateAfterAuth', () => {
+  it('uses window.location.href for OIDC /connect/ paths', () => {
+    const navigate = vi.fn();
+    const original = window.location.href;
+    Object.defineProperty(window, 'location', { value: { href: original }, writable: true });
+    navigateAfterAuth('/connect/authorize?client_id=x', navigate);
+    expect(window.location.href).toBe('/auth/connect/authorize?client_id=x');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('uses window.location.href for paths outside the /auth basename (e.g. /jengo-agi/)', () => {
+    const navigate = vi.fn();
+    Object.defineProperty(window, 'location', { value: { href: '' }, writable: true });
+    navigateAfterAuth('/jengo-agi/', navigate);
+    expect(window.location.href).toBe('/jengo-agi/');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('calls navigate() for paths inside the /auth basename', () => {
+    const navigate = vi.fn();
+    navigateAfterAuth('/auth/dashboard', navigate);
+    expect(navigate).toHaveBeenCalledWith('/auth/dashboard');
   });
 });

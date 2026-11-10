@@ -19,6 +19,10 @@ export function navigateAfterAuth(returnUrl: string, navigate: (path: string) =>
   if (returnUrl.startsWith('/connect/') || returnUrl.startsWith('/auth/connect/')) {
     const fullUrl = returnUrl.startsWith('/auth/') ? returnUrl : '/auth' + returnUrl;
     window.location.href = fullUrl;
+  } else if (!returnUrl.startsWith('/auth/') && returnUrl !== '/auth') {
+    // returnUrl is outside the React app's basename (/auth) — React Router
+    // cannot cross the basename boundary, so a full-page navigation is required.
+    window.location.href = returnUrl;
   } else {
     navigate(returnUrl);
   }
