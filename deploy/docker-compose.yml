@@ -36,6 +36,7 @@ services:
       ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Database=${DB_NAME:-iam_db};Username=${DB_USER:-iam};Password=${DB_PASSWORD}"
       Jwt__Issuer: ${JWT_ISSUER:?JWT_ISSUER is required}
       Jwt__SecretKey: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      Jwt__Audience: ${JWT_AUDIENCE:-iam-api}
       Redis__ConnectionString: redis:6379
       # Trust all Docker bridge networks (172.16-31.x.x) so Caddy's X-Forwarded-For reaches the rate limiter
       ForwardedHeaders__TrustedNetworks__0: "172.16.0.0/12"
