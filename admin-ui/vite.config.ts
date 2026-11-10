@@ -5,4 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: '/auth/',
+  build: {
+    // On Windows, Rollup/rolldown rejects the absolute path that Vite resolves
+    // as the HTML emitFile fileName. An explicit relative input avoids that.
+    rollupOptions: { input: 'index.html' },
+  },
 })
