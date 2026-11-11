@@ -470,16 +470,9 @@ public class SecurityAlertService : ISecurityAlertService
                     break;
 
                 case "kill_sessions":
-                    var sessions = await _context.UserSessions
-                        .Where(s => s.UserId == userId && !s.IsRevoked)
-                        .ToListAsync(ct);
-                    foreach (var session in sessions)
-                    {
-                        session.IsRevoked = true;
-                        session.RevokedAt = DateTime.UtcNow;
-                        session.RevokedReason = "security_alert";
-                    }
-                    _logger.LogWarning("Auto-response: {Count} sessions killed for user {UserId}", sessions.Count, userId);
+                    // Task 5568: sessions are refresh tokens; revoking them also ends the IAM.Session cookie and access tokens.
+                    var killed = await _context.RevokeRefreshTokensAsync(userId, ct);
+                    _logger.LogWarning("Auto-response: {Count} sessions killed for user {UserId}", killed, userId);
                     break;
 
                 default:

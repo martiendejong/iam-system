@@ -90,8 +90,8 @@ public class PasskeySocialTwoFactorLoginTests
 
         public async Task<AuthResult> CallbackAsync(string state = "state-1")
         {
-            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state);
-            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state);
+            await Service.GetAuthorizationUrlAsync(Provider.Id, RedirectUri, state, "browser-secret");
+            return await Service.HandleCallbackAsync(Provider.Id, "auth-code", state, "browser-secret");
         }
     }
 

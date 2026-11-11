@@ -1,5 +1,7 @@
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -71,6 +73,40 @@ public class AccessTokenSessionValidator
         }
 
         return !(row.IsLockedOut && row.LockoutEnd > DateTime.UtcNow);
+    }
+
+    /// <summary>
+    /// Task 5568: hook for the IAM.Session cookie. The cookie carries the refresh_token_id of the sign-in that created
+    /// it; once that refresh token is revoked (revoke sessions, logout, deactivation, replay) the cookie is rejected and
+    /// removed. A cookie without the claim predates this binding and is rejected too (the user signs in again).
+    /// Runs only for requests that actually present the cookie, and shares the short verdict cache.
+    /// </summary>
+    public static async Task OnValidateCookiePrincipalAsync(CookieValidatePrincipalContext context)
+    {
+        var claim = context.Principal?.FindFirst(RefreshTokenIdClaim)?.Value;
+        var active = false;
+        if (Guid.TryParse(claim, out var refreshTokenId))
+        {
+            var validator = context.HttpContext.RequestServices.GetRequiredService<AccessTokenSessionValidator>();
+            try
+            {
+                active = await validator.IsSessionActiveAsync(refreshTokenId, context.HttpContext.RequestAborted);
+            }
+            catch (OperationCanceledException) when (context.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                validator._logger.LogError(ex, "Session check for IAM.Session cookie (refresh token {RefreshTokenId}) failed; rejecting", refreshTokenId);
+            }
+        }
+
+        if (!active)
+        {
+            context.RejectPrincipal();
+            await context.HttpContext.SignOutAsync(context.Scheme.Name);
+        }
     }
 
     /// <summary>Hook for <c>JwtBearerEvents.OnTokenValidated</c>.</summary>

@@ -101,6 +101,37 @@ public static class TenantManagementAuthority
         return visible;
     }
 
+    /// <summary>
+    /// The tenants whose free-form Settings and Metadata the user may read (task 5575): the tenants where they hold
+    /// an active BuildingOwner/BuildingManager row plus everything below them - the same reach as
+    /// <see cref="ResolveWithAncestorsAsync"/> uses for tenant updates. A plain member gets none.
+    /// SuperAdmin is not expanded here; callers treat a platform admin as "everything".
+    /// </summary>
+    public static async Task<HashSet<Guid>> GetSettingsReadableTenantIdsAsync(IAMDbContext context, Guid userId, CancellationToken ct)
+    {
+        var managed = new HashSet<Guid>(await GetManagedTenantIdsAsync(context, userId, ct));
+        if (managed.Count == 0)
+            return managed;
+
+        var edges = await context.Tenants.AsNoTracking()
+            .Where(t => t.ParentTenantId != null)
+            .Select(t => new { t.Id, Parent = t.ParentTenantId!.Value })
+            .ToListAsync(ct);
+
+        var added = true;
+        while (added)
+        {
+            added = false;
+            foreach (var edge in edges)
+            {
+                if (managed.Contains(edge.Parent) && managed.Add(edge.Id))
+                    added = true;
+            }
+        }
+
+        return managed;
+    }
+
     /// <summary>True when the user manages at least one tenant (or is a SuperAdmin) - the coarse gate for id-only routes.</summary>
     public static async Task<bool> ManagesAnyTenantAsync(IAMDbContext context, Guid userId, bool isSuperAdmin, CancellationToken ct)
     {

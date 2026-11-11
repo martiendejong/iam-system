@@ -3,6 +3,8 @@ using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using IAM.Core.Configuration;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -16,12 +18,15 @@ public class PolicyTestingService : IPolicyTestingService
     private readonly IAMDbContext _context;
     private readonly IPolicyInheritanceEngine _policyEngine;
     private readonly ILogger<PolicyTestingService> _logger;
+    private readonly PolicyTestingOptions _options;
 
     public PolicyTestingService(
         IAMDbContext context,
         IPolicyInheritanceEngine policyEngine,
-        ILogger<PolicyTestingService> logger)
+        ILogger<PolicyTestingService> logger,
+        IOptions<PolicyTestingOptions>? options = null)
     {
+        _options = options?.Value ?? new PolicyTestingOptions();
         _context = context;
         _policyEngine = policyEngine;
         _logger = logger;
@@ -70,6 +75,8 @@ public class PolicyTestingService : IPolicyTestingService
 
         return test;
     }
+
+    internal const string GenericScenarioError = "Scenario could not be evaluated. See the server log for details.";
 
     public async Task<PolicyTest> ExecuteTestAsync(
         Guid testId,
@@ -147,8 +154,9 @@ public class PolicyTestingService : IPolicyTestingService
                     Expected = expected,
                     Actual = "error",
                     Passed = false,
-                    Reason = $"Test execution failed: {ex.Message}",
-                    ErrorMessage = ex.ToString()
+                    // Task 5486: nothing of the exception reaches the caller; the detail goes to the log below.
+                    Reason = GenericScenarioError,
+                    ErrorMessage = GenericScenarioError
                 });
 
                 _logger.LogError(ex, "Policy test scenario {Index} failed for test {TestId}", i, testId);
@@ -196,7 +204,20 @@ public class PolicyTestingService : IPolicyTestingService
     {
         var tests = await _context.PolicyTests
             .Where(t => t.PolicyId == policyId && t.IsActive)
+            .OrderBy(t => t.CreatedAt)
+            .ThenBy(t => t.Id)
+            .Take(Math.Max(1, _options.MaxTestsPerRun) + 1)
             .ToListAsync(cancellationToken);
+
+        // Task 5486: one run executes at most MaxTestsPerRun tests (oldest first); the rest wait for the next run.
+        var cap = Math.Max(1, _options.MaxTestsPerRun);
+        if (tests.Count > cap)
+        {
+            _logger.LogWarning(
+                "Policy {PolicyId} has more than {Cap} active tests; this run executes the first {Cap} only",
+                policyId, cap, cap);
+            tests = tests.Take(cap).ToList();
+        }
 
         foreach (var test in tests)
         {
@@ -263,12 +284,20 @@ public class PolicyTestingService : IPolicyTestingService
         DateTime? since = null,
         int skip = 0,
         int take = 100,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<Guid>? tenantIds = null)
     {
         var query = _context.PolicyTests
             .Include(t => t.Policy)
             .Include(t => t.TestResults)
             .AsQueryable();
+
+        // Task 5486: null = every tenant (platform admin); otherwise only tests of those tenants.
+        if (tenantIds != null)
+        {
+            var allowed = tenantIds.ToList();
+            query = query.Where(t => allowed.Contains(t.TenantId));
+        }
 
         if (policyId.HasValue)
             query = query.Where(t => t.PolicyId == policyId.Value);
@@ -287,6 +316,23 @@ public class PolicyTestingService : IPolicyTestingService
             .Skip(skip)
             .Take(Math.Min(take, 1000))
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<PolicyTest?> GetTestAsync(Guid testId, CancellationToken cancellationToken = default)
+    {
+        return await _context.PolicyTests
+            .Include(t => t.Policy)
+            .Include(t => t.TestResults)
+            .FirstOrDefaultAsync(t => t.Id == testId, cancellationToken);
+    }
+
+    public async Task<Guid?> GetPolicyTenantIdAsync(Guid policyId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Policies
+            .AsNoTracking()
+            .Where(p => p.Id == policyId)
+            .Select(p => (Guid?)p.TenantId)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<PolicyTestComparison> CompareVersionsAsync(

@@ -238,8 +238,8 @@ public class IdentityProviderDefaultRoleGuardTests
         context.IdentityProviders.Add(provider);
         await context.SaveChangesAsync();
 
-        await service.GetAuthorizationUrlAsync(provider.Id, "https://app.example.com/callback", "state-4697");
-        var result = await service.HandleCallbackAsync(provider.Id, "code", "state-4697");
+        await service.GetAuthorizationUrlAsync(provider.Id, "https://app.example.com/callback", "state-4697", "browser-secret");
+        var result = await service.HandleCallbackAsync(provider.Id, "code", "state-4697", "browser-secret");
         return (result, context);
     }
 

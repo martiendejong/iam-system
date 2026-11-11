@@ -36,3 +36,8 @@ export function isSafeImageUrl(url: string | null | undefined): url is string {
     return false;
   }
 }
+
+/** A #rgb or #rrggbb colour. Anything else is replaced by the fallback before it is placed in a preview document. */
+export function safeHexColor(value: string | null | undefined, fallback = '#4F46E5'): string {
+  return value && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value) ? value : fallback;
+}

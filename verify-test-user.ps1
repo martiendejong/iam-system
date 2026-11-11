@@ -1,5 +1,6 @@
 # Quick script to verify the test user in database
-$connectionString = "Host=localhost;Port=5432;Database=iamdb;Username=iamuser;Password=iampassword"
+if (-not $env:IAM_POSTGRES_PASSWORD) { Write-Host "Set IAM_POSTGRES_PASSWORD first (see .env.example)" -ForegroundColor Red; exit 1 }
+$connectionString = "Host=localhost;Port=5432;Database=iamdb;Username=iamuser;Password=$($env:IAM_POSTGRES_PASSWORD)"
 
 Add-Type -Path "C:\Program Files\PostgreSQL\16\Npgsql.dll" -ErrorAction SilentlyContinue
 

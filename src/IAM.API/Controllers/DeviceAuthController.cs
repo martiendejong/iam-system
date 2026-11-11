@@ -24,13 +24,16 @@ public class DeviceAuthController : ControllerBase
 
     /// <summary>
     /// Authenticate device using X.509 certificate (capable devices).
-    /// The certificate PEM is typically extracted from mTLS by the edge gateway.
+    /// The certificate PEM is extracted from mTLS by the edge gateway, which proves itself with the shared key in the
+    /// <c>X-Device-Gateway-Key</c> header (configured as <c>DeviceAuth:GatewayKeys</c>). A certificate presented by
+    /// anyone else gets no token: the PEM is public, so it is not proof that the sender holds the private key.
     /// </summary>
     [HttpPost("certificate")]
     public async Task<IActionResult> AuthenticateWithCertificate([FromBody] CertificateAuthRequest request)
     {
+        var gatewayKey = Request.Headers[IAM.Infrastructure.Services.DeviceGatewayVerifier.HeaderName].FirstOrDefault();
         var result = await _deviceAuthService.AuthenticateWithCertificateAsync(
-            request.CertificatePem, request.DeviceId);
+            request.CertificatePem, request.DeviceId, gatewayKey);
 
         if (!result.Success)
         {
@@ -53,7 +56,8 @@ public class DeviceAuthController : ControllerBase
 
     /// <summary>
     /// Authenticate device using HMAC-SHA256 (constrained devices).
-    /// Password format: "timestamp:nonce:hmac"
+    /// Password format: "timestamp:nonce:hmac". Every nonce works once per device, and a device with repeated
+    /// failures is locked for a while. Every failure gets the same 401 answer.
     /// </summary>
     [HttpPost("hmac")]
     public async Task<IActionResult> AuthenticateWithHmac([FromBody] HmacAuthRequest request)

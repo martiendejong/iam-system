@@ -17,7 +17,7 @@ public class MqttAuthServiceCertificateTests
     {
         public Task<DeviceAuthResult> AuthenticateWithHmacAsync(string deviceId, string hmacPassword) =>
             Task.FromResult(new DeviceAuthResult { Success = hmacPassword == "good" });
-        public Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId) => throw new NotSupportedException();
+        public Task<DeviceAuthResult> AuthenticateWithCertificateAsync(string certificatePem, string deviceId, string? gatewayKey) => throw new NotSupportedException();
         public Task<DeviceAuthorizationResult> AuthorizeAsync(string deviceId, string resource, string action) => throw new NotSupportedException();
         public Task<DeviceAuthorizationResult> AuthorizeMqttAsync(string deviceId, string topic, string action) => throw new NotSupportedException();
         public Task<DeviceClaimsResult> GetDeviceClaimsAsync(string deviceId) => throw new NotSupportedException();

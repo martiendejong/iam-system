@@ -236,7 +236,7 @@ public class RefreshTokenRoleRecheckTests
     }
 
     [Fact]
-    public async Task RefreshedAccessToken_RebuildsTenantIdFromDatabase_NotFromTheRefreshToken()
+    public async Task RefreshedAccessToken_WhenTenantRoleBecomesScopeless_GetsInvalidGrant()
     {
         using var factory = new RoleRecheckFactory();
         await SeedAsync(factory);
@@ -259,10 +259,10 @@ public class RefreshTokenRoleRecheckTests
 
         var refreshed = await RefreshAsync(NewClient(factory), tokens.GetProperty("refresh_token").GetString()!);
         var body = await refreshed.Content.ReadAsStringAsync();
-        Assert.True(refreshed.StatusCode == HttpStatusCode.OK, $"refresh failed: {refreshed.StatusCode} {body}");
-
-        var payload = DecodePayload(JsonSerializer.Deserialize<JsonElement>(body).GetProperty("access_token").GetString()!);
-        Assert.False(payload.TryGetProperty("tenant_id", out var stale),
-            $"tenant_id was copied from the refresh token instead of rebuilt from the database: {stale}");
+        // Task 5627: refresh pins to stored tenant. Stored tenant has no active roles after this
+        // change, so the session ends and the user must re-authenticate.
+        Assert.True(refreshed.StatusCode == HttpStatusCode.BadRequest || refreshed.StatusCode == HttpStatusCode.Forbidden,
+            $"expected invalid_grant after stored tenant role removed, got: {refreshed.StatusCode} {body}");
+        Assert.Contains(Errors.InvalidGrant, body);
     }
 }

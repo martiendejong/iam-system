@@ -58,7 +58,7 @@ public class RefreshTokenSessionEndingTests
         return new AuthService(
             context, CreateConfiguration(), emailService, riskAssessmentService, otpService,
             new ClaimsMappingService(context), logger ?? NullLogger<AuthService>.Instance,
-            AuthServiceTestFactory.CreateLoginThrottle(), AuthServiceTestFactory.CreateChallengeService());
+            AuthServiceTestFactory.CreateLoginThrottle(), new SignInNetworkGate(context, NullLogger<SignInNetworkGate>.Instance), AuthServiceTestFactory.CreateChallengeService());
     }
 
     private static async Task<User> AddUserAsync(IAMDbContext context, string name, bool isActive = true, string? passwordHash = null)
@@ -345,6 +345,25 @@ public class RefreshTokenSessionEndingTests
         await alerts.FireAlertAsync(rule.Id, "Brute force", $"{{\"userId\":\"{user.Id}\"}}");
 
         Assert.False((await context.Users.FindAsync(user.Id))!.IsActive);
+        Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
+        Assert.Equal(1, await ActiveTokenCountAsync(context, bystander.Id));
+    }
+
+    [Fact]
+    public async Task SecurityAlert_KillSessionsAutoResponse_RevokesRefreshTokensOfThatUserOnly()
+    {
+        var context = CreateContext();
+        var alerts = CreateSecurityAlertService(context);
+        var user = await AddUserAsync(context, "sessions-killed");
+        var bystander = await AddUserAsync(context, "sessions-kept");
+        await AddTokenAsync(context, user.Id);
+        await AddTokenAsync(context, user.Id);
+        await AddTokenAsync(context, bystander.Id);
+        var rule = await AddAlertRuleAsync(context, "kill_sessions");
+
+        await alerts.FireAlertAsync(rule.Id, "Suspicious", $"{{\"userId\":\"{user.Id}\"}}");
+
+        Assert.True((await context.Users.FindAsync(user.Id))!.IsActive);
         Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
         Assert.Equal(1, await ActiveTokenCountAsync(context, bystander.Id));
     }

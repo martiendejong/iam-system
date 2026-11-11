@@ -249,7 +249,7 @@ public class PromptNoneTests : IClassFixture<PromptNoneTests.Factory>
     }
 
     [Fact]
-    public async Task WithoutPromptNone_InactiveUser_StillGetsTheBadRequest()
+    public async Task WithoutPromptNone_InactiveUser_IsSentBackToLogin_NeverIssuedACode()
     {
         var user = await SeedAsync();
         var client = NewClient();
@@ -258,7 +258,10 @@ public class PromptNoneTests : IClassFixture<PromptNoneTests.Factory>
 
         var response = await client.GetAsync(AuthorizeUrl(user.ClientId, promptNone: false));
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        // Task 5568: the IAM.Session cookie is bound to the sign-in's refresh token, and that check also refuses a
+        // deactivated user, so the browser is sent to the login page before the authorize action runs.
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.StartsWith("/auth/login?returnUrl=", response.Headers.Location!.ToString());
     }
 
     [Fact]

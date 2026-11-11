@@ -37,11 +37,19 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
     options.KnownProxies.Add(IPAddress.Loopback);      // 127.0.0.1
     options.KnownProxies.Add(IPAddress.IPv6Loopback);  // ::1
-    // If there are known external proxy IPs, add them here from config:
+    // Individual proxy IPs (e.g. a specific Windows ARR host)
     var proxyIps = builder.Configuration.GetSection("ForwardedHeaders:TrustedProxies").Get<string[]>() ?? [];
     foreach (var ip in proxyIps)
         if (IPAddress.TryParse(ip, out var addr))
             options.KnownProxies.Add(addr);
+    // CIDR networks (e.g. "172.16.0.0/12" covers all Docker bridge networks)
+    var proxyNetworks = builder.Configuration.GetSection("ForwardedHeaders:TrustedNetworks").Get<string[]>() ?? [];
+    foreach (var cidr in proxyNetworks)
+    {
+        var slash = cidr.IndexOf('/');
+        if (slash > 0 && IPAddress.TryParse(cidr[..slash], out var netAddr) && int.TryParse(cidr[(slash + 1)..], out var prefix))
+            options.KnownIPNetworks.Add(new System.Net.IPNetwork(netAddr, prefix));
+    }
 });
 
 // Add services to the container
@@ -68,11 +76,21 @@ builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IAM.API.Authorization.IAuditAccessResolver, IAM.API.Authorization.AuditAccessResolver>();
 builder.Services.AddScoped<IAM.API.Authorization.ITelemetryAccessAuthorizer, IAM.API.Authorization.TelemetryAccessAuthorizer>();
 builder.Services.AddScoped<IPolicyTestingService, PolicyTestingService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IAM.Core.Services.IEmergencyOverrideCallerAccess, IAM.API.Authorization.EmergencyOverrideCallerAccess>();
+builder.Services.Configure<IAM.Core.Configuration.PolicyTestingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.PolicyTestingOptions.SectionName));
 builder.Services.AddScoped<IEmergencyOverrideService, EmergencyOverrideService>();
+builder.Services.AddSingleton<IPasskeyChallengeStore, PasskeyChallengeStore>();
 builder.Services.AddScoped<IPasskeyService, PasskeyService>();
 builder.Services.AddScoped<IDeviceService, DeviceService>();
 builder.Services.AddScoped<IDeviceAuthenticationService, DeviceAuthenticationService>();
+// Task 5159: per-device lockout and one-time nonces for device login (singleton: the state lives in IMemoryCache), and the
+// trusted-gateway check for certificate login.
+builder.Services.AddSingleton<IDeviceLoginGuard, DeviceLoginGuard>();
+builder.Services.AddSingleton<IDeviceGatewayVerifier, DeviceGatewayVerifier>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Email"));
+builder.Services.PostConfigure<EmailSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
+builder.Services.Configure<IAM.Core.Configuration.OnboardingOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.OnboardingOptions.SectionName));
 builder.Services.Configure<IAM.Core.Configuration.AccessMatrixOptions>(builder.Configuration.GetSection(IAM.Core.Configuration.AccessMatrixOptions.SectionName));
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<ITotpService, TotpService>();
@@ -105,8 +123,10 @@ builder.Services.AddScoped<IUnifiedAuthorizationService, UnifiedAuthorizationSer
 builder.Services.AddScoped<ITelemetryStorageService, TelemetryStorageService>();
 builder.Services.AddScoped<ISocialAuthService, SocialAuthService>();
 builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"));
+builder.Services.PostConfigure<SmsSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
+builder.Services.AddSingleton<IRequestThrottle, InMemoryRequestThrottle>();
 builder.Services.AddScoped<IOtpService, OtpService>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
@@ -119,12 +139,14 @@ builder.Services.AddScoped<IScimService, ScimService>();
 builder.Services.AddScoped<ITenantBrandingService, TenantBrandingService>();
 builder.Services.AddScoped<IClaimsMappingService, ClaimsMappingService>();
 builder.Services.AddScoped<INetworkPolicyService, NetworkPolicyService>();
+builder.Services.AddScoped<ISignInNetworkGate, SignInNetworkGate>(); // task 5570: tenant IP allowlist at sign-in and token issuance
 builder.Services.AddScoped<IRiskAssessmentService, RiskAssessmentService>();
 builder.Services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
 builder.Services.AddScoped<IBulkOperationService, BulkOperationService>();
 builder.Services.AddScoped<ISecretsVaultService, SecretsVaultService>();
 builder.Services.AddScoped<IAM.API.Authorization.ISecretsAccessResolver, IAM.API.Authorization.SecretsAccessResolver>();
 builder.Services.AddScoped<ISecurityAlertService, SecurityAlertService>();
+builder.Services.AddScoped<IAccountGuessingGuard, AccountGuessingGuard>();
 builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
 builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();
@@ -193,6 +215,7 @@ builder.Services.AddHostedService<CertificateExpiryMonitorWorker>();
 builder.Services.AddHostedService<DeviceHeartbeatMonitorWorker>();
 builder.Services.AddHostedService<AuditLogCleanupWorker>();
 builder.Services.AddHostedService<SessionCleanupWorker>();
+builder.Services.AddHostedService<DataExportCleanupWorker>();
 builder.Services.AddHostedService<DirectorySyncWorker>();
 builder.Services.AddHostedService<AccessRequestExpiryWorker>();
 builder.Services.AddHostedService<PamDeescalationWorker>();
@@ -380,6 +403,8 @@ builder.Services.AddAuthentication(options =>
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
+    // Task 5568: the cookie dies with the sign-in (refresh token) it is bound to. Only requests that carry the cookie pay for it.
+    options.Events.OnValidatePrincipal = IAM.API.Auth.AccessTokenSessionValidator.OnValidateCookiePrincipalAsync;
 });
 
 // SuperAdmin inherits all admin roles (so role-guarded endpoints accept SuperAdmin)
@@ -447,6 +472,12 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Task 5576: fail closed when e-mail sending is disabled outside Development.
+MessagingStartupCheck.Validate(
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<EmailSettings>>().Value,
+    app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmsSettings>>().Value,
+    app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("IAM.Startup"));
+
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
@@ -454,6 +485,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseForwardedHeaders(); // Must be first — rewrites RemoteIpAddress from X-Forwarded-For
+app.UseMiddleware<IAM.API.Middleware.SecurityHeadersMiddleware>(); // security headers (task 5579)
 app.UseHttpsRedirection();
 app.UseCors();
 

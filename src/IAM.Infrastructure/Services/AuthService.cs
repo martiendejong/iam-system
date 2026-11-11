@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using IAM.Core;
 using IAM.Core.Entities;
+using IAM.Core.Security;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +39,8 @@ public class AuthService : IAuthService
     private readonly IClaimsMappingService _claimsMappingService;
     private readonly ILogger<AuthService> _logger;
     private readonly ILoginThrottle _loginThrottle;
+    private readonly ISignInNetworkGate _networkGate;
+    private readonly IAccountGuessingGuard? _accountGuard;
     private readonly ITwoFactorChallengeService _twoFactorChallenge;
 
     public AuthService(
@@ -49,7 +52,9 @@ public class AuthService : IAuthService
         IClaimsMappingService claimsMappingService,
         ILogger<AuthService> logger,
         ILoginThrottle loginThrottle,
-        ITwoFactorChallengeService twoFactorChallenge)
+        ISignInNetworkGate networkGate,
+        ITwoFactorChallengeService twoFactorChallenge,
+        IAccountGuessingGuard? accountGuard = null)
     {
         _context = context;
         _configuration = configuration;
@@ -59,6 +64,8 @@ public class AuthService : IAuthService
         _claimsMappingService = claimsMappingService;
         _logger = logger;
         _loginThrottle = loginThrottle;
+        _networkGate = networkGate;
+        _accountGuard = accountGuard;
         _twoFactorChallenge = twoFactorChallenge;
     }
 
@@ -114,12 +121,12 @@ public class AuthService : IAuthService
             };
         }
 
-        if (password.Length < 8)
+        if (!PasswordPolicy.IsValid(password))
         {
             return new AuthResult
             {
                 Success = false,
-                Error = "Password must be at least 8 characters"
+                Error = PasswordPolicy.TooShortMessage
             };
         }
 
@@ -192,6 +199,21 @@ public class AuthService : IAuthService
 
         if (user == null || !passwordValid)
         {
+            // Task 5852: count the failure against the typed e-mail across ALL sources. Identical work
+            // for an unknown and a known e-mail; the response below does not depend on it.
+            if (_accountGuard != null)
+            {
+                try
+                {
+                    await _accountGuard.RecordFailureAsync(email, ipAddress, user?.Id, user != null);
+                }
+                catch (Exception ex)
+                {
+                    // The signal is best effort; never turn a wrong password into a 500.
+                    _logger.LogError(ex, "Recording the account failure signal failed");
+                }
+            }
+
             return new AuthResult
             {
                 Success = false,
@@ -200,6 +222,13 @@ public class AuthService : IAuthService
         }
 
         _loginThrottle.RecordSuccess(email, ipAddress);
+
+        // Task 5570: tenant IP allowlist. Only reached with the right password, so it says nothing
+        // about unknown accounts, and it runs before any second-factor code is sent.
+        if (user.IsActive && !await _networkGate.IsAllowedAsync(user.Id, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
 
         // The persistent lock now only comes from the 2FA step (task 4523). It is reported only to a
         // caller who has proven the password, and without a timestamp.
@@ -252,23 +281,10 @@ public class AuthService : IAuthService
             };
         }
 
-        user.LastLoginAt = DateTime.UtcNow;
-
-        // Adaptive MFA: assess login risk before issuing any tokens
-        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
-            user.Id, ipAddress ?? "unknown", userAgent);
-
-        if (riskScore.Action == RiskAction.Block)
-        {
-            await _context.SaveChangesAsync();
-            return new AuthResult
-            {
-                Success = false,
-                Error = "Login blocked due to unusual account activity. Please contact support."
-            };
-        }
-
-        if (riskScore.Action == RiskAction.StepUp)
+        // Task 5852: many sources have been guessing at this account, so a correct password alone is not
+        // enough. Reuse the e-mailed step-up code (the real owner just types it; nothing is locked). The
+        // code mail is capped per address per hour by the OTP service.
+        if (_accountGuard != null && await _accountGuard.IsStepUpRequiredAsync(email))
         {
             await _context.SaveChangesAsync();
             await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
@@ -279,6 +295,15 @@ public class AuthService : IAuthService
                 RequiresStepUp = true,
                 User = user
             };
+        }
+
+        user.LastLoginAt = DateTime.UtcNow;
+
+        // Adaptive MFA: assess login risk before issuing any tokens
+        var riskResult = await ApplyRiskGateAsync(user, ipAddress, userAgent);
+        if (riskResult != null)
+        {
+            return riskResult;
         }
 
         // Resolve this organization's configured token lifetime (falls back to today's
@@ -320,6 +345,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            RefreshTokenId = refreshTokenId,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
@@ -382,6 +408,13 @@ public class AuthService : IAuthService
         if (!storedToken.User.IsActive)
         {
             return InvalidRefreshToken();
+        }
+
+        // Task 5570: an existing session cannot renew from a blocked address. Checked before the
+        // token is rotated, so the refresh cookie stays valid for a listed address.
+        if (!await _networkGate.IsAllowedAsync(storedToken.UserId, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
         }
 
         // ANOMALY DETECTION: Check if device fingerprint changed
@@ -448,6 +481,7 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = newRefreshToken,  // Return NEW refresh token (single-use rotation)
+            RefreshTokenId = newRefreshTokenId,
             User = storedToken.User,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
@@ -501,6 +535,18 @@ public class AuthService : IAuthService
             return true;
         }
 
+        // A still-valid reset token means a mail went out within the last hour (the token lives one
+        // hour). Send nothing and leave the token untouched, so repeat requests can neither
+        // mail-bomb the address nor invalidate the link the user is about to click (task 5633).
+        // The caller still gets the same answer, so account existence stays hidden.
+        if (user.PasswordResetToken != null
+            && user.PasswordResetTokenExpiry.HasValue
+            && user.PasswordResetTokenExpiry.Value > DateTime.UtcNow)
+        {
+            _logger.LogInformation("Password reset requested for user {UserId} while a reset token is still valid; no new mail sent", user.Id);
+            return true;
+        }
+
         var rawResetToken = GenerateToken();
         user.PasswordResetToken = HashVerificationToken(rawResetToken);
         user.PasswordResetTokenExpiry = DateTime.UtcNow.AddHours(1);
@@ -549,6 +595,13 @@ public class AuthService : IAuthService
             };
         }
 
+        // Task 5570: every method that ends in token issuance (OTP, magic link, passkey, social,
+        // 2FA and step-up completion) passes through here.
+        if (!await _networkGate.IsAllowedAsync(user.Id, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
+
         // Update last login
         user.LastLoginAt = DateTime.UtcNow;
         LoginLockout.Reset(user);
@@ -590,14 +643,56 @@ public class AuthService : IAuthService
             Success = true,
             AccessToken = accessToken,
             RefreshToken = refreshToken,
+            RefreshTokenId = refreshTokenId,
             User = user,
             AccessTokenLifetimeMinutes = accessMinutes,
             RefreshTokenLifetimeDays = refreshDays
         };
     }
 
+    /// <summary>
+    /// Adaptive-MFA gate shared by password and passwordless login. Returns null when the login may
+    /// proceed (Allow), a failed result for Block, or a RequiresStepUp result (code e-mailed) for StepUp.
+    /// </summary>
+    private async Task<AuthResult?> ApplyRiskGateAsync(User user, string? ipAddress, string? userAgent)
+    {
+        var riskScore = await _riskAssessmentService.AssessLoginRiskAsync(
+            user.Id, ipAddress ?? "unknown", userAgent);
+
+        if (riskScore.Action == RiskAction.Block)
+        {
+            await _context.SaveChangesAsync();
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Login blocked due to unusual account activity. Please contact support."
+            };
+        }
+
+        if (riskScore.Action == RiskAction.StepUp)
+        {
+            await _context.SaveChangesAsync();
+            await _otpService.SendEmailOtpAsync(user.Email, OtpPurpose.MfaVerification);
+
+            return new AuthResult
+            {
+                Success = true,
+                RequiresStepUp = true,
+                User = user
+            };
+        }
+
+        return null;
+    }
+
     public async Task<AuthResult> CompletePasswordlessLoginAsync(User user, string? ipAddress = null, string? userAgent = null, string? returnUrl = null, bool rememberMe = false)
     {
+        // Task 5570: refuse before a second-factor code is e-mailed to a blocked address.
+        if (user.IsActive && !await _networkGate.IsAllowedAsync(user.Id, ipAddress, userAgent))
+        {
+            return NetworkBlockedResult();
+        }
+
         if (user.TwoFactorEnabled && user.TwoFactorMethod == TwoFactorMethod.Email)
         {
             await _otpService.SendLoginTwoFactorCodeAsync(user, returnUrl);
@@ -609,6 +704,22 @@ public class AuthService : IAuthService
                 TwoFactorChallengeToken = _twoFactorChallenge.Issue(user.Id),
                 User = user
             };
+        }
+
+        if (!user.IsActive)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Account is inactive"
+            };
+        }
+
+        // Adaptive MFA: same Allow / Step-up / Block outcomes as password login.
+        var riskResult = await ApplyRiskGateAsync(user, ipAddress, userAgent);
+        if (riskResult != null)
+        {
+            return riskResult;
         }
 
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
@@ -642,6 +753,26 @@ public class AuthService : IAuthService
         }
 
         return await LoginBypassPasswordAsync(user, ipAddress, userAgent, rememberMe);
+    }
+
+    public async Task<AuthResult> VerifyStepUpByUserIdAsync(Guid userId, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
+    {
+        var user = await _context.Users
+            .Include(u => u.UserRoles)
+                .ThenInclude(ur => ur.Role)
+            .FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (user == null)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Error = "Invalid or expired verification code"
+            };
+        }
+
+        // Ends in LoginBypassPasswordAsync (not the gate), so a verified code is never scored again.
+        return await VerifyStepUpAsync(user.Email, code, ipAddress, userAgent, rememberMe);
     }
 
     public async Task<AuthResult> VerifyLoginTwoFactorAsync(Guid userId, string? challengeToken, string code, string? ipAddress = null, string? userAgent = null, bool rememberMe = false)
@@ -738,6 +869,12 @@ public class AuthService : IAuthService
 
     public async Task<bool> ResetPasswordAsync(string token, string newPassword)
     {
+        // Refused before the token lookup, so a too-short password never consumes the reset token.
+        if (string.IsNullOrEmpty(token) || !PasswordPolicy.IsValid(newPassword))
+        {
+            return false;
+        }
+
         var tokenHash = HashVerificationToken(token);
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.PasswordResetToken == tokenHash
@@ -804,6 +941,13 @@ public class AuthService : IAuthService
 
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
+
+    private static AuthResult NetworkBlockedResult() => new()
+    {
+        Success = false,
+        NetworkBlocked = true,
+        Error = ISignInNetworkGate.RefusalMessage
+    };
 
     private string GenerateRefreshToken()
     {

@@ -117,11 +117,6 @@ public class PasskeyController : ControllerBase
 
             return Ok(options);
         }
-        catch (InvalidOperationException ex)
-        {
-            _logger.LogWarning(ex, "Authentication begin failed for user {Username}", request.Username);
-            return NotFound(new { error = ex.Message });
-        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error beginning passkey authentication");
@@ -169,7 +164,22 @@ public class PasskeyController : ControllerBase
 
             if (!loginResult.Success)
             {
+                if (loginResult.NetworkBlocked)
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = loginResult.Error });
+                }
+
                 return Unauthorized(new { error = loginResult.Error });
+            }
+
+            if (loginResult.RequiresStepUp)
+            {
+                return Ok(new
+                {
+                    requiresStepUp = true,
+                    userId = loginResult.User!.Id,
+                    message = "Additional verification required. Check your email for a code."
+                });
             }
 
             if (loginResult.RequiresTwoFactor)

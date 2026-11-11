@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
@@ -7,6 +7,8 @@ import type { PublicTenantBranding } from '../../services/brandingApi';
 import { isSafeCustomCss, isSafeImageUrl } from '../../utils/brandingSafety';
 import type { PublicIdentityProvider } from '../../types';
 import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
+
+const SOCIAL_FLOW_KEY = 'iam.social.flow';
 
 type LoginMethod = 'password' | 'magic-link' | 'sms';
 type LoginView = 'login' | 'forgot';
@@ -29,6 +31,8 @@ export default function LoginPage() {
   const [branding, setBranding] = useState<PublicTenantBranding | null>(null);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [stepUpCode, setStepUpCode] = useState('');
+  // Set when the step-up came from a passwordless sign-in (SMS code, social), where the e-mail is not known.
+  const [stepUpUserId, setStepUpUserId] = useState('');
   const [twoFactorPending, setTwoFactorPending] = useState(false);
   const [twoFactorUserId, setTwoFactorUserId] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
@@ -72,12 +76,64 @@ export default function LoginPage() {
     try {
       setError('');
       const redirectUri = `${window.location.origin}/auth/login`;
-      const { authorizationUrl } = await api.getSocialAuthUrl(provider.id, redirectUri);
+      const { authorizationUrl, state, browserSecret } = await api.getSocialAuthUrl(provider.id, redirectUri);
+      // Task 5493: the secret stays in this browser (per tab) and is sent back with the code on return.
+      sessionStorage.setItem(SOCIAL_FLOW_KEY, JSON.stringify({ providerId: provider.id, state, browserSecret }));
       window.location.href = authorizationUrl;
     } catch (err: any) {
       setError(err.response?.data?.error || `Failed to initiate ${provider.displayName} login`);
     }
   };
+
+  // Return leg of a social sign-in: the provider sent the browser back with ?code=...&state=...
+  const socialReturnHandled = useRef(false);
+  useEffect(() => {
+    const code = searchParams.get('code');
+    const state = searchParams.get('state');
+    if (!code || !state || socialReturnHandled.current) return;
+    socialReturnHandled.current = true;
+
+    const raw = sessionStorage.getItem(SOCIAL_FLOW_KEY);
+    sessionStorage.removeItem(SOCIAL_FLOW_KEY); // single use
+    let flow: { providerId?: string; state?: string; browserSecret?: string } | null = null;
+    try {
+      flow = raw ? JSON.parse(raw) : null;
+    } catch {
+      flow = null;
+    }
+    if (!flow || flow.state !== state || !flow.providerId || !flow.browserSecret) {
+      setError('This sign-in was not started in this browser. Please start again.');
+      return;
+    }
+
+    const { providerId, browserSecret } = flow;
+    (async () => {
+      setLoading(true);
+      try {
+        const response = await api.socialAuthCallback(providerId, code, state, browserSecret);
+        if (response.requiresStepUp && response.userId) {
+          setStepUpUserId(response.userId);
+          setStepUpRequired(true);
+          setMessage(response.message || 'Additional verification required. Check your email for a code.');
+          return;
+        }
+        if (response.requiresTwoFactor && response.userId) {
+          setTwoFactorUserId(response.userId);
+          setTwoFactorPending(true);
+          setMessage(response.message || 'A verification code has been sent to your email.');
+          return;
+        }
+        if (response.user) {
+          setCurrentUser(response.user);
+        }
+        navigateAfterAuth(returnUrl, navigate);
+      } catch (err: any) {
+        setError(err.response?.data?.error || 'Social sign-in failed. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   const getSocialButtonStyle = (type: string) => {
     switch (type) {
@@ -102,6 +158,7 @@ export default function LoginPage() {
     setForgotSent(false);
     setOtpCode('');
     setStepUpRequired(false);
+    setStepUpUserId('');
     setStepUpCode('');
     setTwoFactorPending(false);
     setTwoFactorUserId('');
@@ -163,7 +220,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const response = await api.verifyStepUp(email, stepUpCode, rememberMe);
+      const response = await api.verifyStepUp(email, stepUpCode, rememberMe, stepUpUserId || undefined);
       if (response.user) {
         setCurrentUser(response.user);
       }
@@ -250,6 +307,13 @@ export default function LoginPage() {
     try {
       const client = api.getClient();
       const response = await client.post('/auth/otp/sms/verify', { phoneNumber, code: otpCode });
+      // Adaptive MFA flagged this sign-in: a code was e-mailed and must be entered before tokens are issued.
+      if (response.data.requiresStepUp && response.data.userId) {
+        setStepUpUserId(response.data.userId);
+        setStepUpRequired(true);
+        setMessage(response.data.message || 'Additional verification required. Check your email for a code.');
+        return;
+      }
       // The SMS code only proves phone possession. If the account also has email 2FA
       // enabled, that is a separate factor that still needs to be verified before
       // completing sign-in — mirrors the password + 2FA and magic-link + 2FA flows.
@@ -352,7 +416,7 @@ export default function LoginPage() {
         )}
 
         {/* Adaptive MFA step-up verification */}
-        {loginMethod === 'password' && stepUpRequired && (
+        {stepUpRequired && (
           <form className="mt-4 space-y-6" onSubmit={handleStepUpVerify}>
             <div>
               <label htmlFor="step-up-code" className="block text-sm font-medium text-gray-700">
@@ -373,7 +437,7 @@ export default function LoginPage() {
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-center text-2xl tracking-widest font-mono"
               />
               <p className="mt-1 text-xs text-gray-500">
-                Enter the 6-digit code sent to {email}
+                Enter the 6-digit code sent to {stepUpUserId ? 'your email' : email}
               </p>
             </div>
             <button
@@ -385,7 +449,7 @@ export default function LoginPage() {
             </button>
             <button
               type="button"
-              onClick={() => { setStepUpRequired(false); setStepUpCode(''); setMessage(''); }}
+              onClick={() => { setStepUpRequired(false); setStepUpUserId(''); setStepUpCode(''); setMessage(''); }}
               className="w-full text-sm text-indigo-600 hover:text-indigo-500"
             >
               Back to sign in
@@ -657,7 +721,7 @@ export default function LoginPage() {
         )}
 
         {/* SMS OTP form */}
-        {loginMethod === 'sms' && !twoFactorPending && (
+        {loginMethod === 'sms' && !twoFactorPending && !stepUpRequired && (
           <div className="mt-4 space-y-6">
             {!otpSent ? (
               <form onSubmit={handleSmsOtpRequest} className="space-y-4">

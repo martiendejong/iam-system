@@ -130,8 +130,8 @@ public class UsersController : ControllerBase
         if (string.IsNullOrWhiteSpace(email))
             return BadRequest(new { error = "Email is required" });
 
-        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 8)
-            return BadRequest(new { error = "Password must be at least 8 characters" });
+        if (!IAM.Core.Security.PasswordPolicy.IsValid(request.Password))
+            return BadRequest(new { error = IAM.Core.Security.PasswordPolicy.TooShortMessage });
 
         var emailExists = await _context.Users.AnyAsync(u => u.Email == email);
         if (emailExists)
@@ -498,8 +498,8 @@ public class UsersController : ControllerBase
     [Authorize(Roles = "SuperAdmin")]
     public async Task<IActionResult> ChangeUserPassword(Guid id, [FromBody] AdminChangePasswordRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8)
-            return BadRequest(new { error = "Password must be at least 8 characters" });
+        if (!IAM.Core.Security.PasswordPolicy.IsValid(request.NewPassword))
+            return BadRequest(new { error = IAM.Core.Security.PasswordPolicy.TooShortMessage });
 
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
         if (user == null)

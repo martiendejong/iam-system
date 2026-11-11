@@ -49,13 +49,6 @@ public class PortalChangePasswordTests
         return token;
     }
 
-    private static UserSession AddUserSession(IAMDbContext context, Guid userId)
-    {
-        var session = new UserSession { UserId = userId, SessionToken = Guid.NewGuid().ToString("N"), ExpiresAt = DateTime.UtcNow.AddDays(1) };
-        context.UserSessions.Add(session);
-        return session;
-    }
-
     private static IConfiguration CreateConfiguration() => new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -104,25 +97,6 @@ public class PortalChangePasswordTests
     }
 
     [Fact]
-    public async Task ChangePassword_EndsOtherUserSessions_KeepsTheOneNamedByTheHeader()
-    {
-        await using var context = CreateContext();
-        var user = await AddUserAsync(context);
-        var current = AddUserSession(context, user.Id);
-        var other = AddUserSession(context, user.Id);
-        var otherUsers = AddUserSession(context, Guid.NewGuid());
-        await context.SaveChangesAsync();
-
-        await CreateController(context, user.Id, sessionHeaderId: current.Id)
-            .ChangePassword(new ChangePasswordRequest(Current, Fresh), default);
-
-        var sessions = await context.UserSessions.AsNoTracking().ToDictionaryAsync(s => s.Id);
-        Assert.False(sessions[current.Id].IsRevoked);
-        Assert.True(sessions[other.Id].IsRevoked);
-        Assert.False(sessions[otherUsers.Id].IsRevoked);
-    }
-
-    [Fact]
     public async Task ChangePassword_TheSessionHeaderCannotKeepARefreshTokenAlive()
     {
         // X-Session-Id is a plain request header: naming another refresh token in it must not protect that token.
@@ -167,13 +141,11 @@ public class PortalChangePasswordTests
         await using var context = CreateContext();
         var user = await AddUserAsync(context);
         var token = AddRefreshToken(context, user.Id);
-        var session = AddUserSession(context, user.Id);
         await context.SaveChangesAsync();
 
         await CreateController(context, user.Id, null).ChangePassword(new ChangePasswordRequest(Current, Fresh), default);
 
         Assert.NotNull((await context.RefreshTokens.AsNoTracking().SingleAsync(t => t.Id == token.Id)).RevokedAt);
-        Assert.True((await context.UserSessions.AsNoTracking().SingleAsync(s => s.Id == session.Id)).IsRevoked);
     }
 
     [Fact]

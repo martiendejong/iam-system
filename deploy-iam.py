@@ -38,9 +38,13 @@ REQUIRED_ENV = [
 ]
 
 
+VAULT_API = os.environ.get(
+    "VAULT_API_PATH",
+    r"C:\jengo\projects\jengo-system-private\tools\vault-api.py")
+
+
 def _vault_dev_ssh():
-    spec = importlib.util.spec_from_file_location(
-        "vault_api", r"E:\projects\jengo\jengo-system-private\tools\vault-api.py")
+    spec = importlib.util.spec_from_file_location("vault_api", VAULT_API)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     cred = mod._fetch_credential(6, 50, reason="deploy-iam.py: deploy IAM to dev server")
@@ -89,8 +93,12 @@ def main():
 
     stamp = date.today().strftime("%Y%m%d")
     print("== backup stopped binaries ==")
-    run(ssh, 'powershell -NoProfile -Command "Compress-Archive -Force '
-             f"-Path {REMOTE_DIR}/* -DestinationPath C:/Services/IAM-backup-{stamp}.zip\"",
+    # Exclude *.bak* to avoid archiving leftover plaintext-secret copies (task 5801).
+    run(ssh,
+        'powershell -NoProfile -Command "'
+        f"$items = Get-ChildItem -Path {REMOTE_DIR} -Exclude '*.bak*';"
+        " Compress-Archive -Force"
+        f" -Path $items.FullName -DestinationPath C:/Services/IAM-backup-{stamp}.zip\"",
         timeout=600)
 
     print("== upload ==")
