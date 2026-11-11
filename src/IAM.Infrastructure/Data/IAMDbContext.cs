@@ -53,6 +53,14 @@ public class IAMDbContext : DbContext
     public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
     public DbSet<ApprovalStep> ApprovalSteps => Set<ApprovalStep>();
     public DbSet<ApprovalVote> ApprovalVotes => Set<ApprovalVote>();
+    public DbSet<AuthorityDomain> AuthorityDomains => Set<AuthorityDomain>();
+    public DbSet<AuthorityPolicy> AuthorityPolicies => Set<AuthorityPolicy>();
+    public DbSet<CommandChain> CommandChains => Set<CommandChain>();
+    public DbSet<CommandStage> CommandStages => Set<CommandStage>();
+    public DbSet<CommandStageMember> CommandStageMembers => Set<CommandStageMember>();
+    public DbSet<AuthorityDelegation> AuthorityDelegations => Set<AuthorityDelegation>();
+    public DbSet<AuthorityAvailabilityEvidence> AuthorityAvailabilityEvidence => Set<AuthorityAvailabilityEvidence>();
+    public DbSet<AuthorityRecordVersion> AuthorityRecordVersions => Set<AuthorityRecordVersion>();
     public DbSet<WorkflowTemplate> WorkflowTemplates => Set<WorkflowTemplate>();
     public DbSet<ScimProvisioningLog> ScimProvisioningLogs => Set<ScimProvisioningLog>();
     public DbSet<ScimToken> ScimTokens => Set<ScimToken>();
@@ -1767,6 +1775,127 @@ public class IAMDbContext : DbContext
             entity.Property(e => e.ConflictResolution).HasConversion<int>();
             entity.Property(e => e.Details).HasColumnType("jsonb");
             entity.Property(e => e.ErrorMessage).HasMaxLength(2000);
+        });
+
+        // Chain of Command / Delegated Authority (task 4843). Identities are referenced, never copied.
+        modelBuilder.Entity<AuthorityDomain>(entity =>
+        {
+            entity.ToTable("AuthorityDomains");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.Key }).IsUnique();
+            entity.Property(e => e.Key).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Description).HasMaxLength(2000);
+            entity.HasOne(e => e.Tenant).WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CommandChain>(entity =>
+        {
+            entity.ToTable("CommandChains");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.IsEnabled });
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.Description).HasMaxLength(2000);
+            entity.HasOne(e => e.Tenant).WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AuthorityPolicy>(entity =>
+        {
+            entity.ToTable("AuthorityPolicies");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.AuthorityDomainId, e.ScopeLevel, e.IsEnabled }).HasDatabaseName("IX_AuthorityPolicies_Tenant_Domain_Level_Enabled");
+            entity.HasIndex(e => new { e.AuthorityDomainId, e.ProjectKey, e.ResourceType, e.ResourceId, e.Action }).HasDatabaseName("IX_AuthorityPolicies_Domain_Scope");
+            entity.HasIndex(e => e.CommandChainId);
+            entity.Property(e => e.ScopeLevel).HasConversion<int>();
+            entity.Property(e => e.ProjectKey).HasMaxLength(200);
+            entity.Property(e => e.ResourceType).HasMaxLength(100);
+            entity.Property(e => e.ResourceId).HasMaxLength(200);
+            entity.Property(e => e.Action).HasMaxLength(200);
+            entity.Property(e => e.ContinuityPolicyRef).HasMaxLength(500);
+            entity.HasOne(e => e.Tenant).WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.AuthorityDomain).WithMany(d => d.Policies)
+                .HasForeignKey(e => e.AuthorityDomainId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.CommandChain).WithMany()
+                .HasForeignKey(e => e.CommandChainId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<CommandStage>(entity =>
+        {
+            entity.ToTable("CommandStages", t => t.HasCheckConstraint("CK_CommandStages_Positive",
+                "\"Order\" >= 1 AND \"RequiredApprovals\" >= 1 AND (\"EscalationTimeoutSeconds\" IS NULL OR \"EscalationTimeoutSeconds\" > 0)"));
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.CommandChainId, e.Order }).IsUnique();
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.EscalationConditions).IsRequired().HasColumnType("jsonb");
+            entity.HasOne(e => e.CommandChain).WithMany(c => c.Stages)
+                .HasForeignKey(e => e.CommandChainId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CommandStageMember>(entity =>
+        {
+            entity.ToTable("CommandStageMembers", t => t.HasCheckConstraint("CK_CommandStageMembers_OneReference",
+                "(CASE WHEN \"UserId\" IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN \"GroupId\" IS NOT NULL THEN 1 ELSE 0 END + " +
+                "CASE WHEN \"RoleId\" IS NOT NULL THEN 1 ELSE 0 END + CASE WHEN \"ServiceAccountId\" IS NOT NULL THEN 1 ELSE 0 END + " +
+                "CASE WHEN \"ExternalAuthorityRef\" IS NOT NULL THEN 1 ELSE 0 END) = 1"));
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.CommandStageId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.GroupId);
+            entity.HasIndex(e => e.RoleId);
+            entity.HasIndex(e => e.ServiceAccountId);
+            entity.Property(e => e.Kind).HasConversion<int>();
+            entity.Property(e => e.ExternalAuthorityRef).HasMaxLength(500);
+            entity.HasOne(e => e.CommandStage).WithMany(s => s.Members)
+                .HasForeignKey(e => e.CommandStageId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Group>().WithMany().HasForeignKey(e => e.GroupId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Role>().WithMany().HasForeignKey(e => e.RoleId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<ServiceAccount>().WithMany().HasForeignKey(e => e.ServiceAccountId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AuthorityDelegation>(entity =>
+        {
+            entity.ToTable("AuthorityDelegations");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.AuthorityDomainId, e.Status });
+            entity.HasIndex(e => new { e.DelegateUserId, e.Status, e.EffectiveFrom, e.EffectiveUntil }).HasDatabaseName("IX_AuthorityDelegations_Delegate_Effective");
+            entity.HasIndex(e => e.DelegatorUserId);
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(2000);
+            entity.HasOne(e => e.Tenant).WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.AuthorityDomain).WithMany()
+                .HasForeignKey(e => e.AuthorityDomainId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<CommandStage>().WithMany().HasForeignKey(e => e.CommandStageId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.DelegatorUserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.DelegateUserId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Delegation>().WithMany().HasForeignKey(e => e.DelegationId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AuthorityAvailabilityEvidence>(entity =>
+        {
+            entity.ToTable("AuthorityAvailabilityEvidence");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.ObservedAt });
+            entity.HasIndex(e => e.CommandStageMemberId);
+            entity.Property(e => e.Source).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.EvidenceRef).IsRequired().HasMaxLength(1000);
+            entity.HasOne(e => e.Tenant).WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<CommandStageMember>().WithMany()
+                .HasForeignKey(e => e.CommandStageMemberId).HasConstraintName("FK_AuthorityAvailabilityEvidence_StageMembers_MemberId")
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AuthorityRecordVersion>(entity =>
+        {
+            entity.ToTable("AuthorityRecordVersions");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.RecordType, e.RecordId, e.Version }).IsUnique();
+            entity.HasIndex(e => new { e.TenantId, e.RecordType, e.ChangedAt });
+            entity.Property(e => e.RecordType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Snapshot).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.ChangeReason).HasMaxLength(2000);
+            entity.HasOne(e => e.Tenant).WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // Delegation configuration (permission delegation between users)
