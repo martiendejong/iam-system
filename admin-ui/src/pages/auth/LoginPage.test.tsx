@@ -66,7 +66,7 @@ describe('LoginPage returnUrl navigation', () => {
     // window.location.href; stub it so we can assert what the app tried to set.
     Object.defineProperty(window, 'location', {
       writable: true,
-      value: { ...originalLocation, href: '' },
+      value: { ...originalLocation, href: '', pathname: '/auth/login' }, // the /auth deployment
     });
   });
 

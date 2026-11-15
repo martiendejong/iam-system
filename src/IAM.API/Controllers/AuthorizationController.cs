@@ -33,6 +33,7 @@ public class AuthorizationController : ControllerBase
     private readonly ILogger<AuthorizationController> _logger;
     private readonly ISignInNetworkGate _networkGate;
     private readonly string _loginBasePath;
+    private readonly string _loginPath;
 
     public AuthorizationController(
         IAMDbContext context,
@@ -52,6 +53,8 @@ public class AuthorizationController : ControllerBase
 
         // ARR strips the /auth/ prefix before forwarding to Kestrel, so redirect to /login
         // must include /auth prefix so the browser lands on the IAM admin-UI login page.
+        // Ui:LoginPath: where the SPA login page lives for the browser (default /auth/login, /login at a host root).
+        _loginPath = DeploymentSettings.ResolveLoginPath(configuration);
         var issuer = configuration["Jwt:Issuer"] ?? "";
         _loginBasePath = "";
         if (!string.IsNullOrEmpty(issuer) && Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri))
@@ -90,7 +93,7 @@ public class AuthorizationController : ControllerBase
 
             var returnUrl = Request.Path + QueryString.Create(
                 Request.HasFormContentType ? Request.Form.ToList() : Request.Query.ToList());
-            return Redirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
+            return Redirect($"{_loginPath}?returnUrl={Uri.EscapeDataString(returnUrl)}");
         }
 
         // Retrieve user from database

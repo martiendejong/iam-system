@@ -43,11 +43,14 @@ public class DatabaseSeeder : IHostedService
 
         await SeedScopesAsync(scope.ServiceProvider, cancellationToken);
         await SeedClientsAsync(scope.ServiceProvider, _configuration, _env, cancellationToken);
-        await WordPressSsoSeeder.SeedAppRolesAsync(
-            context,
-            WordPressSsoSeeder.ResolveSites(_configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
-            _logger,
-            cancellationToken);
+        if (!_configuration.GetValue<bool>("Seeder:SkipInternalClients"))
+        {
+            await WordPressSsoSeeder.SeedAppRolesAsync(
+                context,
+                WordPressSsoSeeder.ResolveSites(_configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
+                _logger,
+                cancellationToken);
+        }
         await SeedAdminUserAsync(context, cancellationToken);
 
         // Security check: alert if test accounts exist in non-development environment
@@ -437,7 +440,7 @@ public class DatabaseSeeder : IHostedService
             await manager.UpdateAsync(existing, current, cancellationToken);
     }
 
-    private static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, IWebHostEnvironment env, CancellationToken cancellationToken)
+    public static async Task SeedClientsAsync(IServiceProvider provider, IConfiguration configuration, IWebHostEnvironment env, CancellationToken cancellationToken)
     {
         var manager = provider.GetRequiredService<IOpenIddictApplicationManager>();
 
@@ -480,6 +483,19 @@ public class DatabaseSeeder : IHostedService
                     OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange
                 }
             }, cancellationToken);
+        }
+
+        var seederLogger = provider.GetRequiredService<ILogger<DatabaseSeeder>>();
+        var extraPublicClients = ExtraPublicClientSeeder.Resolve(configuration, seederLogger);
+
+        // Seeder:SkipInternalClients (default false): a standalone customer IAM keeps only react_admin_ui
+        // (above) plus its own Seeder:ExtraPublicClients; our product-specific OAuth clients and the
+        // WordPress SSO seeder are skipped.
+        if (configuration.GetValue<bool>("Seeder:SkipInternalClients"))
+        {
+            seederLogger.LogInformation("Seeder:SkipInternalClients is set: seeding react_admin_ui and Seeder:ExtraPublicClients only.");
+            await ExtraPublicClientSeeder.SeedAsync(manager, extraPublicClients, seederLogger, cancellationToken);
+            return;
         }
 
         // Test Client #2: Postman/Testing (Authorization Code Flow) — development only
@@ -1299,5 +1315,8 @@ public class DatabaseSeeder : IHostedService
                 }
             }, cancellationToken);
         }
+
+        // Customer-defined public PKCE clients (Seeder:ExtraPublicClients), also usable next to the internal ones.
+        await ExtraPublicClientSeeder.SeedAsync(manager, extraPublicClients, seederLogger, cancellationToken);
     }
 }

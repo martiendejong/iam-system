@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
+import { sanitizeReturnUrl, navigateAfterAuth, getBasePath } from './returnUrl';
 
 describe('sanitizeReturnUrl', () => {
   it('falls back to /dashboard when returnUrl is absent', () => {
@@ -37,19 +37,42 @@ describe('sanitizeReturnUrl', () => {
   });
 });
 
-describe('navigateAfterAuth', () => {
+describe('getBasePath', () => {
+  it('is /auth when the browser is on the /auth deployment, even with the default VITE_BASE_PATH', () => {
+    expect(getBasePath('/auth/login')).toBe('/auth');
+    expect(getBasePath('/auth')).toBe('/auth');
+  });
+
+  it('is empty at a host root (e.g. /login)', () => {
+    expect(getBasePath('/login')).toBe('');
+    expect(getBasePath('/')).toBe('');
+    expect(getBasePath('/authors')).toBe('');
+  });
+});
+
+describe('navigateAfterAuth under the /auth deployment (unchanged behaviour)', () => {
+  const setLocation = (href: string, pathname: string) =>
+    Object.defineProperty(window, 'location', { value: { href, pathname }, writable: true });
+
   it('uses window.location.href for OIDC /connect/ paths', () => {
     const navigate = vi.fn();
-    const original = window.location.href;
-    Object.defineProperty(window, 'location', { value: { href: original }, writable: true });
+    setLocation('', '/auth/login');
     navigateAfterAuth('/connect/authorize?client_id=x', navigate);
+    expect(window.location.href).toBe('/auth/connect/authorize?client_id=x');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps an already prefixed /auth/connect/ path as is', () => {
+    const navigate = vi.fn();
+    setLocation('', '/auth/login');
+    navigateAfterAuth('/auth/connect/authorize?client_id=x', navigate);
     expect(window.location.href).toBe('/auth/connect/authorize?client_id=x');
     expect(navigate).not.toHaveBeenCalled();
   });
 
   it('uses window.location.href for paths outside the /auth basename (e.g. /jengo-agi/)', () => {
     const navigate = vi.fn();
-    Object.defineProperty(window, 'location', { value: { href: '' }, writable: true });
+    setLocation('', '/auth/login');
     navigateAfterAuth('/jengo-agi/', navigate);
     expect(window.location.href).toBe('/jengo-agi/');
     expect(navigate).not.toHaveBeenCalled();
@@ -57,7 +80,28 @@ describe('navigateAfterAuth', () => {
 
   it('calls navigate() for paths inside the /auth basename', () => {
     const navigate = vi.fn();
+    setLocation('', '/auth/login');
     navigateAfterAuth('/auth/dashboard', navigate);
     expect(navigate).toHaveBeenCalledWith('/auth/dashboard');
+  });
+});
+
+describe('navigateAfterAuth at a host root (VITE_BASE_PATH=/)', () => {
+  const setLocation = () =>
+    Object.defineProperty(window, 'location', { value: { href: '', pathname: '/login' }, writable: true });
+
+  it('goes to /connect/authorize without any /auth prefix', () => {
+    const navigate = vi.fn();
+    setLocation();
+    navigateAfterAuth('/connect/authorize?client_id=taskmanager', navigate);
+    expect(window.location.href).toBe('/connect/authorize?client_id=taskmanager');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('uses the router for in-app paths', () => {
+    const navigate = vi.fn();
+    setLocation();
+    navigateAfterAuth('/dashboard', navigate);
+    expect(navigate).toHaveBeenCalledWith('/dashboard');
   });
 });

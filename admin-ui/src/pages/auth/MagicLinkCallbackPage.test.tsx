@@ -52,7 +52,7 @@ describe('MagicLinkCallbackPage', () => {
     originalLocation = window.location;
     Object.defineProperty(window, 'location', {
       writable: true,
-      value: { ...originalLocation, href: '' },
+      value: { ...originalLocation, href: '', pathname: '/auth/login' }, // the /auth deployment
     });
   });
 
