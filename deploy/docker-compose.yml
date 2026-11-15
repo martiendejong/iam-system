@@ -57,6 +57,16 @@ services:
       AdminSeed__FirstName: ${AdminSeed__FirstName:-Admin}
       AdminSeed__LastName: ${AdminSeed__LastName:-User}
       Email__AllowDisabledSending: ${Email__AllowDisabledSending:-false}
+      # Deployment shape (all empty/false = the /auth deployment exactly as before; see .env.example)
+      Cors__AllowedOrigins__0: ${CORS_ORIGIN_0:-}
+      Cors__AllowedOrigins__1: ${CORS_ORIGIN_1:-}
+      Cors__AllowedOrigins__2: ${CORS_ORIGIN_2:-}
+      Cors__AllowedOrigins__3: ${CORS_ORIGIN_3:-}
+      Cors__AllowedOrigins__4: ${CORS_ORIGIN_4:-}
+      Cors__AllowedOrigins__5: ${CORS_ORIGIN_5:-}
+      Ui__LoginPath: ${UI_LOGIN_PATH:-}
+      Seeder__SkipInternalClients: ${SEEDER_SKIP_INTERNAL_CLIENTS:-false}
+      Seeder__ExtraPublicClientsJson: ${SEEDER_EXTRA_PUBLIC_CLIENTS_JSON:-}
     volumes:
       - /opt/iam/certs:/app/certs:ro
     depends_on:

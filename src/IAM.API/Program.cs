@@ -458,11 +458,8 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins(
-                  "http://localhost:5173",
-                  "https://localhost:5173",
-                  "https://maendeleo.martiendejong.nl",
-                  "https://knowledge.prospergenics.com")
+        // Cors:AllowedOrigins (env Cors__AllowedOrigins__0, ...) replaces the list when set; otherwise the defaults.
+        policy.WithOrigins(IAM.API.DeploymentSettings.ResolveCorsOrigins(builder.Configuration))
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
