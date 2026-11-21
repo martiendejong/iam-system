@@ -193,8 +193,16 @@ export const portalApi = {
     return response.data;
   },
 
-  regenerateRecoveryCodes: async (): Promise<{ recoveryCodes: string[]; warning: string }> => {
-    const response = await client().post('/mfa/recovery-codes');
+  // Task 5488: regenerating recovery codes needs the current password or an e-mailed code.
+  regenerateRecoveryCodes: async (
+    confirmation: { currentPassword?: string; emailCode?: string }
+  ): Promise<{ recoveryCodes: string[]; warning: string }> => {
+    const response = await client().post('/mfa/recovery-codes', confirmation);
+    return response.data;
+  },
+
+  sendConfirmationCode: async (): Promise<{ message: string }> => {
+    const response = await client().post('/mfa/confirmation-code');
     return response.data;
   },
 

@@ -1,4 +1,5 @@
 using Fido2NetLib;
+using IAM.API.Auth;
 using Fido2NetLib.Objects;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -16,13 +17,16 @@ public class PasskeyController : ControllerBase
     private readonly IAuthService _authService;
     private readonly IAMDbContext _context;
     private readonly ILogger<PasskeyController> _logger;
+    private readonly SensitiveActionGuard _guard;
 
     public PasskeyController(
         IPasskeyService passkeyService,
         IAuthService authService,
         IAMDbContext context,
-        ILogger<PasskeyController> logger)
+        ILogger<PasskeyController> logger,
+        SensitiveActionGuard guard)
     {
+        _guard = guard;
         _passkeyService = passkeyService;
         _authService = authService;
         _context = context;
@@ -30,7 +34,8 @@ public class PasskeyController : ControllerBase
     }
 
     /// <summary>
-    /// Begin passkey registration for a user
+    /// Begin passkey registration for a user. Requires the current password or an e-mailed confirmation code
+    /// (task 5488); registration cannot be completed without a challenge issued by a confirmed begin.
     /// </summary>
     [HttpPost("register/begin")]
     [Authorize]
@@ -45,6 +50,18 @@ public class PasskeyController : ControllerBase
             if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var userId))
             {
                 return Unauthorized(new { error = "User not authenticated" });
+            }
+
+            var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
+            if (user == null)
+            {
+                return Unauthorized(new { error = "User not authenticated" });
+            }
+
+            var denied = await _guard.RequireAsync(user, request.CurrentPassword, request.EmailCode, cancellationToken);
+            if (denied != null)
+            {
+                return (ActionResult)denied;
             }
 
             var options = await _passkeyService.BeginRegistrationAsync(
@@ -89,6 +106,13 @@ public class PasskeyController : ControllerBase
             if (!success)
             {
                 return BadRequest(new { error = "Failed to verify passkey registration" });
+            }
+
+            var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
+            if (user != null)
+            {
+                await _guard.RecordSuccessAsync(user, "PasskeyRegistered",
+                    "A new passkey was added to your account.", HttpContext, cancellationToken);
             }
 
             return Ok(new { message = "Passkey registered successfully" });
@@ -318,7 +342,7 @@ public class PasskeyController : ControllerBase
 }
 
 // Request DTOs
-public record BeginRegistrationRequest(string Username, string DisplayName);
+public record BeginRegistrationRequest(string Username, string DisplayName, string? CurrentPassword = null, string? EmailCode = null);
 public record CompleteRegistrationRequest(string CredentialName, AuthenticatorAttestationRawResponse AttestationResponse);
 public record BeginAuthenticationRequest(string Username);
 public record RenameCredentialRequest(string NewName);

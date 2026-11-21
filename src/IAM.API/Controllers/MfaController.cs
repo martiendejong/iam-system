@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IAM.API.Auth;
 using IAM.Core.Entities;
 using IAM.Core.Services;
 using IAM.Infrastructure.Data;
@@ -15,11 +16,31 @@ public class MfaController : ControllerBase
 {
     private readonly ITotpService _totpService;
     private readonly IAMDbContext _context;
+    private readonly SensitiveActionGuard _guard;
 
-    public MfaController(ITotpService totpService, IAMDbContext context)
+    public MfaController(ITotpService totpService, IAMDbContext context, SensitiveActionGuard guard)
     {
         _totpService = totpService;
         _context = context;
+        _guard = guard;
+    }
+
+    /// <summary>
+    /// E-mail a one-time confirmation code (valid 10 minutes, single use) for the sensitive actions that ask the
+    /// user to re-confirm: email/disable, recovery-codes, passkey registration. For accounts without a usable password.
+    /// </summary>
+    [HttpPost("confirmation-code")]
+    public async Task<IActionResult> SendConfirmationCode(CancellationToken ct)
+    {
+        var userId = GetUserId();
+        if (userId == null)
+            return Unauthorized(new { error = "Invalid user" });
+
+        var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        return await _guard.SendCodeAsync(user);
     }
 
     /// <summary>
@@ -157,9 +178,10 @@ public class MfaController : ControllerBase
 
     /// <summary>
     /// Disable email-based two-factor authentication for the current user.
+    /// Requires the current password or an e-mailed confirmation code in the body.
     /// </summary>
     [HttpPost("email/disable")]
-    public async Task<IActionResult> DisableEmailMfa(CancellationToken ct)
+    public async Task<IActionResult> DisableEmailMfa([FromBody] SensitiveActionRequest? request, CancellationToken ct)
     {
         var userId = GetUserId();
         if (userId == null)
@@ -172,28 +194,46 @@ public class MfaController : ControllerBase
         if (!user.TwoFactorEnabled || user.TwoFactorMethod != TwoFactorMethod.Email)
             return BadRequest(new { error = "Email two-factor authentication is not enabled." });
 
+        var denied = await _guard.RequireAsync(user, request?.CurrentPassword, request?.EmailCode, ct);
+        if (denied != null)
+            return denied;
+
         user.TwoFactorEnabled = false;
         user.TwoFactorMethod = TwoFactorMethod.None;
         user.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
+
+        await _guard.RecordSuccessAsync(user, "EmailMfaDisabled",
+            "Email two-factor authentication was switched off on your account.", HttpContext, ct);
 
         return Ok(new { message = "Email-based two-factor authentication has been disabled." });
     }
 
     /// <summary>
     /// Generate a new set of recovery codes. Replaces any existing recovery codes.
-    /// Requires an active TOTP enrollment.
+    /// Requires an active TOTP enrollment, and the current password or an e-mailed confirmation code in the body.
     /// </summary>
     [HttpPost("recovery-codes")]
-    public async Task<IActionResult> GenerateRecoveryCodes(CancellationToken ct)
+    public async Task<IActionResult> GenerateRecoveryCodes([FromBody] SensitiveActionRequest? request, CancellationToken ct)
     {
         var userId = GetUserId();
         if (userId == null)
             return Unauthorized(new { error = "Invalid user" });
 
+        var user = await _context.Users.FindAsync(new object[] { userId.Value }, ct);
+        if (user == null)
+            return NotFound(new { error = "User not found" });
+
+        var denied = await _guard.RequireAsync(user, request?.CurrentPassword, request?.EmailCode, ct);
+        if (denied != null)
+            return denied;
+
         try
         {
             var codes = await _totpService.GenerateRecoveryCodesAsync(userId.Value, 8, ct);
+
+            await _guard.RecordSuccessAsync(user, "RecoveryCodesRegenerated",
+                "The recovery codes of your account were regenerated; the previous codes no longer work.", HttpContext, ct);
 
             return Ok(new
             {
