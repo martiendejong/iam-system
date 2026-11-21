@@ -99,7 +99,6 @@ public class IoTDeviceService : IIoTDeviceService
     {
         device.UpdatedAt = DateTime.UtcNow;
 
-        _context.IoTDevices.Update(device);
         await _context.SaveChangesAsync();
 
         return device;

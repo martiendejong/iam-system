@@ -62,7 +62,6 @@ public class BuildingService : IBuildingService
     {
         building.UpdatedAt = DateTime.UtcNow;
 
-        _context.Buildings.Update(building);
         await _context.SaveChangesAsync();
 
         return building;
