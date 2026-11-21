@@ -11,7 +11,7 @@ packages = [{ include = "iam_sdk" }]
 python = "^3.10"
 httpx = "^0.25.0"
 pydantic = "^2.0.0"
-tenacity = "^8.2.0"
+tenacity = "^9.2.1"
 signalrcore = "^0.9.5"
 pandas = { version = "^2.0.0", optional = true }
 
