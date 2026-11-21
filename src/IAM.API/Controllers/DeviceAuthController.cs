@@ -1,11 +1,15 @@
+using IAM.API.Authorization;
 using IAM.Core.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IAM.API.Controllers;
 
 /// <summary>
 /// Device authentication endpoints.
-/// These endpoints are NOT protected by [Authorize] - devices authenticate here to GET tokens.
+/// The token-issuing routes (certificate, hmac) are anonymous - devices authenticate there to GET tokens.
+/// Claims, authorize and heartbeat need a device access token for the same device (task 4718);
+/// authorize-mqtt also accepts the MQTT broker secret.
 /// </summary>
 [ApiController]
 [Route("api/device-auth")]
@@ -13,13 +17,19 @@ public class DeviceAuthController : ControllerBase
 {
     private readonly IDeviceAuthenticationService _deviceAuthService;
     private readonly IDeviceService _deviceService;
+    private readonly IDeviceEndpointAuthorizer _endpointAuthorizer;
+    private readonly IConfiguration _configuration;
 
     public DeviceAuthController(
         IDeviceAuthenticationService deviceAuthService,
-        IDeviceService deviceService)
+        IDeviceService deviceService,
+        IDeviceEndpointAuthorizer endpointAuthorizer,
+        IConfiguration configuration)
     {
         _deviceAuthService = deviceAuthService;
         _deviceService = deviceService;
+        _endpointAuthorizer = endpointAuthorizer;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -28,6 +38,7 @@ public class DeviceAuthController : ControllerBase
     /// <c>X-Device-Gateway-Key</c> header (configured as <c>DeviceAuth:GatewayKeys</c>). A certificate presented by
     /// anyone else gets no token: the PEM is public, so it is not proof that the sender holds the private key.
     /// </summary>
+    [AllowAnonymous]
     [HttpPost("certificate")]
     public async Task<IActionResult> AuthenticateWithCertificate([FromBody] CertificateAuthRequest request)
     {
@@ -59,6 +70,7 @@ public class DeviceAuthController : ControllerBase
     /// Password format: "timestamp:nonce:hmac". Every nonce works once per device, and a device with repeated
     /// failures is locked for a while. Every failure gets the same 401 answer.
     /// </summary>
+    [AllowAnonymous]
     [HttpPost("hmac")]
     public async Task<IActionResult> AuthenticateWithHmac([FromBody] HmacAuthRequest request)
     {
@@ -88,9 +100,13 @@ public class DeviceAuthController : ControllerBase
     /// Authorize a device action on a resource.
     /// Used by edge gateways to check permissions before forwarding requests.
     /// </summary>
+    [Authorize]
     [HttpPost("authorize")]
     public async Task<IActionResult> Authorize([FromBody] DeviceAuthorizeRequest request)
     {
+        if (!await _endpointAuthorizer.MayActForAsync(User, request.DeviceId, HttpContext.RequestAborted))
+            return Forbid();
+
         var result = await _deviceAuthService.AuthorizeAsync(
             request.DeviceId, request.Resource, request.Action);
 
@@ -106,9 +122,18 @@ public class DeviceAuthController : ControllerBase
     /// Authorize MQTT publish/subscribe on a topic.
     /// Called by MQTT broker (e.g., Mosquitto) auth plugin.
     /// </summary>
+    [AllowAnonymous] // broker secret OR device token, checked below
     [HttpPost("authorize-mqtt")]
     public async Task<IActionResult> AuthorizeMqtt([FromBody] MqttAuthorizeRequest request)
     {
+        if (!BrokerSecretValidator.PresentsConfiguredSecret(_configuration, Request))
+        {
+            if (User.Identity?.IsAuthenticated != true)
+                return Unauthorized();
+            if (!await _endpointAuthorizer.MayActForAsync(User, request.DeviceId, HttpContext.RequestAborted))
+                return Forbid();
+        }
+
         var result = await _deviceAuthService.AuthorizeMqttAsync(
             request.DeviceId, request.Topic, request.Action);
 
@@ -124,9 +149,13 @@ public class DeviceAuthController : ControllerBase
     /// Get device claims for edge gateway policy caching.
     /// Returns all permissions and metadata for local authorization decisions.
     /// </summary>
+    [Authorize]
     [HttpGet("claims/{deviceId}")]
     public async Task<IActionResult> GetDeviceClaims(string deviceId)
     {
+        if (!await _endpointAuthorizer.MayActForAsync(User, deviceId, HttpContext.RequestAborted))
+            return Forbid();
+
         var result = await _deviceAuthService.GetDeviceClaimsAsync(deviceId);
 
         if (!result.Success)
@@ -149,9 +178,13 @@ public class DeviceAuthController : ControllerBase
     /// Heartbeat endpoint for device status updates.
     /// Lightweight endpoint for constrained devices to report they're alive.
     /// </summary>
+    [Authorize]
     [HttpPost("heartbeat")]
     public async Task<IActionResult> Heartbeat([FromBody] DeviceHeartbeatRequest request)
     {
+        if (!await _endpointAuthorizer.MayActForAsync(User, request.DeviceId, HttpContext.RequestAborted))
+            return Forbid();
+
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
         var success = await _deviceService.UpdateDeviceStatusAsync(
             request.DeviceId, true, ipAddress);

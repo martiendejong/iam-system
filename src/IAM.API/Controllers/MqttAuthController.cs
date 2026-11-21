@@ -1,3 +1,4 @@
+using IAM.API.Authorization;
 using IAM.Core.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,7 +9,7 @@ namespace IAM.API.Controllers;
 /// Compatible with Mosquitto (mosquitto-auth-plug), EMQX (HTTP auth), and HiveMQ (HTTP extension).
 /// Brokers call these endpoints to authenticate/authorize MQTT clients.
 ///
-/// NOT [Authorize] - MQTT brokers authenticate via X-Broker-Secret shared header.
+/// NOT [Authorize] - MQTT brokers authenticate via X-Broker-Secret shared header (Mqtt:BrokerSecret, required outside Development).
 /// </summary>
 [ApiController]
 [Route("api/mqtt")]
@@ -18,31 +19,32 @@ public class MqttAuthController : ControllerBase
     private readonly IMqttAuthService _mqttAuthService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<MqttAuthController> _logger;
+    private readonly IHostEnvironment _environment;
 
     public MqttAuthController(
         IDeviceAuthenticationService deviceAuthService,
         IMqttAuthService mqttAuthService,
         IConfiguration configuration,
-        ILogger<MqttAuthController> logger)
+        ILogger<MqttAuthController> logger,
+        IHostEnvironment environment)
     {
         _deviceAuthService = deviceAuthService;
         _mqttAuthService = mqttAuthService;
         _configuration = configuration;
         _logger = logger;
+        _environment = environment;
     }
 
     /// <summary>
-    /// Validate the broker shared secret from the X-Broker-Secret header.
-    /// If no secret is configured (dev mode), all requests are allowed.
+    /// Validate the broker shared secret from the X-Broker-Secret header (constant-time).
+    /// Fails closed: with no Mqtt:BrokerSecret configured, requests are refused outside Development.
     /// </summary>
     private bool ValidateBrokerSecret()
     {
-        var expectedSecret = _configuration["Mqtt:BrokerSecret"];
-        if (string.IsNullOrEmpty(expectedSecret))
-            return true; // No secret configured = open (dev mode)
-
-        var provided = Request.Headers["X-Broker-Secret"].FirstOrDefault();
-        return provided == expectedSecret;
+        var result = BrokerSecretValidator.Check(_configuration, _environment, Request);
+        if (result == BrokerSecretResult.NotConfigured)
+            _logger.LogError("MQTT request refused: {Key} is not configured (endpoints are open only in Development)", BrokerSecretValidator.ConfigKey);
+        return result == BrokerSecretResult.Accepted;
     }
 
     // ─────────────────────────────────────────────────────────────────
