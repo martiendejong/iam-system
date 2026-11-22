@@ -20,6 +20,11 @@ public class AuthService : IAuthService
     // Today's default when an organization has never saved a Token Configuration.
     private const int DefaultRefreshTokenLifetimeDays = 7;
 
+    private TimeSpan ReplayGraceWindow =>
+        TimeSpan.FromSeconds(int.TryParse(_configuration["Auth:RefreshReplayGraceSeconds"], out var s) && s >= 0
+            ? s
+            : AuthConstants.RefreshReplayGraceSeconds);
+
     // Task 5166: one message for every way a password sign-in can fail before the password is proven.
     internal const string InvalidCredentialsMessage = "Invalid email or password";
     internal const string TooManyLoginAttemptsMessage = "Too many failed sign-in attempts. Please wait a moment and try again.";
@@ -326,6 +331,7 @@ public class AuthService : IAuthService
         var refreshTokenEntity = new RefreshToken
         {
             Id = refreshTokenId,
+            FamilyId = refreshTokenId,
             UserId = user.Id,
             TokenHash = HashToken(refreshToken),
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
@@ -366,35 +372,63 @@ public class AuthService : IAuthService
             return InvalidRefreshToken();
         }
 
+        // A token that was rotated moments ago and is presented again is almost always the legitimate owner
+        // (two tabs refreshing at once, a retried request, a lost response), not a thief. Within the grace
+        // window it is treated as a concurrent refresh: it mints one more successor instead of ending sessions.
+        var graceReplay = false;
+
         if (storedToken.IsRevoked)
         {
             // REPLAY DETECTION: a token spent by rotation is only ever held by the party that got
-            // its successor, so seeing it again means the secret was copied. Which of the two
-            // parties is the thief is unknowable here, so end every session of the user.
+            // its successor, so seeing it again after the grace window means the secret was copied.
+            // Which of the two parties is the thief is unknowable here, so end the whole sign-in
+            // (session family) this token belongs to. Other devices of the user stay signed in:
+            // the copied secret never belonged to them. Tokens from before FamilyId existed have no
+            // family and keep the old behaviour (every session of the user).
             // Tokens revoked for other reasons (logout, password reset, deactivation) are not
             // a theft signal - a stale browser may legitimately still send one of those.
-            if (await _context.IsRotatedAsync(storedToken))
+            var rotated = await _context.IsRotatedAsync(storedToken);
+            if (rotated && storedToken.RevokedAt is { } rotatedAt
+                && DateTime.UtcNow - rotatedAt <= ReplayGraceWindow)
             {
-                var revoked = await _context.RevokeRefreshTokensAsync(storedToken.UserId);
+                graceReplay = true;
+            }
+            else if (rotated)
+            {
+                var revoked = storedToken.FamilyId is { } familyId
+                    ? await _context.RevokeRefreshTokenFamilyAsync(storedToken.UserId, familyId)
+                    : await _context.RevokeRefreshTokensAsync(storedToken.UserId);
 
                 _context.AuditLogs.Add(new AuditLog
                 {
                     UserId = storedToken.UserId,
                     Action = "RefreshTokenReplayDetected",
                     Resource = "User",
-                    Details = JsonSerializer.Serialize(new { refreshTokenId = storedToken.Id, revokedTokens = revoked }),
+                    Details = JsonSerializer.Serialize(new
+                    {
+                        refreshTokenId = storedToken.Id,
+                        revokedTokens = revoked,
+                        scope = storedToken.FamilyId.HasValue ? "session" : "user"
+                    }),
                     IpAddress = ipAddress,
                     UserAgent = userAgent
                 });
                 await _context.SaveChangesAsync();
 
                 _logger.LogWarning(
-                    "Rotated refresh token replayed; all sessions of the user ended. UserId: {UserId}, " +
+                    "Rotated refresh token replayed; its session ended (all sessions when it has no family). UserId: {UserId}, " +
                     "TokenId: {TokenId}, RevokedTokens: {RevokedTokens}, ReplayIP: {ReplayIp}, ReplayUA: {ReplayUA}",
                     storedToken.UserId, storedToken.Id, revoked, ipAddress, userAgent);
             }
 
-            return InvalidRefreshToken();
+            if (!graceReplay)
+            {
+                return InvalidRefreshToken();
+            }
+
+            _logger.LogInformation(
+                "Rotated refresh token presented again within the {Grace}s grace window; treated as a concurrent refresh. UserId: {UserId}, TokenId: {TokenId}",
+                ReplayGraceWindow.TotalSeconds, storedToken.UserId, storedToken.Id);
         }
 
         if (storedToken.IsExpired)
@@ -458,6 +492,7 @@ public class AuthService : IAuthService
         var newRefreshTokenEntity = new RefreshToken
         {
             Id = newRefreshTokenId,
+            FamilyId = storedToken.FamilyId ?? storedToken.Id,
             UserId = storedToken.UserId,
             TokenHash = HashToken(newRefreshToken),
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),
@@ -468,7 +503,17 @@ public class AuthService : IAuthService
 
         // SINGLE-USE TOKENS: Revoke the old refresh token immediately; Rotate also records
         // that this revocation was a rotation, which is what replay detection above relies on.
-        RefreshTokenRevocation.Rotate(storedToken, newRefreshTokenEntity);
+        // A grace-window replay leaves the spent token's revocation record alone: the successor that the
+        // first (legitimate) refresh created must stay linked to it, and this extra token simply becomes
+        // a second live token of the same session family.
+        if (graceReplay)
+        {
+            newRefreshTokenEntity.CreatedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            RefreshTokenRevocation.Rotate(storedToken, newRefreshTokenEntity);
+        }
 
         _context.RefreshTokens.Add(newRefreshTokenEntity);
         await _context.SaveChangesAsync();
@@ -625,6 +670,7 @@ public class AuthService : IAuthService
         var refreshTokenEntity = new RefreshToken
         {
             Id = refreshTokenId,
+            FamilyId = refreshTokenId,
             UserId = user.Id,
             TokenHash = HashToken(refreshToken),
             ExpiresAt = DateTime.UtcNow.AddDays(refreshDays),

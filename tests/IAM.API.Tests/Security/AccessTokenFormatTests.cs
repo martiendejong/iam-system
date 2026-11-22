@@ -343,7 +343,7 @@ public class AccessTokenFormatTests
         AssertOnlyAllowedClaims(token);
         var payload = DecodeSegment(token, 1);
         Assert.Equal("openid", payload.GetProperty("scope").GetString());
-        Assert.Equal(TimeSpan.FromMinutes(15),
+        Assert.Equal(TimeSpan.FromMinutes(30),
             TimeSpan.FromSeconds(payload.GetProperty("exp").GetInt64() - payload.GetProperty("iat").GetInt64()));
     }
 
