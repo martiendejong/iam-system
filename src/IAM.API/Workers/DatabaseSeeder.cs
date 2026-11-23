@@ -395,6 +395,16 @@ public class DatabaseSeeder : IHostedService
             Resources = { JengoMcpAudience }
         }, cancellationToken);
 
+        // MCP connectors (docs/MCP.md): the one scope dynamically registered clients may hold. Its audience is only
+        // accepted by the IAM /mcp endpoint, which also demands the scope, so a token minted for it opens nothing else.
+        await UpsertScopeAsync(manager, new OpenIddictScopeDescriptor
+        {
+            Name = IAM.API.Mcp.OAuth.McpOAuth.Scope,
+            DisplayName = "IAM MCP (read-only)",
+            Description = "Read-only access to IAM through an MCP connector (ChatGPT, Claude)",
+            Resources = { IAM.API.Mcp.OAuth.McpOAuth.Audience }
+        }, cancellationToken);
+
         // Task 4059: resolver scope — vault confidential client only.
         // Maps to iam_api audience because the endpoint lives on IAM itself.
         // Not advertised in discovery (not added to RegisterScopes in Program.cs discovery list).

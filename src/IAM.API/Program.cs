@@ -268,13 +268,31 @@ builder.Services.AddOpenIddict()
             // scope store); registering them here makes discovery advertise them in
             // scopes_supported.
             "taskmanager_api",
-            "jengo_mcp"
+            "jengo_mcp",
+            // MCP connectors (ChatGPT, Claude.ai): the narrow scope dynamically registered clients may hold (docs/MCP.md).
+            IAM.API.Mcp.OAuth.McpOAuth.Scope
             // NOTE: "iam_resolver" (task 4059) is intentionally NOT in this list —
             // RegisterScopes populates scopes_supported in the discovery document,
             // and the resolver scope must stay undiscoverable to reduce attack surface.
             // The scope is in the OpenIddict scope store (DatabaseSeeder.SeedScopesAsync)
             // and the token endpoint enforces it via the jengo-vault client's permission list.
         );
+
+        // MCP connectors discover the dynamic client registration endpoint (RFC 7591 / RFC 8414) from this document.
+        // It is announced next to the token endpoint; the endpoint itself 404s when Mcp:OAuth:Enabled=false.
+        options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleConfigurationRequestContext>(handler =>
+            handler.UseInlineHandler(context =>
+            {
+                if (builder.Configuration.GetValue("Mcp:OAuth:Enabled", true) && context.TokenEndpoint is { } tokenEndpoint)
+                {
+                    context.Metadata["registration_endpoint"] = new Uri(tokenEndpoint, "register").AbsoluteUri;
+                    // Public clients (no secret) are what dynamic registration creates; say so. Purely additive.
+                    context.TokenEndpointAuthenticationMethods.Add("none");
+                }
+                return default;
+            })
+            // Run after the built-in handlers that fill in the endpoint URLs.
+            .SetOrder(int.MaxValue - 1_000));
 
         // Register signing and encryption credentials
         if (builder.Environment.IsDevelopment())
