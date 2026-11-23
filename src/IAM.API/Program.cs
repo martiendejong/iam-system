@@ -1,4 +1,5 @@
 ﻿﻿using System.Net;
+using Microsoft.AspNetCore.DataProtection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -151,6 +152,7 @@ builder.Services.AddScoped<IVisitorService, VisitorService>();
 builder.Services.AddScoped<IServiceAccountService, ServiceAccountService>();
 builder.Services.AddScoped<IPrincipalDirectoryService, PrincipalDirectoryService>();
 builder.Services.AddScoped<IResolverService, ResolverService>();
+builder.Services.AddScoped<IAuthorityResolverService, AuthorityResolverService>();
 builder.Services.AddScoped<IRegionService, RegionService>();
 builder.Services.AddScoped<IDelegationService, DelegationService>();
 
@@ -334,9 +336,18 @@ builder.Services.AddOpenIddict()
         // validation handler keeps the encryption key, so it still decrypts the old JWEs.
         options.DisableAccessTokenEncryption();
 
-        // Configure token lifetimes
-        options.SetAccessTokenLifetime(TimeSpan.FromMinutes(15))
-               .SetRefreshTokenLifetime(TimeSpan.FromDays(7));
+        // Configure token lifetimes. The refresh token slides (OpenIddict re-issues it on each use), so a
+        // client that keeps refreshing, such as a phone or an MCP connector (Claude, ChatGPT), stays signed in
+        // for the whole window instead of 7 days from the first login. The reuse leeway lets two parallel
+        // refreshes with the same token both succeed instead of revoking the whole authorization.
+        // All three are overridable: OpenIddict:AccessTokenLifetimeMinutes, :RefreshTokenLifetimeDays,
+        // :RefreshTokenReuseLeewaySeconds.
+        options.SetAccessTokenLifetime(TimeSpan.FromMinutes(
+                   Math.Max(1, builder.Configuration.GetValue("OpenIddict:AccessTokenLifetimeMinutes", 30))))
+               .SetRefreshTokenLifetime(TimeSpan.FromDays(
+                   Math.Max(1, builder.Configuration.GetValue("OpenIddict:RefreshTokenLifetimeDays", 90))))
+               .SetRefreshTokenReuseLeeway(TimeSpan.FromSeconds(
+                   Math.Max(0, builder.Configuration.GetValue("OpenIddict:RefreshTokenReuseLeewaySeconds", 120))));
 
         // Reject 'plain' PKCE — code_challenge equals code_verifier so any intercepted
         // authorization request leaks the verifier. All seeded clients use S256.
@@ -351,6 +362,22 @@ builder.Services.AddOpenIddict()
         // Enable ASP.NET Core integration
         options.UseAspNetCore();
     });
+
+// Data Protection keys encrypt the IAM.Session cookie (and antiforgery tokens). When they live only in the
+// container/process profile, every redeploy generates a new key ring and invalidates every signed-in
+// browser. Auth:DataProtectionKeysPath points them at a persistent, backed-up directory (mount a volume
+// there in Docker) so a deploy no longer signs everyone out.
+var dataProtectionKeysPath = builder.Configuration["Auth:DataProtectionKeysPath"];
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("IAM");
+if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+{
+    Directory.CreateDirectory(dataProtectionKeysPath);
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
+}
+else if (builder.Environment.IsProduction())
+{
+    Console.WriteLine("WARNING: Auth:DataProtectionKeysPath is not set; Data Protection keys are not persisted, so a redeploy can invalidate the IAM.Session cookie.");
+}
 
 // JWT Authentication
 // The secret key is read lazily inside the AddJwtBearer options delegate (invoked by the DI

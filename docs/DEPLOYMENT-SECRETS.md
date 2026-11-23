@@ -56,3 +56,16 @@ enforces (learned 18-10, see JengoWork 5814/5801):
   cross-system senders), OpenIddict pfx passwords (requires re-protecting the pfx
   files), OIDC client secrets (requires coordinated update on the client side),
   SecretsVault MasterKey (requires data re-encryption).
+
+## Staying signed in across deploys (trusted-device sessions)
+
+Required before/with the build that adds `RefreshTokens.FamilyId`:
+
+1. Run `docs/manual-migrations/20261122120000_AddRefreshTokenFamilyId.sql` on `iam_db` BEFORE swapping
+   the build (IAM only runs `EnsureCreated`; without the column every sign-in fails).
+2. Set `Auth:DataProtectionKeysPath` (env `Auth__DataProtectionKeysPath`) to a persistent folder outside the
+   deploy directory, e.g. `C:\stores\iam\dataprotection-keys`, and back it up. Without it the cookie keys can
+   change on redeploy and sign every browser out of SSO. The first deploy with this setting signs everyone out once.
+3. Optional tuning (defaults shown): `OpenIddict:AccessTokenLifetimeMinutes` 30,
+   `OpenIddict:RefreshTokenLifetimeDays` 90, `OpenIddict:RefreshTokenReuseLeewaySeconds` 120,
+   `Auth:RefreshReplayGraceSeconds` 60.
