@@ -52,6 +52,25 @@ public static class RefreshTokenRevocation
     }
 
     /// <summary>
+    /// Revokes every still-unrevoked refresh token of one session family (one sign-in on one device),
+    /// leaving the user's other devices alone. Returns how many were revoked.
+    /// </summary>
+    public static async Task<int> RevokeRefreshTokenFamilyAsync(this IAMDbContext context, Guid userId, Guid familyId, CancellationToken ct = default)
+    {
+        var tokens = await context.RefreshTokens
+            .Where(rt => rt.UserId == userId && rt.RevokedAt == null && (rt.FamilyId == familyId || rt.Id == familyId))
+            .ToListAsync(ct);
+
+        var now = DateTime.UtcNow;
+        foreach (var token in tokens)
+        {
+            token.RevokedAt = now;
+        }
+
+        return tokens.Count;
+    }
+
+    /// <summary>
     /// Single-use rotation: revokes <paramref name="spent"/> and stamps its successor with the
     /// very same instant. That equality is the only record that a revocation was a rotation (as
     /// opposed to logout, password reset or deactivation), and it needs no extra column.

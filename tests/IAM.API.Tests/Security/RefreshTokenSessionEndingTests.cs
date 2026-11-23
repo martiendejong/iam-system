@@ -126,6 +126,7 @@ public class RefreshTokenSessionEndingTests
         Assert.False(string.IsNullOrEmpty(result.RefreshToken));
         Assert.NotEqual(oldToken, result.RefreshToken);
         Assert.Equal(1, await ActiveTokenCountAsync(context, user.Id)); // old spent, new live
+        await AgeRotationsAsync(context, user.Id); // past the replay grace window
         Assert.False((await auth.RefreshTokenAsync(oldToken)).Success); // single use still holds
     }
 
@@ -494,7 +495,7 @@ public class RefreshTokenSessionEndingTests
     // ───────────────────────── 4. replay of a rotated token ─────────────────────────
 
     [Fact]
-    public async Task Replay_OfRotatedToken_RevokesAllOfTheUsersActiveTokens_AndIsLogged()
+    public async Task Replay_OfRotatedToken_AfterGraceWindow_RevokesOnlyThatSession_AndIsLogged()
     {
         var context = CreateContext();
         var log = new CapturingLogger<AuthService>();
@@ -508,6 +509,7 @@ public class RefreshTokenSessionEndingTests
         var rotated = await auth.RefreshTokenAsync(phoneToken); // legitimate rotation
         Assert.True(rotated.Success);
         Assert.Equal(2, await ActiveTokenCountAsync(context, user.Id)); // laptop + rotated phone
+        await AgeRotationsAsync(context, user.Id);
 
         var replay = await auth.RefreshTokenAsync(phoneToken, "203.0.113.9", "thief/1.0"); // the spent token again
 
@@ -515,9 +517,10 @@ public class RefreshTokenSessionEndingTests
         Assert.Equal(InvalidTokenError, replay.Error);
         Assert.Null(replay.AccessToken);
         Assert.Null(replay.RefreshToken);
-        Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
+        // Only the phone's own session ends; the user's laptop was never exposed and stays signed in.
+        Assert.Equal(1, await ActiveTokenCountAsync(context, user.Id));
         Assert.False((await auth.RefreshTokenAsync(rotated.RefreshToken!)).Success);
-        Assert.False((await auth.RefreshTokenAsync(laptopToken)).Success);
+        Assert.True((await auth.RefreshTokenAsync(laptopToken)).Success);
         Assert.Equal(1, await ActiveTokenCountAsync(context, bystander.Id));
         Assert.True((await auth.RefreshTokenAsync(bystanderToken)).Success);
 
@@ -549,6 +552,7 @@ public class RefreshTokenSessionEndingTests
             userId = user.Id;
             spentToken = await LoginAsync(auth, user);
             Assert.True((await auth.RefreshTokenAsync(spentToken)).Success);
+            await AgeRotationsAsync(context, user.Id);
         }
 
         await using (var readBack = CreateContext(databaseName))
@@ -605,7 +609,110 @@ public class RefreshTokenSessionEndingTests
         Assert.Empty(await context.AuditLogs.Where(a => a.Action == "RefreshTokenReplayDetected").ToListAsync());
     }
 
+    [Fact]
+    public async Task Replay_WithinGraceWindow_IsTreatedAsConcurrentRefresh_AndEndsNothing()
+    {
+        var context = CreateContext();
+        var log = new CapturingLogger<AuthService>();
+        var auth = CreateAuthService(context, log);
+        var user = await AddUserAsync(context, "two-tabs");
+        var laptopToken = await LoginAsync(auth, user);
+        var phoneToken = await LoginAsync(auth, user);
+
+        var first = await auth.RefreshTokenAsync(phoneToken);   // tab 1
+        var second = await auth.RefreshTokenAsync(phoneToken);  // tab 2, same spent token, a moment later
+
+        Assert.True(first.Success);
+        Assert.True(second.Success);
+        Assert.NotEqual(first.RefreshToken, second.RefreshToken);
+        Assert.NotNull(second.AccessToken);
+        Assert.Empty(await context.AuditLogs.Where(a => a.Action == "RefreshTokenReplayDetected").ToListAsync());
+        Assert.DoesNotContain(log.Entries, e => e.Level == LogLevel.Warning);
+        // laptop + both phone successors are all still live, and the two phone tokens share one family
+        Assert.Equal(3, await ActiveTokenCountAsync(context, user.Id));
+        var families = await context.RefreshTokens
+            .Where(t => t.Id == first.RefreshTokenId || t.Id == second.RefreshTokenId)
+            .Select(t => t.FamilyId).Distinct().ToListAsync();
+        Assert.Single(families);
+        Assert.True((await auth.RefreshTokenAsync(laptopToken)).Success);
+    }
+
+    [Fact]
+    public async Task Replay_AfterGraceWindow_StillEndsTheWholeSessionFamily_IncludingGraceSuccessors()
+    {
+        var context = CreateContext();
+        var auth = CreateAuthService(context);
+        var user = await AddUserAsync(context, "family");
+        var phoneToken = await LoginAsync(auth, user);
+
+        var first = await auth.RefreshTokenAsync(phoneToken);
+        var second = await auth.RefreshTokenAsync(phoneToken); // grace successor, same family
+        Assert.True(first.Success && second.Success);
+        await AgeRotationsAsync(context, user.Id);
+
+        Assert.False((await auth.RefreshTokenAsync(phoneToken)).Success);
+
+        Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
+    }
+
+    [Fact]
+    public async Task Replay_OfLegacyTokenWithoutFamily_KeepsEndingEveryUserSession()
+    {
+        var context = CreateContext();
+        var auth = CreateAuthService(context);
+        var user = await AddUserAsync(context, "legacy");
+        var legacy = await LoginAsync(auth, user);
+        var other = await LoginAsync(auth, user);
+        foreach (var t in await context.RefreshTokens.Where(t => t.UserId == user.Id).ToListAsync())
+        {
+            t.FamilyId = null; // issued before FamilyId existed
+        }
+        await context.SaveChangesAsync();
+
+        Assert.True((await auth.RefreshTokenAsync(legacy)).Success);
+        await AgeRotationsAsync(context, user.Id);
+        Assert.False((await auth.RefreshTokenAsync(legacy)).Success);
+
+        Assert.Equal(0, await ActiveTokenCountAsync(context, user.Id));
+        Assert.False((await auth.RefreshTokenAsync(other)).Success);
+    }
+
+    [Fact]
+    public async Task RememberMe_SessionIsIssuedForAtLeastNinetyDays_AndRotationKeepsFamily()
+    {
+        var context = CreateContext();
+        var auth = CreateAuthService(context);
+        var user = await AddUserAsync(context, "trusted-phone");
+        var token = await LoginAsync(auth, user, rememberMe: true);
+        var root = await context.RefreshTokens.SingleAsync(t => t.UserId == user.Id);
+        Assert.Equal(root.Id, root.FamilyId);
+        Assert.True(root.ExpiresAt > DateTime.UtcNow.AddDays(89));
+
+        var rotated = await auth.RefreshTokenAsync(token);
+
+        Assert.True(rotated.Success);
+        var successor = await context.RefreshTokens.SingleAsync(t => t.Id == rotated.RefreshTokenId);
+        Assert.Equal(root.Id, successor.FamilyId);
+        Assert.True(successor.ExpiresAt > DateTime.UtcNow.AddDays(89));
+    }
+
     // ───────────────────────── helpers ─────────────────────────
+
+    /// <summary>Moves every rotation of the user back in time, past the replay grace window.</summary>
+    private static async Task AgeRotationsAsync(IAMDbContext context, Guid userId)
+    {
+        var shift = TimeSpan.FromMinutes(10);
+        var tokens = await context.RefreshTokens.Where(t => t.UserId == userId).ToListAsync();
+        foreach (var token in tokens)
+        {
+            token.CreatedAt -= shift;
+            if (token.RevokedAt.HasValue)
+            {
+                token.RevokedAt -= shift;
+            }
+        }
+        await context.SaveChangesAsync();
+    }
 
     private static ScimPatchRequest ActivePatch(object value) => new()
     {
