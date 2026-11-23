@@ -352,21 +352,26 @@ public sealed class IamMcpOAuthToolProvider : IMcpToolProvider
     /// <summary>Every call is recorded, so an administrator can see what a connected assistant looked at. Never fails the call.</summary>
     private async Task TryAuditAsync(McpToolContext context, User caller, string toolName, CancellationToken ct)
     {
+        AuditLog? row = null;
         try
         {
-            _db.AuditLogs.Add(new AuditLog
+            // Details is a jsonb column in PostgreSQL: it must be valid JSON.
+            row = new AuditLog
             {
                 UserId = caller.Id,
                 Action = "mcp.oauth.tool",
                 Resource = $"mcp:{toolName}",
-                Details = $"client={context.User.FindFirstValue(McpOAuth.ClientIdClaim)}",
+                Details = JsonSerializer.Serialize(new { client = context.User.FindFirstValue(McpOAuth.ClientIdClaim) }),
                 IpAddress = context.HttpContext.Connection.RemoteIpAddress?.ToString(),
                 UserAgent = context.HttpContext.Request.Headers.UserAgent.ToString() is { Length: > 0 } ua ? ua[..Math.Min(ua.Length, 500)] : null,
-            });
+            };
+            _db.AuditLogs.Add(row);
             await _db.SaveChangesAsync(ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Do not leave the failed row tracked: it would be retried by the next SaveChanges of this request.
+            if (row != null) _db.Entry(row).State = EntityState.Detached;
             _logger.LogWarning(ex, "Could not write the audit row for MCP tool {Tool}", toolName);
         }
     }
