@@ -49,6 +49,9 @@ public sealed class IamMcpToolProvider : IMcpToolProvider
 
     public ValueTask<IReadOnlyList<Tool>> ListToolsAsync(McpToolContext context, CancellationToken cancellationToken)
     {
+        if (OAuth.IamMcpOAuthToolProvider.IsOAuthPrincipal(context?.User))
+            return ValueTask.FromResult<IReadOnlyList<Tool>>(Array.Empty<Tool>());
+
         IReadOnlyList<Tool> tools = new List<Tool>
         {
             Tool("list_users",
@@ -105,6 +108,9 @@ public sealed class IamMcpToolProvider : IMcpToolProvider
         McpToolContext context, string toolName,
         IReadOnlyDictionary<string, JsonElement> arguments, CancellationToken cancellationToken)
     {
+        // OAuth-connected assistants (ChatGPT, Claude.ai) get the separate read-only tool set; this API-key tool set,
+        // with its invitation and role mutations, must never answer them (docs/MCP.md).
+        if (OAuth.IamMcpOAuthToolProvider.IsOAuthPrincipal(context?.User)) return null;
         if (!OwnsTool(toolName)) return null;
 
         var actor = await ResolveActingUserAsync(context.User, cancellationToken);

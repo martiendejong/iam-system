@@ -32,6 +32,7 @@ public class AuthorizationController : ControllerBase
     private readonly IOpenIddictScopeManager _scopeManager;
     private readonly ILogger<AuthorizationController> _logger;
     private readonly ISignInNetworkGate _networkGate;
+    private readonly IAM.API.Mcp.OAuth.McpConsentService _mcpConsent;
     private readonly string _loginBasePath;
 
     public AuthorizationController(
@@ -41,7 +42,8 @@ public class AuthorizationController : ControllerBase
         IOpenIddictScopeManager scopeManager,
         ILogger<AuthorizationController> logger,
         IConfiguration configuration,
-        ISignInNetworkGate networkGate)
+        ISignInNetworkGate networkGate,
+        IAM.API.Mcp.OAuth.McpConsentService mcpConsent)
     {
         _context = context;
         _applicationManager = applicationManager;
@@ -49,6 +51,7 @@ public class AuthorizationController : ControllerBase
         _scopeManager = scopeManager;
         _logger = logger;
         _networkGate = networkGate;
+        _mcpConsent = mcpConsent;
 
         // ARR strips the /auth/ prefix before forwarding to Kestrel, so redirect to /login
         // must include /auth prefix so the browser lands on the IAM admin-UI login page.
@@ -165,6 +168,17 @@ public class AuthorizationController : ControllerBase
         var application = await _applicationManager.FindByClientIdAsync(request.ClientId!) ??
             throw new InvalidOperationException("The application cannot be found.");
 
+        // MCP connectors (ChatGPT, Claude.ai) register themselves through dynamic client registration. They are
+        // third parties the user never configured, so they need explicit consent and get a token that carries nothing
+        // but the subject and the narrow mcp scope (docs/MCP.md).
+        var isMcpDynamicClient = await IAM.API.Mcp.OAuth.McpOAuth.IsDynamicClientAsync(_applicationManager, application);
+        if (isMcpDynamicClient)
+        {
+            var consentResult = await EvaluateMcpConsentAsync(request, application, user);
+            if (consentResult != null)
+                return consentResult;
+        }
+
         // Create a new ClaimsIdentity for OpenIddict
         var identity = new ClaimsIdentity(
             authenticationType: TokenValidationParameters.DefaultAuthenticationType,
@@ -198,7 +212,18 @@ public class AuthorizationController : ControllerBase
         }
 
         // Set scopes
-        identity.SetScopes(request.GetScopes());
+        if (isMcpDynamicClient)
+        {
+            // Whatever the request asked for, an MCP connector gets exactly mcp + offline_access (the only
+            // scopes its registration holds), and the token carries the subject only: no roles, tenant,
+            // name or email. The tools look those up server side, so the token is no use as a session elsewhere.
+            identity = StripToSubject(identity);
+            identity.SetScopes(ImmutableArray.Create(IAM.API.Mcp.OAuth.McpOAuth.Scope, Scopes.OfflineAccess));
+        }
+        else
+        {
+            identity.SetScopes(request.GetScopes());
+        }
 
         // Task 4099: map the granted scopes to their resource servers so the access token
         // carries an aud claim and only works at its target service (confused-deputy fix).
@@ -219,6 +244,53 @@ public class AuthorizationController : ControllerBase
 
         // Return the SignInResult to issue tokens
         return SignIn(new ClaimsPrincipal(identity), OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    /// <summary>Keeps only what an MCP connector token may carry: the subject (plus OpenIddict's own bookkeeping claims).</summary>
+    private static ClaimsIdentity StripToSubject(ClaimsIdentity identity)
+    {
+        foreach (var type in new[] { Claims.Role, TenantIdClaimType, Claims.Email, Claims.EmailVerified, Claims.Name, Claims.GivenName, Claims.FamilyName })
+        {
+            foreach (var claim in identity.FindAll(type).ToList())
+                identity.RemoveClaim(claim);
+        }
+        return identity;
+    }
+
+    /// <summary>
+    /// Consent step for dynamically registered MCP clients. Returns null when the user has allowed this exact request
+    /// (the caller then continues and issues the code), otherwise the consent page or the access_denied redirect.
+    /// </summary>
+    private async Task<IActionResult?> EvaluateMcpConsentAsync(OpenIddictRequest request, object application, User user)
+    {
+        var parameters = Request.HasFormContentType
+            ? Request.Form.Select(kv => new KeyValuePair<string, Microsoft.Extensions.Primitives.StringValues>(kv.Key, kv.Value)).ToList()
+            : Request.Query.Select(kv => new KeyValuePair<string, Microsoft.Extensions.Primitives.StringValues>(kv.Key, kv.Value)).ToList();
+
+        var clientId = request.ClientId!;
+        var fingerprint = IAM.API.Mcp.OAuth.McpConsentService.Fingerprint(
+            request.RedirectUri, request.CodeChallenge, request.State, request.Scope);
+
+        if (Request.Method == HttpMethods.Post && Request.HasFormContentType)
+        {
+            var decision = Request.Form[IAM.API.Mcp.OAuth.McpConsentService.DecisionField].ToString();
+            if (decision == IAM.API.Mcp.OAuth.McpConsentService.DenyValue)
+                return SilentSignInDenied(Errors.AccessDenied, "The user declined to connect this application.");
+
+            if (decision == IAM.API.Mcp.OAuth.McpConsentService.AllowValue
+                && _mcpConsent.IsValid(Request.Form[IAM.API.Mcp.OAuth.McpConsentService.TokenField], user.Id, clientId, fingerprint))
+            {
+                return null;
+            }
+        }
+
+        var name = await _applicationManager.GetDisplayNameAsync(application) ?? clientId;
+        var redirectHost = Uri.TryCreate(request.RedirectUri, UriKind.Absolute, out var redirect) ? redirect.Authority : "the application";
+        var token = _mcpConsent.CreateToken(user.Id, clientId, fingerprint);
+        Response.Headers.CacheControl = "no-store";
+        return Content(
+            IAM.API.Mcp.OAuth.McpConsentService.RenderPage(name, redirectHost, user.Email, token, parameters),
+            "text/html");
     }
 
     /// <summary>
@@ -376,6 +448,19 @@ public class AuthorizationController : ControllerBase
             // OpenIddict applies that narrowing to the scope claim, so the audience must follow
             // the effective (narrowed) scopes — never the stored ones — or an attenuated token
             // would still pass audience validation at services its scopes no longer cover.
+            // MCP connector tokens never carry roles / tenant / profile claims, whatever the rebuilds above put back.
+            if (!string.IsNullOrEmpty(request.ClientId)
+                && await _applicationManager.FindByClientIdAsync(request.ClientId) is { } exchangeApp
+                && await IAM.API.Mcp.OAuth.McpOAuth.IsDynamicClientAsync(_applicationManager, exchangeApp))
+            {
+                var stripped = StripToSubject(new ClaimsIdentity(claimsPrincipal.Claims,
+                    authenticationType: TokenValidationParameters.DefaultAuthenticationType,
+                    nameType: Claims.Name,
+                    roleType: Claims.Role));
+                stripped.SetDestinations(GetDestinations);
+                claimsPrincipal = new ClaimsPrincipal(stripped);
+            }
+
             var effectiveScopes = claimsPrincipal.GetScopes();
             if (request.IsRefreshTokenGrantType() && request.GetScopes() is { Length: > 0 } requestedScopes)
             {

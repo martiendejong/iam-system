@@ -1,4 +1,5 @@
 using Hazina.Security.ApiKeys;
+using IAM.API.Mcp.OAuth;
 using Jengo.Mcp;
 
 namespace IAM.API.Mcp;
@@ -33,10 +34,15 @@ public static class IamMcpExtensions
                 "through the accept link; list_invitations / revoke_invitation manage them) and " +
                 "manage role assignments (assign_role / remove_role). By design there is no tool " +
                 "to create a user with a password, change or reset a password, or mint tokens.";
-            options.Auth.ResourceMetadata.ScopesSupported.Add("iam");
+            // The scopes an OAuth client may ask for (the "iam" label of the API-key flow is not an OAuth scope).
+            options.Auth.ResourceMetadata.ScopesSupported.Add(McpOAuth.Scope);
+            options.Auth.ResourceMetadata.ScopesSupported.Add("offline_access");
         })
             // API keys from the Mcp:Keys configuration array, each bound to one IAM user id.
             .AddApiKeyValidator<IamMcpApiKeyValidator>()
+            // OAuth: IAM-issued access tokens (scope mcp, audience iam_mcp) of dynamically registered connectors.
+            .AddBearerTokenValidator<IamMcpOAuthTokenValidator>()
+            .AddToolProvider<IamMcpOAuthToolProvider>()
             // The 9 onboarding tools, each acting as (and audited against) the key's user.
             .AddToolProvider<IamMcpToolProvider>();
 
@@ -45,6 +51,19 @@ public static class IamMcpExtensions
         // key in that very header. Exempt /mcp: the endpoint is still never open, because the
         // template enforces its own auth scheme (this validator) on everything under /mcp.
         services.Configure<HazinaApiKeyOptions>(o => o.ExcludedPathPrefixes.Add("/mcp"));
+
+        // RFC 9728: the protected-resource metadata points MCP clients at IAM itself as the authorization server.
+        // Only advertised while the OAuth layer is enabled (Mcp:OAuth:Enabled=false is the kill switch).
+        services.AddOptions<JengoMcpOptions>().Configure<IConfiguration>((options, configuration) =>
+        {
+            if (!McpOAuth.IsEnabled(configuration)) return;
+            if (McpOAuth.AuthorizationServer(configuration) is { } authorizationServer
+                && !options.Auth.ResourceMetadata.AuthorizationServers.Contains(authorizationServer))
+            {
+                options.Auth.ResourceMetadata.AuthorizationServers.Add(authorizationServer);
+            }
+        });
+        services.AddSingleton<McpConsentService>();
 
         return services;
     }
