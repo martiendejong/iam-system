@@ -444,6 +444,15 @@ public class McpOAuthTests : IClassFixture<McpOAuthTests.Factory>
         Assert.Equal(clientId, me.GetProperty("connectedClientId").GetString());
         Assert.Contains("SystemAdmin", me.GetProperty("roles").EnumerateArray().Select(r => r.GetProperty("name").GetString()));
 
+        // The call was audited (valid JSON in Details, as the jsonb column of PostgreSQL requires).
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IAMDbContext>();
+            var audit = await db.AuditLogs.AsNoTracking().FirstOrDefaultAsync(a => a.UserId == userId && a.Action == "mcp.oauth.tool" && a.Resource == "mcp:whoami");
+            Assert.NotNull(audit);
+            Assert.Equal(clientId, JsonSerializer.Deserialize<JsonElement>(audit!.Details!).GetProperty("client").GetString());
+        }
+
         // Refresh: a new access token comes back and works at /mcp.
         var refreshed = await NewClient().PostAsync("/connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
         {
