@@ -1,0 +1,16 @@
+# ── IAM test gateway ──────────────────────────────────────────────────────────
+# Caddy auto-provisions TLS via Let's Encrypt.
+# Caddy sits on proxy_net; the IAM api container is reachable via the Docker
+# service name "api" (defined in deploy/docker-compose.yml).
+
+{
+    # Global options
+    email martin@martiendejong.nl
+}
+
+iam-test.martiendejong.nl {
+    reverse_proxy iam-test-api:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}

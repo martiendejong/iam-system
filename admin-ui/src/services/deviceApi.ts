@@ -2,6 +2,7 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
 import type { Device, DeviceStatistics, RegisterDeviceRequest } from '../types/devices';
 
+const BASE_PATH = (import.meta.env.VITE_BASE_PATH ?? '/').replace(/\/$/, '');
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://localhost:5001';
 
 class DeviceApiService {
@@ -34,7 +35,7 @@ class DeviceApiService {
       async (error: AxiosError) => {
         if (error.response?.status === 401) {
           localStorage.removeItem('accessToken');
-          window.location.href = '/auth/login';
+          window.location.href = `${BASE_PATH}/login`;
         }
         return Promise.reject(error);
       }

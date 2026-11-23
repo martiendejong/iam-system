@@ -75,7 +75,8 @@ export default function LoginPage() {
   const handleSocialLogin = async (provider: PublicIdentityProvider) => {
     try {
       setError('');
-      const redirectUri = `${window.location.origin}/auth/login`;
+      const basePath = (import.meta.env.VITE_BASE_PATH ?? '/').replace(/\/$/, '');
+      const redirectUri = `${window.location.origin}${basePath}/login`;
       const { authorizationUrl, state, browserSecret } = await api.getSocialAuthUrl(provider.id, redirectUri);
       // Task 5493: the secret stays in this browser (per tab) and is sent back with the code on return.
       sessionStorage.setItem(SOCIAL_FLOW_KEY, JSON.stringify({ providerId: provider.id, state, browserSecret }));

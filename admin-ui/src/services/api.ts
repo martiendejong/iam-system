@@ -2,7 +2,8 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
 import type { CreateUserRequest, LoginRequest, LoginResponse, PublicIdentityProvider, RegisterRequest, User } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}/auth`;
+const BASE_PATH = (import.meta.env.VITE_BASE_PATH ?? '/').replace(/\/$/, '');
+const API_BASE_URL = import.meta.env.VITE_API_URL || `${window.location.origin}${BASE_PATH}`;
 
 /** The roles API sends isSystemRole; the UI reads isSystem (task 5222). Keep both so either reader works. */
 function normalizeRole(role: any): any {
@@ -84,7 +85,7 @@ class ApiService {
         if (error.response?.status === 401) {
           const url = error.config?.url ?? '';
           // Don't retry if this request IS the refresh or login endpoint
-          if (url.includes('/auth/refresh') || url.includes('/auth/login')) {
+          if (url.includes('/auth/refresh') || url.endsWith('/auth/login')) {
             localStorage.removeItem('accessToken');
             return Promise.reject(error);
           }
@@ -104,7 +105,7 @@ class ApiService {
             return this.client.request(error.config!);
           } catch {
             localStorage.removeItem('accessToken');
-            window.location.href = '/auth/login';
+            window.location.href = `${BASE_PATH}/login`;
           }
           // No token: just reject — caller handles the error (e.g. login page ignores provider 401s)
         }

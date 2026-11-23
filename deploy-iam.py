@@ -53,7 +53,9 @@ def _vault_dev_ssh():
 
 def build():
     print("== build admin-ui ==")
-    subprocess.run("npm run build", cwd=ROOT / "admin-ui", shell=True, check=True)
+    # VITE_BASE_PATH='/auth/' for the Windows/IIS deployment where IAM runs under /auth/.
+    env_ui = dict(os.environ, VITE_BASE_PATH="/auth/")
+    subprocess.run("npm run build", cwd=ROOT / "admin-ui", shell=True, check=True, env=env_ui)
     print("== publish backend ==")
     env = dict(os.environ, HAZINA_ROOT=HAZINA_ROOT)
     subprocess.run(

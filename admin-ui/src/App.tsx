@@ -58,7 +58,7 @@ import ProtectedRoute from './components/common/ProtectedRoute';
 
 function App() {
   return (
-    <Router basename="/auth">
+    <Router basename={import.meta.env.VITE_BASE_PATH ?? '/'}>
       <AuthProvider>
         <Routes>
           {/* Public routes */}
