@@ -36,6 +36,13 @@ public class RefreshToken
     /// </summary>
     public bool RememberMe { get; set; }
 
+    /// <summary>
+    /// Identifies the sign-in (device session) this token belongs to. Set to the first token's own id at
+    /// login and carried unchanged through every rotation, so a replayed token can end just its own
+    /// session chain instead of every session the user has. Null on tokens issued before this column existed.
+    /// </summary>
+    public Guid? FamilyId { get; set; }
+
     public bool IsExpired => DateTime.UtcNow >= ExpiresAt;
     public bool IsRevoked => RevokedAt.HasValue;
     public bool IsActive => !IsRevoked && !IsExpired;
