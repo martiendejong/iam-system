@@ -7,10 +7,12 @@ import type { PublicTenantBranding } from '../../services/brandingApi';
 import { isSafeCustomCss, isSafeImageUrl } from '../../utils/brandingSafety';
 import type { PublicIdentityProvider } from '../../types';
 import { sanitizeReturnUrl, navigateAfterAuth } from './returnUrl';
+import ApprovalSignIn from '../../components/auth/ApprovalSignIn';
+import { takePendingApproval } from '../../services/approvalApi';
 
 const SOCIAL_FLOW_KEY = 'iam.social.flow';
 
-type LoginMethod = 'password' | 'magic-link' | 'sms';
+type LoginMethod = 'password' | 'magic-link' | 'sms' | 'device';
 type LoginView = 'login' | 'forgot';
 
 export default function LoginPage() {
@@ -166,7 +168,15 @@ export default function LoginPage() {
     setTwoFactorCode('');
   };
 
-  const navigateAfterLogin = () => navigateAfterAuth(returnUrl, navigate);
+  const navigateAfterLogin = () => {
+    // A QR code or push notification sent this browser here to approve another device's sign-in: go back to it.
+    const pendingApproval = takePendingApproval();
+    if (pendingApproval) {
+      navigate(`/approve/${pendingApproval}`);
+      return;
+    }
+    navigateAfterAuth(returnUrl, navigate);
+  };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -380,7 +390,7 @@ export default function LoginPage() {
         </div>
 
         {/* Login method tabs */}
-        {view === 'login' && !twoFactorPending && !stepUpRequired && <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
+        {view === 'login' && !twoFactorPending && !stepUpRequired && <div className="flex flex-wrap gap-1 p-1 bg-gray-100 rounded-lg">
           <button
             type="button"
             onClick={() => handleTabChange('password')}
@@ -401,6 +411,13 @@ export default function LoginPage() {
             className={tabClass('sms')}
           >
             SMS Code
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTabChange('device')}
+            className={tabClass('device')}
+          >
+            Another device
           </button>
         </div>}
 
@@ -640,6 +657,18 @@ export default function LoginPage() {
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Approve on another, already signed-in device (QR code / push / popup) */}
+        {loginMethod === 'device' && view === 'login' && (
+          <div className="mt-4">
+            <ApprovalSignIn
+              onSignedIn={(signedInUser) => {
+                if (signedInUser) setCurrentUser(signedInUser);
+                navigateAfterLogin();
+              }}
+            />
           </div>
         )}
 

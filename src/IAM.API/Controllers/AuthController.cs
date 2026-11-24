@@ -152,60 +152,8 @@ public class AuthController : ControllerBase
         return Ok(new { message = "If two-factor authentication is enabled for this account, a new code has been sent." });
     }
 
-    private async Task<IActionResult> CompleteLoginAsync(AuthResult result, bool rememberMe = false)
-    {
-        // Set refresh token in HttpOnly cookie - Expires mirrors the refresh token's own
-        // lifetime (the organization's Token Configuration when one exists, otherwise
-        // today's default) so the cookie never outlives, or expires before, the token it carries.
-        // "Remember me" extends this to at least AuthConstants.RememberMeMinimumDays.
-        var refreshDays = rememberMe
-            ? Math.Max(result.RefreshTokenLifetimeDays, AuthConstants.RememberMeMinimumDays)
-            : result.RefreshTokenLifetimeDays;
-        Response.Cookies.Append("refreshToken", result.RefreshToken!, new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = true,
-            SameSite = SameSiteMode.Strict,
-            Expires = DateTimeOffset.UtcNow.AddDays(refreshDays)
-        });
-
-        // Establish OIDC session cookie so the authorize endpoint can identify the user
-        // without requiring a Bearer token in the browser request. Unchecked "Remember me"
-        // keeps today's behavior: a non-persistent cookie whose ticket still expires after
-        // Program.cs's sliding ExpireTimeSpan. Checked: a persistent cookie that survives
-        // closing the browser and is valid for AuthConstants.RememberMeMinimumDays regardless
-        // of activity.
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, result.User!.Id.ToString()),
-            new(ClaimTypes.Email, result.User.Email),
-            new(ClaimTypes.Name, $"{result.User.FirstName} {result.User.LastName}".Trim()),
-        };
-        // Task 5568: bind the cookie to the sign-in (refresh token) it belongs to, so revoking that sign-in ends the cookie.
-        if (result.RefreshTokenId.HasValue)
-            claims.Add(new(AccessTokenSessionValidator.RefreshTokenIdClaim, result.RefreshTokenId.Value.ToString()));
-        var identity = new ClaimsIdentity(claims, "IAM.Session");
-        var authProperties = rememberMe
-            ? new AuthenticationProperties
-            {
-                IsPersistent = true,
-                ExpiresUtc = DateTimeOffset.UtcNow.AddDays(AuthConstants.RememberMeMinimumDays)
-            }
-            : new AuthenticationProperties();
-        await HttpContext.SignInAsync("IAM.Session", new ClaimsPrincipal(identity), authProperties);
-
-        return Ok(new
-        {
-            accessToken = result.AccessToken,
-            user = new
-            {
-                id = result.User!.Id,
-                email = result.User.Email,
-                firstName = result.User.FirstName,
-                lastName = result.User.LastName
-            }
-        });
-    }
+    private Task<IActionResult> CompleteLoginAsync(AuthResult result, bool rememberMe = false)
+        => LoginCompletion.CompleteAsync(HttpContext, result, rememberMe);
 
     /// <summary>
     /// Completes a login that was suspended for adaptive-MFA step-up verification
