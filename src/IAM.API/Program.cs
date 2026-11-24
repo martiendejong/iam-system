@@ -536,7 +536,11 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = ctx =>
     {
-        if (ctx.File.Name != "index.html")
+        // index.html, the service worker and the web manifest keep stable names, so they must be revalidated on every
+        // load (a year-long cache would pin an old service worker); the hashed build assets can be cached forever.
+        if (ctx.File.Name is "index.html" or "sw.js" or "manifest.webmanifest")
+            ctx.Context.Response.Headers["Cache-Control"] = "no-cache";
+        else
             ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
     }
 });

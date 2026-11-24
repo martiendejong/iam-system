@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import PortalLayout from '../../components/layout/PortalLayout';
+import PushToggle from '../../components/auth/PushToggle';
 import { portalApi } from '../../services/portalApi';
 import type { Session } from '../../services/portalApi';
 
@@ -79,6 +80,7 @@ export default function PortalSessionsPage() {
 
   return (
     <PortalLayout>
+      <PushToggle />
       <div className="bg-white rounded-lg shadow-sm">
         <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
           <div>

@@ -5,6 +5,8 @@ import VerifyEmailPage from './pages/auth/VerifyEmailPage';
 import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import VerifyTwoFactorPage from './pages/auth/VerifyTwoFactorPage';
 import MagicLinkCallbackPage from './pages/auth/MagicLinkCallbackPage';
+import ApprovePage from './pages/auth/ApprovePage';
+import SignInRequestPopup from './components/auth/SignInRequestPopup';
 import DashboardPage from './pages/DashboardPage';
 import UsersPage from './pages/users/UsersPage';
 import UserEditPage from './pages/users/UserEditPage';
@@ -68,6 +70,7 @@ function App() {
           <Route path="/accept-invite" element={<AcceptInvitePage />} />
           <Route path="/verify-2fa" element={<VerifyTwoFactorPage />} />
           <Route path="/magic-link" element={<MagicLinkCallbackPage />} />
+          <Route path="/approve/:id" element={<ApprovePage />} />
 
           {/* Protected routes */}
           <Route
@@ -556,6 +559,7 @@ function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        <SignInRequestPopup />
       </AuthProvider>
     </Router>
   );

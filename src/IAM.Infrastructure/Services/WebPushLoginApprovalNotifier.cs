@@ -51,7 +51,7 @@ public class WebPushLoginApprovalNotifier : ILoginApprovalNotifier
                 type = "login-approval",
                 id = approval.Id,
                 device = approval.RequestDevice,
-                url = $"/auth/approve/{approval.Id}"
+                url = $"approve/{approval.Id}" // relative to the service worker scope (the admin-ui base path)
             });
             var vapid = new VapidDetails(subject, publicKey, privateKey);
             var client = new WebPushClient();

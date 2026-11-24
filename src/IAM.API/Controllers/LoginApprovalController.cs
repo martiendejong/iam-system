@@ -52,8 +52,7 @@ public class LoginApprovalController : ControllerBase
             id = started.Id,
             pollSecret = started.PollSecret,
             matchNumber = started.MatchNumber,
-            expiresAt = started.ExpiresAt,
-            approvePath = $"/auth/approve/{started.Id}"
+            expiresAt = started.ExpiresAt
         });
     }
 
