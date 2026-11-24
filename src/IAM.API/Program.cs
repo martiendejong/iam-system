@@ -126,6 +126,8 @@ builder.Services.AddScoped<ISocialAuthService, SocialAuthService>();
 builder.Services.Configure<SmsSettings>(builder.Configuration.GetSection("Sms"));
 builder.Services.PostConfigure<SmsSettings>(o => o.IsDevelopmentEnvironment = builder.Environment.IsDevelopment());
 builder.Services.AddScoped<IMagicLinkService, MagicLinkService>();
+builder.Services.AddScoped<ILoginApprovalNotifier, WebPushLoginApprovalNotifier>();
+builder.Services.AddScoped<ILoginApprovalService, LoginApprovalService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddSingleton<IRequestThrottle, InMemoryRequestThrottle>();
 builder.Services.AddScoped<IOtpService, OtpService>();

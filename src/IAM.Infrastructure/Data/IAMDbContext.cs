@@ -41,6 +41,8 @@ public class IAMDbContext : DbContext
     public DbSet<IdentityProvider> IdentityProviders => Set<IdentityProvider>();
     public DbSet<ExternalLogin> ExternalLogins => Set<ExternalLogin>();
     public DbSet<MagicLinkToken> MagicLinkTokens => Set<MagicLinkToken>();
+    public DbSet<LoginApproval> LoginApprovals => Set<LoginApproval>();
+    public DbSet<WebPushSubscription> WebPushSubscriptions => Set<WebPushSubscription>();
     public DbSet<OtpCode> OtpCodes => Set<OtpCode>();
     public DbSet<ConsentRecord> ConsentRecords => Set<ConsentRecord>();
     public DbSet<DataRequest> DataRequests => Set<DataRequest>();
@@ -846,6 +848,32 @@ public class IAMDbContext : DbContext
         });
 
         // MagicLinkToken configuration
+        modelBuilder.Entity<LoginApproval>(entity =>
+        {
+            entity.ToTable("LoginApprovals");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.UserId, e.Status, e.ExpiresAt });
+            entity.HasIndex(e => e.CreatedAt);
+            entity.Property(e => e.PollSecretHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.RequestIp).HasMaxLength(50);
+            entity.Property(e => e.RequestUserAgent).HasMaxLength(500);
+            entity.Property(e => e.RequestDevice).HasMaxLength(100);
+            entity.Property(e => e.Version).IsConcurrencyToken();
+        });
+
+        modelBuilder.Entity<WebPushSubscription>(entity =>
+        {
+            entity.ToTable("WebPushSubscriptions");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Endpoint).IsUnique();
+            entity.Property(e => e.Endpoint).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.P256dh).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Auth).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Label).HasMaxLength(100);
+        });
+
         modelBuilder.Entity<MagicLinkToken>(entity =>
         {
             entity.ToTable("MagicLinkTokens");
