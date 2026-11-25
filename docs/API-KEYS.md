@@ -78,3 +78,23 @@ ALTER TABLE "ApiKeys" ADD COLUMN "VaultReference" character varying(64) NULL;
 ```
 
 Then set `ApiKeys__Vault__BaseUrl`, `ApiKeys__Vault__ProjectId` and `ApiKeys__Vault__ApiKey` on the service.
+
+## App-role catalog registration (`POST /api/app-roles/register`)
+
+A catalog switches on role gating for an application: once it has roles, only users holding one can sign in. So
+registration is bound to the calling application (task 5487):
+
+- The `clientId` must be a registered OIDC client, otherwise the call is refused (400) and nothing is written.
+- A key may register only for the application it is bound to. Binding is a permission on the key (no migration):
+  `app-roles:register.{clientId}` lets it update that app's existing catalog; `app-roles:create.{clientId}` also lets it
+  create the app's FIRST catalog. Any other key gets 403. Admin-scope platform keys may register for any existing client.
+- Creating the first catalog is an admin action: without an admin-scope key or the `app-roles:create.` binding the call is
+  403 and nothing is written.
+- Tenant-scoped keys stay refused (403). Roles are always stored as `{clientId}:{name}` in category `app:{clientId}`.
+
+### One-off step before deploying this change
+
+Apps that register at startup (for example JengoWork) use unbound keys today and will get 403 until bound. Before
+deploying, an admin issues (or re-issues) each such key with the permission `app-roles:register.{clientId}` (plus
+`app-roles:create.{clientId}` only if the app has no catalog yet), e.g. `jengowork` -> `app-roles:register.jengowork`.
+Keys cannot be edited in place; issue a new key with the permission and swap it into the app's configuration.
