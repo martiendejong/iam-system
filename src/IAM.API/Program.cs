@@ -131,6 +131,7 @@ builder.Services.AddScoped<ILoginApprovalService, LoginApprovalService>();
 builder.Services.AddScoped<ISmsService, SmsService>();
 builder.Services.AddSingleton<IRequestThrottle, InMemoryRequestThrottle>();
 builder.Services.AddScoped<IOtpService, OtpService>();
+builder.Services.AddScoped<IAM.API.Auth.SensitiveActionGuard>();
 builder.Services.AddScoped<IConsentService, ConsentService>();
 builder.Services.AddScoped<IDataRequestService, DataRequestService>();
 builder.Services.AddScoped<IAccountLinkingService, AccountLinkingService>();

@@ -388,7 +388,8 @@ public class PasskeySocialTwoFactorLoginTests
         var (passkeyService, passkeyStub) = MethodStub.New<IPasskeyService>();
         passkeyStub.On(nameof(IPasskeyService.CompleteAuthenticationAsync), _ => Task.FromResult<Guid?>(userId));
 
-        var controller = new PasskeyController(passkeyService, gate ?? authService, context, NullLogger<PasskeyController>.Instance)
+        var controller = new PasskeyController(passkeyService, gate ?? authService, context, NullLogger<PasskeyController>.Instance,
+            new IAM.API.Auth.SensitiveActionGuard(context, MethodStub.New<IOtpService>().Proxy, email, NullLogger<IAM.API.Auth.SensitiveActionGuard>.Instance))
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
