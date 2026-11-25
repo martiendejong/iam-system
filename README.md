@@ -260,6 +260,7 @@ vercel deploy
 - [**API Reference**](./docs/API-REFERENCE.md) - Complete API documentation
 - [**MCP Server**](./docs/mcp-server.md) - Agent-safe user onboarding at `/mcp`: 9 invitation/role tools, and why password- and token-capable tools are deliberately absent
 - [**Deployment Guide**](./docs/DEPLOYMENT.md) - Production deployment
+- [**Manual migrations**](./docs/manual-migrations/README.md) - How schema changes reach live iam_db (no `ef database update`)
 - [**Examples**](./examples/) - React, Vue, Next.js, Angular
 
 ---
