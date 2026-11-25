@@ -717,6 +717,8 @@ public class AccessTokenFormatTests
                 ["tenants"] = "iam_api",
                 ["taskmanager_api"] = "taskmanager_api",
                 ["jengo_mcp"] = "jengo_mcp",
+                // MCP connectors (docs/MCP.md): scope mcp is only valid at the IAM /mcp endpoint
+                [IAM.API.Mcp.OAuth.McpOAuth.Scope] = IAM.API.Mcp.OAuth.McpOAuth.Audience,
                 // Task 4059: vault-only resolver scope maps to iam_api (endpoint lives on IAM)
                 [IAM.API.Controllers.ResolverController.ResolverScope] = "iam_api"
             };

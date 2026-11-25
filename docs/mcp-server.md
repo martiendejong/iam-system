@@ -1,5 +1,8 @@
 # IAM MCP server — agent-safe user onboarding (task 5800)
 
+> This page describes the **API-key** tool set. The same `/mcp` endpoint also accepts OAuth sign-in from ChatGPT and
+> Claude.ai with a separate, read-only tool set: see [MCP.md](MCP.md).
+
 IAM exposes a remote MCP (Model Context Protocol) server at **`/mcp`** (streamable-http), built on
 the shared Jengo MCP template (`Jengo.Mcp.AspNetCore`, vendored under `src/IAM.API/nuget-local/`).
 It lets AI agents onboard and manage users **without ever touching a credential**.
