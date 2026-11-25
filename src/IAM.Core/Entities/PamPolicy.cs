@@ -22,6 +22,12 @@ public class PamPolicy
     public Role Role { get; set; } = null!;
 
     /// <summary>
+    /// Role a caller must hold in this policy's tenant to be allowed to check out or break-glass the governed
+    /// role (task 5629). Null = nobody is eligible, so the policy refuses every request (deny by default).
+    /// </summary>
+    public Guid? EligibleRoleId { get; set; }
+
+    /// <summary>
     /// Maximum allowed session duration in minutes
     /// </summary>
     public int MaxDurationMinutes { get; set; } = 480; // 8 hours default
